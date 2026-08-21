@@ -4,7 +4,7 @@ import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { fmtClock, fmtDuration, pct } from "../util/time.js";
 import type { BuiltTranscript } from "../stt/transcript.js";
-import { renderForModel, verifyQuote } from "../stt/transcript.js";
+import { anchorTopics, renderForModel, verifyQuote } from "../stt/transcript.js";
 import {
   ClassAnalysis,
   type AnalysisReport,
@@ -127,6 +127,35 @@ function computeComposition(
   return rows;
 }
 
+/**
+ * زمان‌های بیرون از مدت صوت را اصلاح می‌کند.
+ *
+ * مدل گاهی زمانی می‌سازد که در فایل وجود ندارد — روی یک صوت ۵۰ دقیقه‌ای
+ * سرفصلی با شروع ۷۱ دقیقه دیده شد. چنین زمانی فقط عدد غلط نیست: کاربر
+ * رویش می‌زند و صوت جایی نمی‌رود، و کل قرارداد «ذکر منبع» زیر سؤال می‌رود.
+ * سرفصلی که شروعش بیرون از فایل است حذف می‌شود، بقیه به بازهٔ معتبر می‌آیند.
+ */
+function clampTimes(a: ClassAnalysis, durationMs: number): ClassAnalysis {
+  const clamp = (ms: number) => Math.min(Math.max(0, Math.round(ms)), durationMs);
+  return {
+    ...a,
+    timeline: a.timeline
+      .map((s) => ({ ...s, start_ms: clamp(s.start_ms), end_ms: clamp(s.end_ms) }))
+      .filter((s) => s.end_ms > s.start_ms),
+    topics: a.topics
+      .filter((t) => t.start_ms < durationMs)
+      .map((t) => ({ ...t, start_ms: clamp(t.start_ms), end_ms: clamp(t.end_ms) })),
+    key_points: a.key_points.map((k) => ({
+      ...k,
+      evidence: { ...k.evidence, at_ms: clamp(k.evidence.at_ms) },
+    })),
+    professor_actions: a.professor_actions.map((p) => ({
+      ...p,
+      evidence: p.evidence ? { ...p.evidence, at_ms: clamp(p.evidence.at_ms) } : null,
+    })),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function analyzeClass(
@@ -202,6 +231,18 @@ export async function analyzeClass(
     usage1 = pass1.usage;
   }
 
+  // زمان‌های بیرون از فایل پیش از هر کار دیگری اصلاح می‌شوند
+  parsed = clampTimes(parsed, meta.originalDurationMs);
+
+  // زمان سرفصل‌ها از رونوشت گرفته می‌شود، نه از حدس مدل — همان قاعده‌ای که
+  // برای نقل‌قول‌ها به کار می‌رود، چون هر دو به کاربر به‌عنوان «منبع» نشان
+  // داده می‌شوند و باید واقعاً روی صوت بیفتند.
+  const topicAnchors = anchorTopics(transcript, parsed.topics, meta.originalDurationMs);
+  parsed = {
+    ...parsed,
+    topics: parsed.topics.map((t, i) => ({ ...t, start_ms: topicAnchors[i] ?? t.start_ms })),
+  };
+
   // ── راستی‌آزمایی نقل‌قول‌ها ────────────────────────────────────────────
   let dropped = 0;
   const keyPoints: AnalysisReport["key_points"] = [];
@@ -225,16 +266,10 @@ export async function analyzeClass(
     return { ...a, evidence: ev };
   });
 
-  const assumed = parsed.assumed_knowledge.map((k) => ({
-    ...k,
-    evidence: verifyEvidence(transcript, k.evidence),
-  }));
-
   const report: AnalysisReport = {
     ...parsed,
     key_points: keyPoints,
     professor_actions: professorActions,
-    assumed_knowledge: assumed,
     composition: computeComposition(parsed.timeline, meta.originalDurationMs, meta.silenceMs),
     silenceMs: meta.silenceMs,
     droppedCitations: dropped,
@@ -250,7 +285,6 @@ export async function analyzeClass(
       {
         topics: parsed.topics,
         key_points: parsed.key_points,
-        assumed_knowledge: parsed.assumed_knowledge,
         glossary: parsed.glossary,
         open_questions: parsed.open_questions,
       },

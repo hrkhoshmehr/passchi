@@ -567,17 +567,8 @@ async function sendResults(
     }),
   );
 
-  const outline = S.outlineMessage(r);
-  if (outline) await reply(ctx, outline, asReply);
-
   const keyPoints = S.keyPointsMessage(r, linkable);
   if (keyPoints) await reply(ctx, keyPoints, asReply);
-
-  const topics = S.topicsMessage(r);
-  if (topics) await reply(ctx, topics, asReply);
-
-  const assumed = S.assumedMessage(r);
-  if (assumed) await reply(ctx, assumed, asReply);
 
   if (makePdf && out.pdfPath) {
     await ctx.replyWithDocument(new InputFile(out.pdfPath, out.pdfName ?? "جزوه.pdf"), {

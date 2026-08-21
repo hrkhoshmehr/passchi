@@ -47,13 +47,17 @@ const Schema = z.object({
 
   AUDIO_SAMPLE_RATE: num(16000),
   AUDIO_BITRATE: z.string().optional().default("32k"),
-  // off | edges | full — «edges» پیش‌فرض است چون تنها حالتی که واقعاً صرفه دارد
-  // سکوت ابتدا و انتهای ضبط است؛ «full» کل فایل را اسکن می‌کند و گران است.
+  // off | edges | full — پیش‌فرض «off».
+  //
+  // هر برشی زمان‌ها را جابه‌جا می‌کند و نگاشت TimeMap لازم می‌شود. اندازه‌گیری
+  // نشان داد صرفه‌اش روی کلاس واقعی کسری از یک سنت است، در حالی که ارجاع دقیق
+  // به لحظهٔ صوت ستون اصلی محصول است. پس فاصله‌های خالی دست‌نخورده می‌مانند و
+  // هر زمانی که به کاربر نشان داده می‌شود دقیقاً روی فایل اصلی می‌افتد.
   SILENCE_TRIM: z
     .string()
     .optional()
     .transform((v) => {
-      if (v === undefined || v === "") return "edges" as const;
+      if (v === undefined || v === "") return "off" as const;
       const s = v.toLowerCase();
       if (s === "true") return "full" as const;
       if (s === "false") return "off" as const;

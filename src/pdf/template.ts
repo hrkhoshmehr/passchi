@@ -73,12 +73,10 @@ const KIND_COLOR: Record<string, string> = {
 };
 
 const KP_LABEL: Record<string, string> = {
-  homework: "تکلیف",
-  exam_hint: "نکتهٔ امتحانی",
+  exam: "در امتحان می‌آید",
   emphasis: "تأکید استاد",
+  homework: "تکلیف",
   deadline: "مهلت",
-  resource: "منبع",
-  warning: "هشدار",
 };
 
 function compositionBar(r: AnalysisReport): string {
@@ -111,15 +109,17 @@ function evidenceHtml(e: { quote: string; at_ms: number; speaker: string } | nul
 }
 
 function keyPointsHtml(r: AnalysisReport): string {
-  if (r.key_points.length === 0) return `<p class="dim">نکتهٔ دارای منبعِ تأییدشده‌ای پیدا نشد.</p>`;
-  const sorted = [...r.key_points].sort((a, b) => b.importance - a.importance || a.evidence.at_ms - b.evidence.at_ms);
+  if (r.key_points.length === 0) return `<p class="dim">نکتهٔ امتحانیِ دارای منبعِ تأییدشده‌ای پیدا نشد.</p>`;
+  const order: Record<string, number> = { exam: 0, deadline: 1, homework: 2, emphasis: 3 };
+  const sorted = [...r.key_points].sort(
+    (a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9) || a.evidence.at_ms - b.evidence.at_ms,
+  );
   return sorted
     .map(
       (k) => `<div class="kp kp-${k.kind}">
   <div class="kp-h"><span class="tag">${KP_LABEL[k.kind] ?? k.kind}</span><b>${escapeHtml(k.title)}</b>${
     k.due ? `<span class="due">مهلت: ${escapeHtml(k.due)}</span>` : ""
   }</div>
-  <p>${escapeHtml(k.detail)}</p>
   ${evidenceHtml(k.evidence)}
 </div>`,
     )
@@ -136,7 +136,6 @@ function actionsHtml(r: AnalysisReport): string {
     grading: "نمره و بارم",
     makeup_class: "کلاس جبرانی",
     class_cancelled: "لغو جلسه",
-    resource: "معرفی منبع",
     other: "سایر",
   };
   return `<table class="acts"><thead><tr><th>مورد</th><th>وضعیت</th><th>توضیح</th></tr></thead><tbody>${r.professor_actions
@@ -148,22 +147,6 @@ function actionsHtml(r: AnalysisReport): string {
   </tr>`,
     )
     .join("")}</tbody></table>`;
-}
-
-function assumedHtml(r: AnalysisReport): string {
-  if (r.assumed_knowledge.length === 0) return `<p class="dim">پیش‌فرض قابل‌توجهی شناسایی نشد.</p>`;
-  return r.assumed_knowledge
-    .map(
-      (a) => `<div class="pre">
-  <div class="pre-h"><b>${escapeHtml(a.concept)}</b><span class="sig">${
-    a.signal === "explicit" ? "استاد صریح گفت" : "بدون تعریف به کار برد"
-  }</span></div>
-  <p>${escapeHtml(a.quick_explainer)}</p>
-  ${evidenceHtml(a.evidence)}
-  <p class="dim">برای مطالعهٔ بیشتر: <b>${escapeHtml(a.suggested_search)}</b></p>
-</div>`,
-    )
-    .join("");
 }
 
 function glossaryHtml(r: AnalysisReport): string {
@@ -262,12 +245,10 @@ th{background:#f7f9fb;font-weight:600;color:#3d4852}
 /* ── کارت‌های نکته ────────────────────────────────────── */
 .kp{border:1px solid var(--line);border-right-width:3px;border-radius:5px;
   padding:.75em .9em;margin:.7em 0;break-inside:avoid}
-.kp-homework{border-right-color:var(--qa)}
-.kp-exam_hint{border-right-color:#e53e3e}
+.kp-exam{border-right-color:#e53e3e}
 .kp-emphasis{border-right-color:var(--admin)}
+.kp-homework{border-right-color:var(--qa)}
 .kp-deadline{border-right-color:#dd6b20}
-.kp-resource{border-right-color:var(--teach)}
-.kp-warning{border-right-color:#805ad5}
 .kp-h{display:flex;align-items:center;gap:.6em;flex-wrap:wrap;margin-bottom:.25em}
 .kp p{margin:.2em 0;font-size:10pt}
 .tag{font-size:8.5pt;background:#eef1f5;color:#4a5568;padding:.15em .55em;border-radius:99px;font-weight:600}
@@ -323,14 +304,9 @@ th{background:#f7f9fb;font-weight:600;color:#3d4852}
 </section>
 
 <section class="section">
-  <h2>نکات و تکالیف — با ذکر منبع</h2>
-  <p class="dim">هر نکته با عین جملهٔ گفته‌شده و زمان دقیقش در فایل صوتی اصلی آمده است. نکاتی که نقل‌قولشان در رونوشت پیدا نشد، حذف شده‌اند.</p>
+  <h2>برای امتحان</h2>
+  <p class="dim">هر مورد با عین جملهٔ استاد و زمانش در فایل صوتی. آنچه نقل‌قولش در رونوشت تأیید نشد، حذف شده است.</p>
   ${keyPointsHtml(r)}
-</section>
-
-<section class="section">
-  <h2>پیش‌نیازهایی که استاد فرض کرده بلدید</h2>
-  ${assumedHtml(r)}
 </section>
 
 <section class="section">

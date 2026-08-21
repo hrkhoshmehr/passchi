@@ -91,17 +91,14 @@ const ACTION_LABEL: Record<string, string> = {
   grading: "نمره و بارم",
   makeup_class: "کلاس جبرانی",
   class_cancelled: "لغو جلسه",
-  resource: "معرفی منبع",
   other: "سایر",
 };
 
 export const KP_LABEL: Record<string, string> = {
-  homework: "📝 تکلیف",
-  exam_hint: "🎯 نکتهٔ امتحانی",
+  exam: "🎯 در امتحان می‌آید",
   emphasis: "⚑ تأکید استاد",
+  homework: "📝 تکلیف",
   deadline: "⏳ مهلت",
-  resource: "📚 منبع",
-  warning: "⚠️ هشدار",
 };
 
 /** نوار ترکیب زمانی با کاراکترهای بلوکی — در تلگرام بدون تصویر خوانا است */
@@ -128,41 +125,42 @@ export interface OverviewInput {
   qualityWarnings: string[];
 }
 
+/**
+ * «کلاس در یک نگاه» — پیام اصلی.
+ *
+ * نسخهٔ قبلی پنج پیام بلند می‌فرستاد و کسی تا آخرش را نمی‌خواند. حالا همه‌چیزِ
+ * لازم در یک پیام است: چه گذشت، استاد چه کرد، چه سرفصل‌هایی گفته شد.
+ * سرفصل‌ها فقط عنوان و دقیقه‌اند — تفصیلشان در جزوه است.
+ */
 export function overviewMessage(i: OverviewInput): string {
   const r = i.report;
   const out: string[] = [];
 
   out.push(`📋 <b>${escapeHtml(r.session_title)}</b>`);
-  const sub = [i.courseName ?? r.course_guess, i.sessionDate, fmtDuration(i.durationMs)]
+  const sub = [i.courseName ?? r.course_guess, fmtDuration(i.durationMs)]
     .filter(Boolean)
     .map((s) => escapeHtml(String(s)))
     .join(" · ");
   if (sub) out.push(`<i>${sub}</i>`);
-  out.push("");
-  out.push(escapeHtml(r.headline));
-  out.push("");
 
-  out.push("<b>در یک نگاه</b>");
+  out.push("");
   for (const s of r.student_summary) out.push(`• ${escapeHtml(s)}`);
-  out.push("");
 
-  const bar = compositionBar(r);
-  if (bar) {
-    out.push("<b>ترکیب زمانی کلاس</b>");
-    out.push(bar);
+  // «other» تقریباً همیشه نویز است («استاد با دعا شروع کرد») و به نمره ربطی ندارد
+  const happened = r.professor_actions.filter((a) => a.happened && a.action !== "other");
+  if (happened.length) {
     out.push("");
+    for (const a of happened) {
+      out.push(`✔ <b>${ACTION_LABEL[a.action] ?? a.action}</b> — ${escapeHtml(a.detail)}`);
+    }
   }
 
-  out.push("<b>استاد در این جلسه چه کرد</b>");
-  const happened = r.professor_actions.filter((a) => a.happened);
-  const notHappened = r.professor_actions.filter((a) => !a.happened);
-  for (const a of happened) {
-    out.push(`✔ <b>${ACTION_LABEL[a.action] ?? a.action}</b> — ${escapeHtml(a.detail)}`);
-  }
-  if (notHappened.length) {
-    out.push(
-      `➖ نشانه‌ای نبود از: ${notHappened.map((a) => ACTION_LABEL[a.action] ?? a.action).join("، ")}`,
-    );
+  if (r.topics.length) {
+    out.push("");
+    out.push("<b>مباحث</b>");
+    for (const t of r.topics) {
+      out.push(`${fmtClockLink(t.start_ms)}  ${escapeHtml(t.title)}`);
+    }
   }
 
   if (r.next_session_hint) {
@@ -170,12 +168,17 @@ export function overviewMessage(i: OverviewInput): string {
     out.push(`▶️ <b>جلسهٔ بعد:</b> ${escapeHtml(r.next_session_hint)}`);
   }
 
-  const notes: string[] = [];
-  if (i.savedMs > 60_000) notes.push(`${fmtDuration(i.savedMs)} سکوت پیش از پردازش حذف شد`);
-  if (i.qualityWarnings.length) notes.push(i.qualityWarnings[0]!);
-  if (r.droppedCitations > 0)
-    notes.push(`${toFaDigits(r.droppedCitations)} نکته چون نقل‌قولش در صوت تأیید نشد حذف شد`);
-  if (notes.length) {
+  const bar = compositionBar(r);
+  if (bar) {
+    out.push("");
+    out.push(bar);
+  }
+
+  if (i.qualityWarnings.length || r.droppedCitations > 0) {
+    const notes: string[] = [];
+    if (i.qualityWarnings.length) notes.push(i.qualityWarnings[0]!);
+    if (r.droppedCitations > 0)
+      notes.push(`${toFaDigits(r.droppedCitations)} نکته بدون منبع تأییدشده حذف شد`);
     out.push("");
     out.push(`<i>ℹ️ ${escapeHtml(notes.join(" · "))}</i>`);
   }
@@ -184,92 +187,34 @@ export function overviewMessage(i: OverviewInput): string {
 }
 
 /**
- * همهٔ نکات در یک پیام.
+ * نکات امتحانی و تکالیف — تنها پیام دوم.
  *
- * قبلاً هر نکته پیام جدا بود تا دکمهٔ کلیپ خودش را داشته باشد و نتیجه سیل پیام
- * می‌شد. حالا که این پیام ریپلایِ خودِ صوت است، تلگرام زمان‌ها را لینک پخش
- * می‌کند و دکمه لازم نیست. دو شرط برای لینک‌شدن: ارقام لاتین، و بیرون از
- * هر تگ قالب‌بندی.
+ * فقط چیزهایی که روی نمره اثر دارند. هر مورد یک خط عنوان و یک خط نقل‌قول
+ * کوتاه با زمان. نقل‌قول بلند اینجا نمی‌آید؛ متن کامل در رونوشت و جزوه است.
  */
 export function keyPointsMessage(r: AnalysisReport, linkable: boolean): string {
   if (r.key_points.length === 0) return "";
+  const order: Record<string, number> = { exam: 0, deadline: 1, homework: 2, emphasis: 3 };
   const sorted = [...r.key_points].sort(
-    (a, b) => b.importance - a.importance || a.evidence.at_ms - b.evidence.at_ms,
+    (a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9) || a.evidence.at_ms - b.evidence.at_ms,
   );
-  const out = [
-    `🎯 <b>${toFaDigits(sorted.length)} نکته با ذکر منبع</b>`,
-    linkable
-      ? "<i>روی زمان هر نکته بزن تا صوت از همان لحظه پخش شود.</i>"
-      : "<i>هر نکته با عین جملهٔ گفته‌شده و زمانش در فایل.</i>",
-    "",
-  ];
+
+  const out = ["🎯 <b>برای امتحان</b>"];
+  if (linkable) out.push("<i>روی زمان بزن تا صوت از همان‌جا پخش شود.</i>");
+  out.push("");
+
   for (const k of sorted) {
-    const stars = "❗".repeat(Math.max(0, k.importance - 1));
-    out.push(`${KP_LABEL[k.kind] ?? "•"} <b>${escapeHtml(k.title)}</b> ${stars}`.trim());
-    out.push(escapeHtml(k.detail));
-    if (k.due) out.push(`⏳ <b>مهلت:</b> ${escapeHtml(k.due)}`);
-    out.push(`<blockquote>«${escapeHtml(k.evidence.quote)}»</blockquote>`);
-    out.push(`${escapeHtml(k.evidence.speaker)} — ${fmtClockLink(k.evidence.at_ms)}`);
+    out.push(`${KP_LABEL[k.kind] ?? "•"} <b>${escapeHtml(k.title)}</b>${k.due ? ` — مهلت: ${escapeHtml(k.due)}` : ""}`);
+    out.push(`«${escapeHtml(trimQuote(k.evidence.quote))}» ${fmtClockLink(k.evidence.at_ms)}`);
     out.push("");
   }
-  return out.join("\n");
+  return out.join("\n").trimEnd();
 }
 
-export function assumedMessage(r: AnalysisReport): string {
-  if (r.assumed_knowledge.length === 0) return "";
-  const out = [
-    "🧩 <b>پیش‌نیازهایی که استاد فرض کرده بلدی</b>",
-    "<i>چیزهایی که بدون تعریف به کار برد یا صریح گفت «می‌دانید». اگر اینها را نداری، بقیهٔ درس لنگ می‌ماند.</i>",
-    "",
-  ];
-  for (const a of r.assumed_knowledge) {
-    out.push(`<b>${escapeHtml(a.concept)}</b> <i>(${a.signal === "explicit" ? "صریح گفت" : "بدون تعریف به کار برد"})</i>`);
-    out.push(escapeHtml(a.quick_explainer));
-    if (a.evidence) {
-      out.push(`<blockquote>«${escapeHtml(a.evidence.quote)}»</blockquote>`);
-      out.push(`⏱ ${fmtClockLink(a.evidence.at_ms)}`);
-    }
-    out.push(`🔎 <code>${escapeHtml(a.suggested_search)}</code>`);
-    out.push("");
-  }
-  return out.join("\n");
-}
-
-export function topicsMessage(r: AnalysisReport): string {
-  if (r.topics.length === 0) return "";
-  const out = ["📚 <b>خلاصهٔ درسی — سرفصل‌های این جلسه</b>", ""];
-  for (const t of r.topics) {
-    out.push(`<b>${escapeHtml(t.title)}</b> — ${fmtClockLink(t.start_ms)}`);
-    out.push(escapeHtml(t.summary));
-    for (const s of t.subpoints.slice(0, 6)) out.push(`  ‹ ${escapeHtml(s)}`);
-    out.push("");
-  }
-  if (r.open_questions.length) {
-    out.push("<b>نکات باز</b>");
-    for (const q of r.open_questions) out.push(`• ${escapeHtml(q)}`);
-  }
-  return out.join("\n");
-}
-
-/**
- * فهرست فصل‌های صوت — نقشهٔ پیمایش.
- *
- * ارزان‌ترین قابلیت کل محصول: خط زمانی که مدل همین حالا تولید می‌کند، به‌صورت
- * فهرستی از زمان‌های لینک‌پذیر. دانشجویی که فقط دنبال یک بخش است، مستقیم
- * می‌پرد همان‌جا و لازم نیست نود دقیقه صوت را جلو و عقب کند.
- */
-export function outlineMessage(r: AnalysisReport): string {
-  if (r.timeline.length === 0) return "";
-  const out = [
-    "🗺 <b>نقشهٔ صوت</b>",
-    "<i>روی هر زمان بزن تا از همان‌جا پخش شود.</i>",
-    "",
-  ];
-  for (const s of r.timeline) {
-    const icon = KIND_CHAR[s.kind] ?? "▪";
-    out.push(`${fmtClockLink(s.start_ms)}  ${icon} ${escapeHtml(s.label)}`);
-  }
-  return out.join("\n");
+/** نقل‌قول بلند را کوتاه می‌کند — مدل گاهی سقف را رعایت نمی‌کند. */
+function trimQuote(q: string, maxWords = 18): string {
+  const w = q.trim().split(/s+/);
+  return w.length <= maxWords ? q.trim() : w.slice(0, maxWords).join(" ") + " …";
 }
 
 export function progressMessage(

@@ -61,15 +61,10 @@ function evidence(v: unknown): Obj | null {
   };
 }
 
-function clampImportance(v: unknown): number {
-  const n = num(v, 2);
-  return Math.min(3, Math.max(1, n));
-}
-
-const KP_KINDS = new Set(["homework", "exam_hint", "emphasis", "deadline", "resource", "warning"]);
+const KP_KINDS = new Set(["exam", "emphasis", "homework", "deadline"]);
 const ACTION_KINDS = new Set([
   "attendance", "quiz", "homework", "deadline", "exam_info",
-  "grading", "makeup_class", "class_cancelled", "resource", "other",
+  "grading", "makeup_class", "class_cancelled", "other",
 ]);
 const SEGMENT_KINDS = new Set(["teaching", "qa", "admin", "offtopic", "technical", "break"]);
 
@@ -127,9 +122,7 @@ export function repairAnalysis(input: unknown): Obj {
       .map((k) => ({
         kind: KP_KINDS.has(String(k.kind)) ? k.kind : "emphasis",
         title: asString(k.title) ?? "",
-        detail: asString(k.detail) ?? "",
         due: asString(k.due),
-        importance: clampImportance(k.importance),
         evidence: evidence(k.evidence),
       }))
       .filter((k) => k.evidence !== null && k.title),
@@ -141,22 +134,9 @@ export function repairAnalysis(input: unknown): Obj {
         start_ms: num(t.start_ms),
         end_ms: num(t.end_ms),
         summary: asString(t.summary) ?? "",
-        subpoints: stringArray(t.subpoints),
         terms: stringArray(t.terms),
       }))
       .filter((t) => t.title),
-
-    assumed_knowledge: arr(r.assumed_knowledge)
-      .filter(isObj)
-      .map((a) => ({
-        concept: asString(a.concept) ?? "",
-        signal: a.signal === "explicit" ? "explicit" : "implicit",
-        why: asString(a.why) ?? "",
-        evidence: evidence(a.evidence),
-        quick_explainer: asString(a.quick_explainer) ?? "",
-        suggested_search: asString(a.suggested_search) ?? (asString(a.concept) ?? ""),
-      }))
-      .filter((a) => a.concept),
 
     glossary: arr(r.glossary)
       .filter(isObj)

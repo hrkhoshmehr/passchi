@@ -33,7 +33,7 @@ export async function invitationMessage(api: Api, s: SessionRow): Promise<string
     `📓 <b>${escapeHtml(s.title ?? "جلسهٔ کلاس")}</b>`,
     course ? `<i>${escapeHtml(course.name)}</i>` : "",
     "",
-    `صوت این جلسه تحلیل شده: خلاصه، نکات با ذکر منبع، پیش‌نیازها${s.pdf_path ? "، و جزوهٔ کامل PDF" : ""}.`,
+    `صوت این جلسه تحلیل شده: خلاصه، نکات امتحانی با ذکر منبع${s.pdf_path ? "، و جزوهٔ کامل PDF" : ""}.`,
     "",
     `👥 تا الان <b>${toFaDigits(st?.memberCount ?? 1)}</b> نفر برداشته‌اند.`,
     `سهم نفر بعدی: <b>${fmtDuration(nextShare * 1000)}</b> اعتبار`,
@@ -67,9 +67,9 @@ export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyb
     r?.headline ? escapeHtml(r.headline) : "",
     "",
     "<b>با پیوستن اینها را می‌گیری</b>",
-    "• تحلیل جلسه و ترکیب زمانی",
-    `• ${toFaDigits(r?.key_points.length ?? 0)} نکته با ذکر منبع و زمان قابل کلیک`,
-    `• ${toFaDigits(r?.topics.length ?? 0)} سرفصل درسی`,
+    "• کلاس در یک نگاه",
+    `• ${toFaDigits(r?.key_points.length ?? 0)} نکتهٔ امتحانی با ذکر منبع`,
+    `• ${toFaDigits(r?.topics.length ?? 0)} سرفصل با زمان`,
     s.pdf_path ? "• جزوهٔ کامل PDF" : "",
     "• فایل صوتی و رونوشت کامل",
     "",
@@ -138,10 +138,7 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
       qualityWarnings: [],
     }),
   );
-  await send(S.outlineMessage(r), asReply);
   await send(S.keyPointsMessage(r, linkable), asReply);
-  await send(S.topicsMessage(r), asReply);
-  await send(S.assumedMessage(r), asReply);
 
   if (s.pdf_path) {
     await ctx

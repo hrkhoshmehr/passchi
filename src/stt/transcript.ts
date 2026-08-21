@@ -1,7 +1,7 @@
 import type { TranscriptToken } from "@soniox/node";
 import { TimeMap } from "../audio/ffmpeg.js";
 import { fmtClock } from "../util/time.js";
-import { normalizeFa, containmentScore } from "../util/text.js";
+import { normalizeFa, containmentScore, tokens } from "../util/text.js";
 
 export type SpeakerRole = "استاد" | "دانشجو" | "نامشخص";
 
@@ -153,6 +153,70 @@ export function renderPlain(t: BuiltTranscript): string {
     .map((u) => `[${fmtClock(u.startMs, true)}] ${u.role === "نامشخص" ? `گوینده ${u.speakerId}` : u.role}: ${u.text}`)
     .join("\n\n");
 }
+
+/**
+ * زمان شروع یک سرفصل را از خود رونوشت پیدا می‌کند.
+ *
+ * چرا لازم است: زمانی که مدل برای سرفصل می‌دهد قابل اعتماد نیست. روی یک
+ * سخنرانی ۵۰ دقیقه‌ای، مدل ارزان هر نُه سرفصل را در دوازده دقیقهٔ اول
+ * گذاشت. نقل‌قول‌ها این مشکل را ندارند چون `verifyQuote` زمانشان را از
+ * رونوشت می‌گیرد؛ سرفصل‌ها هم باید همان مسیر را بروند.
+ *
+ * روش: واژه‌های عنوان و اصطلاحات سرفصل را در پاره‌گفتارها می‌شماریم و اولین
+ * جایی را که چگالی‌شان بالاست برمی‌داریم — با این قید که از سرفصل قبلی
+ * جلوتر باشد، تا ترتیب زمانی حفظ شود.
+ */
+export function anchorTopics(
+  t: BuiltTranscript,
+  topics: Array<{ title: string; terms: string[]; start_ms: number }>,
+  durationMs: number,
+): number[] {
+  const anchors: number[] = [];
+  let floorIdx = 0;
+
+  for (const topic of topics) {
+    const needles = [...tokens(topic.title), ...topic.terms.flatMap((x) => tokens(x))].filter(
+      (w) => w.length > 2,
+    );
+
+    let bestIdx = -1;
+    let bestScore = 0;
+    for (let i = floorIdx; i < t.utterances.length; i++) {
+      const hay = t.utterances[i]!.normalized;
+      let hits = 0;
+      for (const n of needles) if (hay.includes(n)) hits++;
+      const score = needles.length ? hits / needles.length : 0;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+      // به‌محض رسیدن به تطبیق قوی متوقف شو — اولین جایی که موضوع مطرح
+      // می‌شود مهم است، نه جایی که بیشترین تکرار را دارد
+      if (score >= 0.6) break;
+    }
+
+    // سرفصل اول همیشه از ابتدای جلسه است. واژه‌های عنوانی مثل «مرور مباحث
+    // گذشته» در سراسر رونوشت تکرار می‌شوند و تطبیق را به وسط فایل می‌برند.
+    if (anchors.length === 0) {
+      anchors.push(0);
+      if (bestIdx >= 0 && bestScore >= 0.25) floorIdx = bestIdx;
+      continue;
+    }
+
+    const prev = anchors[anchors.length - 1]!;
+    let at =
+      bestIdx >= 0 && bestScore >= 0.25 ? t.utterances[bestIdx]!.startMs : Math.max(prev, topic.start_ms);
+
+    // دو سرفصل نمی‌توانند یک زمان بگیرند؛ فهرستی که همه‌اش یک عدد است بی‌فایده است
+    if (at <= prev + MIN_TOPIC_GAP_MS) at = Math.min(durationMs, prev + MIN_TOPIC_GAP_MS);
+    anchors.push(Math.min(durationMs, at));
+    if (bestIdx >= 0 && bestScore >= 0.25) floorIdx = bestIdx;
+  }
+  return anchors;
+}
+
+/** کمینه فاصلهٔ دو سرفصل پیاپی. */
+const MIN_TOPIC_GAP_MS = 45_000;
 
 export interface QuoteMatch {
   ok: boolean;

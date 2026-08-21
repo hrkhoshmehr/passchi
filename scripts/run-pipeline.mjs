@@ -40,12 +40,26 @@ try {
   console.log(`\nنکات با منبع تأییدشده: ${r.key_points.length} (${r.droppedCitations} مورد حذف شد)`);
   for (const k of r.key_points) {
     console.log(`  [${k.kind}] ${k.title}`);
-    console.log(`     «${k.evidence.quote}»  @${Math.round(k.evidence.at_ms/1000)}s  score=${k.evidence.score}`);
+    const words = k.evidence.quote.trim().split(/\s+/).length;
+    console.log(`     «${k.evidence.quote}» @${Math.round(k.evidence.at_ms / 1000)}s (${words} کلمه)`);
   }
   console.log(`\nسرفصل‌ها: ${r.topics.length}`);
-  for (const t of r.topics) console.log(`  ${Math.round(t.start_ms/60000)}دق — ${t.title}`);
-  console.log(`\nپیش‌نیازها: ${r.assumed_knowledge.length}`);
-  for (const a of r.assumed_knowledge) console.log(`  [${a.signal}] ${a.concept}`);
+  for (const t of r.topics) console.log(`  ${Math.round(t.start_ms / 60000)}دق — ${t.title}`);
+
+  console.log("\n── پیام تلگرام که کاربر می‌بیند ──");
+  const { overviewMessage, keyPointsMessage } = await import("../src/bot/strings.js");
+  const m1 = overviewMessage({
+    report: r, courseName: null, sessionDate: null,
+    durationMs: out.originalDurationMs, savedMs: 0, qualityWarnings: out.qualityWarnings,
+  });
+  const m2 = keyPointsMessage(r, true);
+  console.log(m1.replace(/<[^>]+>/g, ""));
+  console.log("\n─────\n");
+  console.log(m2.replace(/<[^>]+>/g, ""));
+  console.log(`
+[طول پیام‌ها: ${m1.length} + ${m2.length} = ${m1.length+m2.length} کاراکتر]`);
+
+
   console.log(`\nواژه‌نامه: ${r.glossary.length} · نکات باز: ${r.open_questions.length}`);
   console.log(`\nجزوه: ${out.notesMarkdown.length} کاراکتر`);
   console.log(`PDF: ${out.pdfPath ?? "ساخته نشد"}`);
