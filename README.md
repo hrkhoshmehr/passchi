@@ -251,3 +251,49 @@ npx tsx scripts/soniox-report.mjs                        # گزارش ساختا
 - **فایل صوتی اصلی نگه داشته می‌شود** (پیش‌فرض ۷ روز، `KEEP_AUDIO_DAYS`) چون دکمهٔ «شنیدن این لحظه» به آن نیاز دارد. صفر بگذاری، آن دکمه بی‌اثر می‌شود.
 - **روی سرور Soniox چیزی نمی‌ماند**: هم فایل و هم رکورد رونویسی با `cleanup: ["file", "transcription"]` پاک می‌شوند.
 - **ضبط کلاس** در بعضی دانشگاه‌ها اجازهٔ استاد می‌خواهد. صدای دانشجوها هم در فایل هست. قبل از انتشار عمومی ربات، متن رضایت و سیاست حذف داده را اضافه کن.
+
+---
+
+## استقرار
+
+سرور فعلی: `91.107.246.90` (Ubuntu 26.04، هتزنر آلمان — بیرون از ایران، پس Soniox و Anthropic جواب می‌دهند).
+مسیر پروژه: `/opt/kharkhoon` · سرویس: `kharkhoon.service` · لاگ: `/var/log/kharkhoon.log`
+
+### دستورهای روزمره
+
+```bash
+ssh root@91.107.246.90
+systemctl status kharkhoon
+journalctl -u kharkhoon -n 50
+tail -f /var/log/kharkhoon.log
+```
+
+### انتشار نسخهٔ جدید
+
+```bash
+cd /opt/kharkhoon
+git pull
+npm ci --no-audit --no-fund
+npx tsc -p tsconfig.json --noEmit   # قبل از ری‌استارت، نه بعدش
+systemctl restart kharkhoon
+```
+
+### دو تلهٔ استقرار که خوردیم
+
+**Chromium با `npm ci` نصب نمی‌شود.** اسکریپت‌های postinstall اجرا نمی‌شوند و `npx puppeteer browsers install chrome` هم روی این سرور شکست خورد («All providers failed») در حالی که میزبان دانلود در دسترس بود. نصب دستی جواب داد:
+
+```bash
+VER=152.0.7977.42
+B=/root/.cache/puppeteer/chrome
+curl -o /tmp/c.zip "https://storage.googleapis.com/chrome-for-testing-public/$VER/linux64/chrome-linux64.zip"
+unzip -q /tmp/c.zip -d "$B/linux-$VER"
+chmod +x "$B/linux-$VER/chrome-linux64/chrome"
+```
+
+نکتهٔ ظریف: زیپ رسمی گوگل با نام `linux64-` باز می‌شود ولی puppeteer دنبال `linux-` می‌گردد. علاوه بر نام درست، مسیر اجرایی در `PUPPETEER_EXECUTABLE_PATH` هم صریح ست شده تا اگر قرارداد نام‌گذاری عوض شد رندر PDF نشکند.
+
+**وابستگی‌های سیستمی Chromium روی اوبونتو ۲۶ پسوند `t64` گرفته‌اند** (`libasound2t64`، `libatk1.0-0t64`، `libcups2t64`…). با نام قدیمی نصب نمی‌شوند.
+
+### دو نسخه همزمان بالا نباشد
+
+ربات polling می‌کند. اگر روی لپ‌تاپ هم `npm run dev` بزنی در حالی که سرویس سرور بالاست، آپدیت‌ها بین دو نسخه تقسیم می‌شوند و ربات نصفه‌نیمه جواب می‌دهد. قبل از تست محلی، `systemctl stop kharkhoon` بزن.
