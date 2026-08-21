@@ -1,0 +1,213 @@
+import type { TranscriptToken } from "@soniox/node";
+import { TimeMap } from "../audio/ffmpeg.js";
+import { fmtClock } from "../util/time.js";
+import { normalizeFa, containmentScore } from "../util/text.js";
+
+export type SpeakerRole = "استاد" | "دانشجو" | "نامشخص";
+
+export interface Utterance {
+  index: number;
+  /** زمان‌ها همیشه روی فایل *اصلی* هستند تا نقل‌قول‌ها قابل مراجعه باشند */
+  startMs: number;
+  endMs: number;
+  speakerId: string;
+  role: SpeakerRole;
+  text: string;
+  /** میانگین اطمینان مدل روی این پاره‌گفتار (۰..۱) */
+  confidence: number;
+  normalized: string;
+}
+
+export interface SpeakerStats {
+  speakerId: string;
+  role: SpeakerRole;
+  speechMs: number;
+  turns: number;
+  words: number;
+}
+
+export interface BuiltTranscript {
+  utterances: Utterance[];
+  speakers: SpeakerStats[];
+  totalSpeechMs: number;
+  words: number;
+  /** نسبت متنی که مدل با اطمینان پایین برگردانده (۰..۱) */
+  lowConfidenceRatio: number;
+}
+
+const GAP_BREAK_MS = 1_500;
+const MAX_UTTERANCE_CHARS = 700;
+
+export function buildTranscript(tokens: TranscriptToken[], timeMap: TimeMap): BuiltTranscript {
+  const utterances: Utterance[] = [];
+
+  let cur: {
+    startMs: number;
+    endMs: number;
+    speakerId: string;
+    parts: string[];
+    confSum: number;
+    confN: number;
+  } | null = null;
+
+  const flush = () => {
+    if (!cur) return;
+    const text = cur.parts.join("").replace(/\s+/g, " ").trim();
+    if (text) {
+      utterances.push({
+        index: utterances.length,
+        startMs: cur.startMs,
+        endMs: cur.endMs,
+        speakerId: cur.speakerId,
+        role: "نامشخص",
+        text,
+        confidence: cur.confN > 0 ? cur.confSum / cur.confN : 1,
+        normalized: normalizeFa(text),
+      });
+    }
+    cur = null;
+  };
+
+  for (const t of tokens) {
+    const speakerId = t.speaker ?? "?";
+    const startMs = timeMap.toOriginal(t.start_ms ?? 0);
+    const endMs = timeMap.toOriginal(t.end_ms ?? t.start_ms ?? 0);
+
+    const shouldBreak =
+      !cur ||
+      cur.speakerId !== speakerId ||
+      startMs - cur.endMs > GAP_BREAK_MS ||
+      cur.parts.join("").length > MAX_UTTERANCE_CHARS;
+
+    if (shouldBreak) {
+      flush();
+      cur = { startMs, endMs, speakerId, parts: [], confSum: 0, confN: 0 };
+    }
+    cur!.parts.push(t.text);
+    cur!.endMs = Math.max(cur!.endMs, endMs);
+    cur!.confSum += t.confidence ?? 1;
+    cur!.confN += 1;
+  }
+  flush();
+
+  // ── نقش گوینده‌ها ────────────────────────────────────────────────────────
+  // فرض: در یک کلاس درس، پرحرف‌ترین گوینده استاد است. برای سخنرانی معمول
+  // این فرض بسیار قوی است (معمولاً بالای ۷۰٪ زمان گفتار).
+  const byId = new Map<string, SpeakerStats>();
+  for (const u of utterances) {
+    const s = byId.get(u.speakerId) ?? {
+      speakerId: u.speakerId,
+      role: "نامشخص" as SpeakerRole,
+      speechMs: 0,
+      turns: 0,
+      words: 0,
+    };
+    s.speechMs += Math.max(0, u.endMs - u.startMs);
+    s.turns += 1;
+    s.words += u.text.split(/\s+/).filter(Boolean).length;
+    byId.set(u.speakerId, s);
+  }
+
+  const speakers = [...byId.values()].sort((a, b) => b.speechMs - a.speechMs);
+  const totalSpeechMs = speakers.reduce((a, s) => a + s.speechMs, 0);
+  if (speakers[0]) {
+    const share = totalSpeechMs > 0 ? speakers[0].speechMs / totalSpeechMs : 0;
+    // اگر پرحرف‌ترین گوینده کمتر از ۴۰٪ حرف زده، نقش‌دهی مطمئن نیست
+    speakers[0].role = share >= 0.4 ? "استاد" : "نامشخص";
+    for (const s of speakers.slice(1)) s.role = speakers[0].role === "استاد" ? "دانشجو" : "نامشخص";
+  }
+  const roleOf = new Map(speakers.map((s) => [s.speakerId, s.role]));
+  for (const u of utterances) u.role = roleOf.get(u.speakerId) ?? "نامشخص";
+
+  const words = speakers.reduce((a, s) => a + s.words, 0);
+  const lowConfWords = utterances
+    .filter((u) => u.confidence < 0.6)
+    .reduce((a, u) => a + u.text.split(/\s+/).filter(Boolean).length, 0);
+
+  return {
+    utterances,
+    speakers,
+    totalSpeechMs,
+    words,
+    lowConfidenceRatio: words > 0 ? lowConfWords / words : 0,
+  };
+}
+
+/**
+ * رونوشتی که به مدل داده می‌شود: هر خط با مهر زمانی و نقش گوینده.
+ * مهر زمانی لازم است تا مدل بتواند برای هر نکته «منبع» بدهد.
+ */
+export function renderForModel(t: BuiltTranscript): string {
+  const lines: string[] = [];
+  for (const u of t.utterances) {
+    const uncertain = u.confidence < 0.55 ? " ⟨کیفیت پایین⟩" : "";
+    const who = u.role === "نامشخص" ? `گوینده ${u.speakerId}` : `${u.role}${u.role === "دانشجو" ? ` ${u.speakerId}` : ""}`;
+    lines.push(`[${fmtClock(u.startMs, true)}] ${who}${uncertain}: ${u.text}`);
+  }
+  return lines.join("\n");
+}
+
+/** رونوشت ساده برای فایل خروجی .txt */
+export function renderPlain(t: BuiltTranscript): string {
+  return t.utterances
+    .map((u) => `[${fmtClock(u.startMs, true)}] ${u.role === "نامشخص" ? `گوینده ${u.speakerId}` : u.role}: ${u.text}`)
+    .join("\n\n");
+}
+
+export interface QuoteMatch {
+  ok: boolean;
+  score: number;
+  /** زمان تصحیح‌شده بر اساس جایی که نقل‌قول واقعاً پیدا شد */
+  atMs: number;
+  role: SpeakerRole;
+  /** متن دقیق پاره‌گفتاری که نقل‌قول در آن پیدا شد */
+  utteranceText: string;
+}
+
+/**
+ * تأیید نقل‌قول: بررسی می‌کند جمله‌ای که مدل به‌عنوان «حرف استاد» برگردانده
+ * واقعاً در رونوشت هست یا نه — و اگر هست، زمانش را از خود رونوشت می‌گیرد
+ * نه از عددی که مدل حدس زده. بدون این مرحله، «ذکر منبع» بی‌ارزش است.
+ */
+export function verifyQuote(t: BuiltTranscript, quote: string, hintMs?: number): QuoteMatch {
+  const q = normalizeFa(quote);
+  const fail: QuoteMatch = { ok: false, score: 0, atMs: hintMs ?? 0, role: "نامشخص", utteranceText: "" };
+  if (q.length < 8) return fail;
+
+  const take = (score: number, owner: Utterance): QuoteMatch => ({
+    ok: score >= 0.75,
+    score,
+    atMs: owner.startMs,
+    role: owner.role,
+    utteranceText: owner.text,
+  });
+
+  // گذر اول: تک‌تک پاره‌گفتارها. اگر نقل‌قول کامل داخل یکی باشد، زمانش
+  // دقیقاً همان است — و همین حالت اکثریت قاطع موارد را می‌گیرد.
+  let best: QuoteMatch = fail;
+  for (const u of t.utterances) {
+    const score = containmentScore(q, u.normalized);
+    if (score > best.score) best = take(score, u);
+    if (best.score === 1) return best;
+  }
+  if (best.ok) return best;
+
+  // گذر دوم: پنجرهٔ دوتایی، برای نقل‌قولی که روی مرز دو پاره‌گفتار افتاده.
+  // مالکِ زمان، آن پاره‌گفتاری است که سهم بیشتری از نقل‌قول را دارد —
+  // نه لزوماً اولی، وگرنه زمانِ گزارش‌شده به پاره‌گفتار قبلی می‌چسبد.
+  for (let i = 0; i < t.utterances.length - 1; i++) {
+    const a = t.utterances[i]!;
+    const b = t.utterances[i + 1]!;
+    const score = containmentScore(q, `${a.normalized} ${b.normalized}`);
+    if (score > best.score) {
+      const owner = containmentScore(q, a.normalized) >= containmentScore(q, b.normalized) ? a : b;
+      best = take(score, owner);
+    }
+  }
+
+  // اگر مدل زمان داده و نمره مرزی است، نزدیکی زمانی را به‌عنوان شاهد کمکی حساب کن
+  if (!best.ok && hintMs !== undefined && best.score >= 0.6 && Math.abs(best.atMs - hintMs) < 60_000) {
+    best.ok = true;
+  }
+  return best;
+}

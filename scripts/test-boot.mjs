@@ -1,0 +1,20 @@
+import { config } from "../src/config.js";
+import "../src/db/index.js";
+import { runPipeline } from "../src/pipeline.js";
+import { analyzeClass } from "../src/analysis/analyze.js";
+import { chat } from "../src/analysis/openrouter.js";
+import { transcribe } from "../src/stt/soniox.js";
+import { renderPdf } from "../src/pdf/render.js";
+import { mtprotoAvailable, downloadMedia } from "../src/bot/mtproto.js";
+import { downloadTelegramFile } from "../src/bot/download.js";
+
+console.log("همهٔ ماژول‌ها بارگذاری شدند.\n");
+console.log("  تحلیل:        ", config.ANALYSIS_PROVIDER, config.ANALYSIS_PROVIDER === "openrouter" ? (config.OPENROUTER_ANALYSIS_MODEL || config.OPENROUTER_MODEL) : config.ANALYSIS_MODEL);
+console.log("  جزوه:         ", config.NOTES_PROVIDER, config.NOTES_PROVIDER === "openrouter" ? (config.OPENROUTER_NOTES_MODEL || config.OPENROUTER_MODEL) : config.NOTES_MODEL);
+console.log("  STT:          ", config.SONIOX_MODEL, config.SONIOX_API_KEY ? "(کلید موجود)" : "(کلید نیست)");
+console.log("  حذف سکوت:     ", config.SILENCE_TRIM);
+console.log("  MTProto:      ", mtprotoAvailable() ? "فعال — سقف ۲۰ مگ برداشته شد" : "غیرفعال (API_ID/HASH لازم است)");
+console.log("  Bot API محلی: ", config.TELEGRAM_API_ROOT ?? "ندارد");
+console.log("  توکن ربات:    ", config.BOT_TOKEN ? "موجود" : "نیست");
+console.log("\n  توابع:", [runPipeline, analyzeClass, transcribe, renderPdf, chat, downloadMedia, downloadTelegramFile].map((f) => f.name).join(", "));
+process.exit(0);

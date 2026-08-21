@@ -1,0 +1,18 @@
+node_modules/
+dist/
+data/
+.env
+*.log
+assets/fonts/*.ttf
+assets/fonts/*.woff2
+
+# صوت نمونه — ۱۵ مگابایت و محتوای کلاس واقعی است، جای مخزن نیست
+example.mp3
+*.mp3
+*.m4a
+*.wav
+*.ogg
+!assets/**/*.ogg
+
+# خروجی‌های تولیدشده
+samples/*.pdf
