@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml } from "../util/text.js";
 import { fmtDuration, toFaDigits } from "../util/time.js";
+import { fmtCost } from "../billing/coins.js";
 import { getCourse, getSession, sessionReport, updateSession, type SessionRow } from "../db/index.js";
 import { InsufficientCredit } from "../billing/ledger.js";
 import {
@@ -35,7 +36,7 @@ export async function invitationMessage(api: Api, s: SessionRow): Promise<string
     "",
     `خلاصهٔ کلاس، نکات امتحانی با عین حرف استاد${s.pdf_path ? "، و جزوهٔ کامل PDF" : ""}.`,
     "",
-    `👥 ${toFaDigits(st?.memberCount ?? 1)} نفر برداشتن · سهم تو: <b>${fmtDuration(nextShare * 1000)}</b>`,
+    `👥 ${toFaDigits(st?.memberCount ?? 1)} نفر برداشتن · سهم تو: <b>${fmtCost(nextShare)}</b>`,
     "",
     "<i>هرچی بیشتر باشیم سهم هرکس کمتر میشه.</i>",
     "",
@@ -71,7 +72,7 @@ export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyb
     s.pdf_path ? "• جزوهٔ کامل PDF" : "",
     "• صوت و رونوشت کامل",
     "",
-    `👥 ${toFaDigits(st.memberCount)} نفر برداشتن · سهم تو <b>${fmtDuration(st.nextShareSec * 1000)}</b>`,
+    `👥 ${toFaDigits(st.memberCount)} نفر برداشتن · سهم تو <b>${fmtCost(st.nextShareSec)}</b>`,
   ]
     .filter((l) => l !== "")
     .join("\n");
@@ -123,8 +124,9 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
     }
   };
 
+  // همان سه پیامی که فرستندهٔ اصلی گرفت، به همان ترتیب
   await send(
-    S.overviewMessage({
+    S.recapMessage({
       report: r,
       courseName: course?.name ?? null,
       sessionDate: s.session_date,
@@ -133,7 +135,8 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
       qualityWarnings: [],
     }),
   );
-  await send(S.keyPointsMessage(r, linkable), asReply);
+  await send(S.extractedMessage(r), asReply);
+  await send(S.timelineMessage(r, linkable), asReply);
 
   if (s.pdf_path) {
     await ctx
@@ -168,12 +171,7 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
       return { ok: true, message: "این جلسه از قبل مال خودته — دوباره فرستادم 👍" };
     }
     if (e instanceof InsufficientCredit) {
-      return {
-        ok: false,
-        message:
-          `اعتبارت کم میاد 😅\n\nسهم این جلسه <b>${fmtDuration(e.needed * 1000)}</b>ست ` +
-          `ولی <b>${fmtDuration(e.balance * 1000)}</b> داری.`,
-      };
+      return { ok: false, message: S.lowBalanceMessage(e.needed, e.balance) };
     }
     if (e instanceof NotShareable) return { ok: false, message: e.message };
     throw e;
@@ -188,9 +186,9 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
     await ctx.api
       .sendMessage(
         rf.tgId,
-        `💰 <b>${fmtDuration(rf.amountSec * 1000)}</b> برگشت به حسابت!\n\n` +
+        `💰 <b>${fmtCost(rf.amountSec)}</b> برگشت به حسابت!\n\n` +
           `یکی دیگه «${escapeHtml(s.title ?? "کلاس")}» رو برداشت. ` +
-          `الان ${toFaDigits(result.memberCount)} نفرین و سهم هرکس ${fmtDuration(result.shareSec * 1000)}ست.`,
+          `الان ${toFaDigits(result.memberCount)} نفرین و سهم هرکس ${fmtCost(result.shareSec)}ست.`,
         { parse_mode: "HTML" },
       )
       .catch(() => {});
@@ -199,7 +197,7 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
   return {
     ok: true,
     message:
-      `✅ گرفتیش! <b>${fmtDuration(result.chargedSec * 1000)}</b> کم شد — سهم ${toFaDigits(result.memberCount)} نفره.`,
+      `✅ گرفتیش! <b>${fmtCost(result.chargedSec)}</b> کم شد — سهم ${toFaDigits(result.memberCount)} نفره.`,
     session: s,
   };
 }

@@ -20,6 +20,7 @@ import { logger } from "../util/logger.js";
 export type LedgerReason =
   | "trial"          // اعتبار آزمایشی اولیه
   | "grant"          // شارژ دستی ادمین
+  | "topup"          // شارژ کاربر پس از تأیید رسید
   | "reserve"        // کنارگذاشتن پیش از اجرای کار
   | "commit"         // تسویهٔ نهایی پس از موفقیت (تفاوت مدت واقعی و تخمینی)
   | "refund"         // برگشت به‌خاطر شکست کار

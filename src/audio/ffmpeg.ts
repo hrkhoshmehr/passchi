@@ -499,6 +499,24 @@ export async function encode(
   };
 }
 
+/**
+ * بریدن ابتدای فایل تا سقف مشخص — بدون رمزگذاری دوباره.
+ *
+ * برای اجرای رایگان لازم است: صوت را نمی‌شود نصفه‌کاره به سرویس رونویسی داد
+ * و پول کل فایل را نداد. `-c copy` یعنی این کار عملاً هزینهٔ زمانی ندارد.
+ */
+export async function trimTo(input: string, output: string, maxMs: number): Promise<string> {
+  const { code, stderr } = await run(FFMPEG, [
+    "-hide_banner", "-nostdin", "-vn", "-y",
+    "-i", input,
+    "-t", (maxMs / 1000).toFixed(3),
+    "-c", "copy",
+    output,
+  ]);
+  if (code !== 0) throw new Error(`ffmpeg trim failed: ${stderr.slice(-400)}`);
+  return output;
+}
+
 /** بریدن یک تکهٔ کوتاه از فایل «اصلی» برای دکمهٔ «شنیدن این لحظه» */
 export async function extractClip(
   input: string,

@@ -71,10 +71,21 @@ const Schema = z.object({
   // کش رونویسی روی هش محتوا — دو فرستادن یک فایل، یک بار هزینه
   STT_CACHE: bool(true),
   MAX_AUDIO_MINUTES: num(240),
-  FREE_TRIAL_MINUTES: num(90),
+  // هدیهٔ شروع، به سکه. عمداً کم است: به‌اندازهٔ یک بار «پیوستن به جلسهٔ
+  // اشتراکی» کافی است و به‌اندازهٔ پردازش یک کلاس کامل نیست.
+  FREE_TRIAL_COINS: num(100),
+  // اولین جلسهٔ هر کاربر رایگان است ولی فقط رونوشت، و فقط تا این مدت.
+  FREE_TRANSCRIPT_MINUTES: num(30),
   MAX_CONCURRENT_JOBS: num(2),
   DATA_DIR: z.string().optional().default("./data"),
   KEEP_AUDIO_DAYS: num(7),
+
+  // شارژ کارت‌به‌کارت: اگر شمارهٔ کارت خالی باشد، دکمهٔ شارژ کاربر را به
+  // پشتیبانی ارجاع می‌دهد به‌جای اینکه صفحهٔ پرداختِ ناقص نشان دهد.
+  CARD_NUMBER: z.string().optional().default(""),
+  CARD_HOLDER: z.string().optional().default(""),
+  /** بدون @ — دکمهٔ «پشتیبانی» به این آیدی لینک می‌شود */
+  SUPPORT_USERNAME: z.string().optional().default(""),
 
   LOG_LEVEL: z.string().optional().default("info"),
   ADMIN_IDS: z

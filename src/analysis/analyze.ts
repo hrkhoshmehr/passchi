@@ -98,13 +98,13 @@ function verifyEvidence(t: BuiltTranscript, e: Evidence | null): VerifiedEvidenc
 }
 
 function computeComposition(
-  timeline: ClassAnalysis["timeline"],
+  chapters: ClassAnalysis["chapters"],
   originalDurationMs: number,
   silenceMs: number,
 ): TimelineStats[] {
   const byKind = new Map<SegmentKind, number>();
   let total = 0;
-  for (const s of timeline) {
+  for (const s of chapters) {
     const ms = Math.max(0, Math.min(s.end_ms, originalDurationMs) - Math.max(0, s.start_ms));
     if (ms <= 0) continue;
     byKind.set(s.kind, (byKind.get(s.kind) ?? 0) + ms);
@@ -127,6 +127,66 @@ function computeComposition(
   return rows;
 }
 
+/** سقف زیربخش‌های هر بخش — بیشتر از این، فهرستِ بازشده هم خوانده نمی‌شود. */
+const MAX_PARTS = 6;
+
+/** n عضو با فاصلهٔ یکنواخت از یک آرایه، شامل اولی و آخری. */
+function evenSample<T>(items: T[], n: number): T[] {
+  if (items.length <= n) return items;
+  const step = (items.length - 1) / (n - 1);
+  return Array.from({ length: n }, (_, i) => items[Math.round(i * step)]!);
+}
+
+/**
+ * مرزهای بخش‌ها را قابل‌اتکا می‌کند.
+ *
+ * مرز بخش تنها عددی است که کاربر برای «از کجا گوش بدهم» به آن نگاه می‌کند،
+ * ولی همان چیزی است که مدل بیشتر از همه در آن خطا می‌کند: روی یک صوت
+ * پنجاه‌دقیقه‌ای، بخش‌هایی دیده شد که شروعشان ۰۰:۲۹ و ۰۱:۳۹ بود در حالی که
+ * زیربخش‌هایشان درست روی دقیقهٔ ۷ و ۱۳ می‌افتادند — یعنی مدل مقیاس را برای
+ * بخش‌ها اشتباه گرفته بود ولی برای نقطه‌ها نه.
+ *
+ * پس مرزها بازسازی می‌شوند، نه فقط محدود:
+ *
+ *   ۱) هر بخشی که زیربخش دارد، دست‌کم تا اولین زیربخشش عقب می‌آید،
+ *   ۲) بخش‌ها بر اساس شروع مرتب می‌شوند،
+ *   ۳) پایان هر بخش، شروع بخش بعدی است — و آخری تا ته صوت.
+ *
+ * نتیجه: پوششی پیوسته از صفر تا انتهای فایل، بدون همپوشانی و بدون حفره،
+ * حتی وقتی مدل اعداد بی‌ربط داده باشد.
+ */
+function normalizeChapters(
+  chapters: ClassAnalysis["chapters"],
+  durationMs: number,
+): ClassAnalysis["chapters"] {
+  const clamp = (ms: number) => Math.min(Math.max(0, Math.round(ms)), durationMs);
+
+  const rows = chapters
+    .map((c) => {
+      const parts = c.parts
+        .filter((p) => p.at_ms < durationMs && p.label.trim())
+        .map((p) => ({ ...p, at_ms: clamp(p.at_ms) }))
+        .sort((x, y) => x.at_ms - y.at_ms);
+      // مدل سقف تعداد زیربخش را جدی نمی‌گیرد — روی یک جلسه شانزده‌تا داد. با
+      // نمونه‌گیری یکنواخت بریده می‌شود تا آخرِ بخش هم پوشش خودش را نگه دارد.
+      const trimmed = evenSample(parts, MAX_PARTS);
+      const firstPart = trimmed[0]?.at_ms;
+      const start = firstPart === undefined ? clamp(c.start_ms) : Math.min(clamp(c.start_ms), firstPart);
+      return { ...c, start_ms: start, end_ms: clamp(c.end_ms), parts: trimmed };
+    })
+    .filter((c) => c.title.trim() || c.parts.length)
+    .sort((a, b) => a.start_ms - b.start_ms);
+
+  if (rows.length === 0) return [];
+
+  rows[0]!.start_ms = 0;
+  for (let i = 0; i < rows.length; i++) {
+    rows[i]!.end_ms = i + 1 < rows.length ? rows[i + 1]!.start_ms : durationMs;
+  }
+  // بخشی که پس از پیوسته‌سازی طولش صفر شد، دو بخش با شروع یکسان بوده‌اند
+  return rows.filter((c) => c.end_ms > c.start_ms);
+}
+
 /**
  * زمان‌های بیرون از مدت صوت را اصلاح می‌کند.
  *
@@ -139,9 +199,7 @@ function clampTimes(a: ClassAnalysis, durationMs: number): ClassAnalysis {
   const clamp = (ms: number) => Math.min(Math.max(0, Math.round(ms)), durationMs);
   return {
     ...a,
-    timeline: a.timeline
-      .map((s) => ({ ...s, start_ms: clamp(s.start_ms), end_ms: clamp(s.end_ms) }))
-      .filter((s) => s.end_ms > s.start_ms),
+    chapters: normalizeChapters(a.chapters, durationMs),
     topics: a.topics
       .filter((t) => t.start_ms < durationMs)
       .map((t) => ({ ...t, start_ms: clamp(t.start_ms), end_ms: clamp(t.end_ms) })),
@@ -270,7 +328,7 @@ export async function analyzeClass(
     ...parsed,
     key_points: keyPoints,
     professor_actions: professorActions,
-    composition: computeComposition(parsed.timeline, meta.originalDurationMs, meta.silenceMs),
+    composition: computeComposition(parsed.chapters, meta.originalDurationMs, meta.silenceMs),
     silenceMs: meta.silenceMs,
     droppedCitations: dropped,
   };

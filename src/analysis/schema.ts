@@ -25,11 +25,27 @@ export const SegmentKind = z.enum([
 ]);
 export type SegmentKind = z.infer<typeof SegmentKind>;
 
-export const TimelineSegment = z.object({
+/** یک نقطهٔ داخل یک بخش: «دقیقهٔ ۱۲، حل تمرین دوم». */
+export const ChapterPart = z.object({
+  at_ms: z.number().int(),
+  label: z.string().describe("حداکثر ۸ کلمه"),
+});
+
+/**
+ * بخش‌های درشتِ کلاس.
+ *
+ * نسخهٔ قبلی خط زمانی ریز می‌داد — گاهی سی ردیف — و کسی سی ردیف را نمی‌خواند.
+ * حالا چند بخش درشت که در یک نگاه دیده می‌شوند، و ریزه‌کاری هرکدام داخل
+ * `parts` جمع می‌شود تا فقط اگر کاربر خواست بازش کند.
+ */
+export const Chapter = z.object({
   start_ms: z.number().int(),
   end_ms: z.number().int(),
   kind: SegmentKind,
-  label: z.string().describe("حداکثر ۶ کلمه"),
+  title: z.string().describe("حداکثر ۶ کلمه — این بخش دربارهٔ چه بود"),
+  parts: z
+    .array(ChapterPart)
+    .describe("۰ تا ۵ نقطهٔ داخل همین بخش، به ترتیب زمان. بخش کوتاه لازم نیست زیربخش داشته باشد."),
 });
 
 export const ProfessorAction = z.object({
@@ -64,6 +80,12 @@ export const KeyPoint = z.object({
     "deadline", // مهلت
   ]),
   title: z.string().describe("حداکثر ۸ کلمه — همان چیزی که دانشجو باید بخواند"),
+  detail: z
+    .string()
+    .describe(
+      "توضیح کامل همین مورد بر پایهٔ چیزی که در کلاس گفته شد: دقیقاً چه باید بکند، " +
+        "کدام بخش یا کدام تمرین، با چه شرطی. دو تا چهار جمله. اگر جزئیاتی گفته نشده، رشتهٔ خالی.",
+    ),
   due: z.string().nullable().describe("مهلت، عیناً همان‌طور که استاد گفته. اگر نگفته null."),
   evidence: Evidence.describe("اجباری — نکتهٔ بدون نقل‌قول اصلاً برنگردانده نشود."),
 });
@@ -88,10 +110,15 @@ export const ClassAnalysis = z.object({
   session_title: z.string().describe("عنوان جلسه، حداکثر ۸ کلمه"),
   course_guess: z.string().nullable(),
   headline: z.string().describe("یک جمله: در این کلاس چه گذشت"),
-  student_summary: z
-    .array(z.string())
-    .describe("۳ تا ۵ بولت کوتاه، هرکدام حداکثر یک خط. این «کلاس در یک نگاه» است."),
-  timeline: z.array(TimelineSegment).describe("پوشش پیوسته از ابتدا تا انتهای صوت"),
+  class_recap: z
+    .string()
+    .describe(
+      "تعریف‌کردن کلاس برای هم‌کلاسیِ غایب، با لحن دوستانه و روایی: چهار تا هفت جمله " +
+        "که به ترتیب بگوید کلاس چطور گذشت. یک پاراگراف پیوسته، بدون بولت و بدون تیتر.",
+    ),
+  chapters: z
+    .array(Chapter)
+    .describe("۳ تا ۷ بخش درشت که پشت سر هم کل صوت را بپوشانند"),
   professor_actions: z.array(ProfessorAction),
   key_points: z.array(KeyPoint),
   topics: z.array(Topic),

@@ -11,6 +11,8 @@
 
 import type { Api } from "grammy";
 import { logger } from "../util/logger.js";
+import { fmtCoins } from "../billing/coins.js";
+import { TRIAL_COINS } from "./menu.js";
 
 /** حداکثر ۱۲۰ کاراکتر — زیر نام ربات در صفحهٔ پروفایل و در نتایج جست‌وجو */
 export const SHORT_DESCRIPTION =
@@ -23,21 +25,23 @@ export const DESCRIPTION = `صوت کلاستو بفرست، چند دقیقه �
 🎯 هرچی به امتحان می‌خوره، با عین حرف استاد و دقیقه‌ش
 📕 جزوهٔ کامل PDF
 
-خرجشو با هم‌کلاسیات نصف کن — هرچی بیشتر باشین سهم هرکس کمتر میشه.
+خرجشو با هم‌کلاسیات تقسیم کن — با ۱۰ نفر، حدود ۹۰٪ سکه‌هات برمی‌گرده.
 
-۹۰ دقیقه اول مهمون مایی. /start بزن.`;
+اولین صوتت رایگان پیاده میشه، و ${fmtCoins(TRIAL_COINS)} هم هدیه می‌گیری. /start بزن.`;
 
 /**
  * فقط دستورهایی که دانشجو واقعاً لازم دارد.
  *
- * منوی ده‌تایی خودش یک مانع است: کاربر فکر می‌کند باید یاد بگیرد کدام را کی
- * بزند، در حالی که کار اصلی هیچ دستوری لازم ندارد — فقط فرستادن صوت.
+ * کار اصلی هیچ دستوری لازم ندارد — فقط فرستادن صوت — و بقیه هم روی
+ * صفحه‌کلید منو هستند. این فهرست برای کسی است که به تایپ‌کردن عادت دارد.
  * /privacy و /forget و /cancel همچنان کار می‌کنند، فقط در منو نیستند.
  */
 export const COMMANDS = [
   { command: "start", description: "شروع" },
+  { command: "menu", description: "منوی اصلی" },
   { command: "history", description: "جلسه‌های قبلی" },
-  { command: "credit", description: "اعتبارم" },
+  { command: "credit", description: "حساب و سکه‌ها" },
+  { command: "buy", description: "شارژ حساب" },
   { command: "course", description: "ثبت درس" },
   { command: "help", description: "راهنما" },
 ] as const;

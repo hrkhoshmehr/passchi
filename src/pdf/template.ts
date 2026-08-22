@@ -2,7 +2,7 @@ import MarkdownIt from "markdown-it";
 import katex from "katex";
 import { buildFontCss } from "./assets.js";
 import { escapeHtml } from "../util/text.js";
-import { fmtClock, fmtDuration, toFaDigits } from "../util/time.js";
+import { fmtDuration, toFaDigits } from "../util/time.js";
 import type { AnalysisReport } from "../analysis/schema.js";
 
 const md = new MarkdownIt({ html: false, linkify: true, typographer: false, breaks: false });
@@ -54,101 +54,6 @@ export interface NoteDocument {
   generatedAt: Date;
 }
 
-const KIND_LABEL: Record<string, string> = {
-  teaching: "تدریس",
-  qa: "پرسش و پاسخ",
-  admin: "امور کلاس",
-  offtopic: "حاشیه",
-  technical: "مشکل فنی",
-  break: "سکوت و وقفه",
-};
-
-const KIND_COLOR: Record<string, string> = {
-  teaching: "var(--teach)",
-  qa: "var(--qa)",
-  admin: "var(--admin)",
-  offtopic: "var(--off)",
-  technical: "var(--tech)",
-  break: "var(--brk)",
-};
-
-const KP_LABEL: Record<string, string> = {
-  exam: "در امتحان می‌آید",
-  emphasis: "تأکید استاد",
-  homework: "تکلیف",
-  deadline: "مهلت",
-};
-
-function compositionBar(r: AnalysisReport): string {
-  const rows = r.composition.filter((c) => c.pct > 0);
-  if (rows.length === 0) return "";
-  const bar = rows
-    .map(
-      (c) =>
-        `<span class="seg" style="width:${c.pct}%;background:${KIND_COLOR[c.kind] ?? "#999"}" title="${
-          KIND_LABEL[c.kind] ?? c.kind
-        }"></span>`,
-    )
-    .join("");
-  const legend = rows
-    .map(
-      (c) =>
-        `<li><i style="background:${KIND_COLOR[c.kind] ?? "#999"}"></i>${
-          KIND_LABEL[c.kind] ?? c.kind
-        } — <b>${toFaDigits(c.pct)}٪</b> <span class="dim">(${fmtDuration(c.ms)})</span></li>`,
-    )
-    .join("");
-  return `<div class="bar">${bar}</div><ul class="legend">${legend}</ul>`;
-}
-
-function evidenceHtml(e: { quote: string; at_ms: number; speaker: string } | null): string {
-  if (!e) return "";
-  return `<div class="ev">«${escapeHtml(e.quote)}»<span class="ts">${e.speaker} · ${toFaDigits(
-    fmtClock(e.at_ms, true),
-  )}</span></div>`;
-}
-
-function keyPointsHtml(r: AnalysisReport): string {
-  if (r.key_points.length === 0) return `<p class="dim">نکتهٔ امتحانیِ دارای منبعِ تأییدشده‌ای پیدا نشد.</p>`;
-  const order: Record<string, number> = { exam: 0, deadline: 1, homework: 2, emphasis: 3 };
-  const sorted = [...r.key_points].sort(
-    (a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9) || a.evidence.at_ms - b.evidence.at_ms,
-  );
-  return sorted
-    .map(
-      (k) => `<div class="kp kp-${k.kind}">
-  <div class="kp-h"><span class="tag">${KP_LABEL[k.kind] ?? k.kind}</span><b>${escapeHtml(k.title)}</b>${
-    k.due ? `<span class="due">مهلت: ${escapeHtml(k.due)}</span>` : ""
-  }</div>
-  ${evidenceHtml(k.evidence)}
-</div>`,
-    )
-    .join("");
-}
-
-function actionsHtml(r: AnalysisReport): string {
-  const labels: Record<string, string> = {
-    attendance: "حضور و غیاب",
-    quiz: "کوییز",
-    homework: "تکلیف",
-    deadline: "مهلت",
-    exam_info: "اطلاعات امتحان",
-    grading: "نمره و بارم",
-    makeup_class: "کلاس جبرانی",
-    class_cancelled: "لغو جلسه",
-    other: "سایر",
-  };
-  return `<table class="acts"><thead><tr><th>مورد</th><th>وضعیت</th><th>توضیح</th></tr></thead><tbody>${r.professor_actions
-    .map(
-      (a) => `<tr class="${a.happened ? "yes" : "no"}">
-    <td>${labels[a.action] ?? a.action}</td>
-    <td>${a.happened ? "✔ انجام شد" : "— نشانه‌ای نبود"}</td>
-    <td>${escapeHtml(a.detail)}${evidenceHtml(a.evidence)}</td>
-  </tr>`,
-    )
-    .join("")}</tbody></table>`;
-}
-
 function glossaryHtml(r: AnalysisReport): string {
   if (r.glossary.length === 0) return "";
   return `<table class="gloss"><thead><tr><th>اصطلاح</th><th>معادل</th><th>تعریف</th></tr></thead><tbody>${r.glossary
@@ -161,9 +66,26 @@ function glossaryHtml(r: AnalysisReport): string {
     .join("")}</tbody></table>`;
 }
 
+/**
+ * نقل‌قول‌های «نکتهٔ امتحانی» را از نقل‌قول معمولی جدا می‌کند.
+ *
+ * جزوه دیگر بخش جداگانه‌ای برای امتحان ندارد — نکته همان‌جا می‌آید که مبحثش
+ * آمده. برای اینکه چشم در یک صفحهٔ پر از متن پیدایش کند، فقط رنگش فرق می‌کند.
+ * markdown-it کلاسی روی blockquote نمی‌گذارد، پس روی خروجی‌اش برچسب می‌زنیم.
+ */
+function markHighlights(html: string): string {
+  return html.replace(/<blockquote>([\s\S]*?)<\/blockquote>/g, (m, inner: string) => {
+    if (inner.includes("در امتحان می‌آید")) return `<blockquote class="exam">${inner}</blockquote>`;
+    if (inner.includes("تأکید استاد")) return `<blockquote class="emph">${inner}</blockquote>`;
+    return m;
+  });
+}
+
 export function buildHtml(doc: NoteDocument): string {
   const r = doc.report;
-  const body = renderMath(md.render(normalizeListMarkers(doc.notesMarkdown || "_جزوه‌ای تولید نشد._")));
+  const body = markHighlights(
+    renderMath(md.render(normalizeListMarkers(doc.notesMarkdown || "_جزوه‌ای تولید نشد._"))),
+  );
   const fa = (n: string | number) => toFaDigits(n);
 
   return `<!doctype html>
@@ -209,16 +131,7 @@ body{
 
 .headline{background:var(--accent-soft);border-right:3px solid var(--accent);
   padding:1em 1.2em;border-radius:4px;font-size:12pt;font-weight:600;margin:1.4em 0}
-.tldr{margin:0;padding-right:1.1em}
-.tldr li{margin:.45em 0}
-
-/* ── نوار ترکیب زمانی ─────────────────────────────────── */
-.bar{display:flex;height:16px;border-radius:8px;overflow:hidden;margin:1em 0 .7em;
-  border:1px solid var(--line)}
-.bar .seg{display:block;height:100%}
-.legend{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.35em 1.3em;font-size:9.5pt}
-.legend li{display:flex;align-items:center;gap:.45em}
-.legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.recap{font-size:11pt;line-height:2.05;margin:.6em 0 1.2em}
 
 /* ── عناوین ──────────────────────────────────────────── */
 h1,h2,h3,h4{line-height:1.6;font-weight:700;break-after:avoid}
@@ -229,8 +142,14 @@ p{margin:.55em 0}
 ul,ol{padding-right:1.3em;margin:.5em 0}
 ol{list-style-type:persian}
 li{margin:.3em 0}
-blockquote{margin:.9em 0;padding:.7em 1em;background:#fffbea;border-right:3px solid #d69e2e;
+blockquote{margin:.9em 0;padding:.7em 1em;background:#f7f9fb;border-right:3px solid var(--line);
   border-radius:4px;font-size:10pt}
+/* نکتهٔ امتحانی قرمز است و تأکید استاد کهربایی — تنها دو چیزی که در جزوه
+   حق دارند از متن بیرون بزنند. */
+blockquote.exam{background:#fff5f5;border-right-color:#e53e3e}
+blockquote.exam strong{color:#c53030}
+blockquote.emph{background:#fffbea;border-right-color:#d69e2e}
+blockquote.emph strong{color:#975a16}
 blockquote p{margin:.2em 0}
 code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9em;background:#f4f6f8;
   padding:.1em .35em;border-radius:3px;direction:ltr;display:inline-block}
@@ -242,31 +161,7 @@ table{width:100%;border-collapse:collapse;margin:.9em 0;font-size:9.8pt;break-in
 th,td{border:1px solid var(--line);padding:.5em .65em;text-align:right;vertical-align:top}
 th{background:#f7f9fb;font-weight:600;color:#3d4852}
 
-/* ── کارت‌های نکته ────────────────────────────────────── */
-.kp{border:1px solid var(--line);border-right-width:3px;border-radius:5px;
-  padding:.75em .9em;margin:.7em 0;break-inside:avoid}
-.kp-exam{border-right-color:#e53e3e}
-.kp-emphasis{border-right-color:var(--admin)}
-.kp-homework{border-right-color:var(--qa)}
-.kp-deadline{border-right-color:#dd6b20}
-.kp-h{display:flex;align-items:center;gap:.6em;flex-wrap:wrap;margin-bottom:.25em}
-.kp p{margin:.2em 0;font-size:10pt}
-.tag{font-size:8.5pt;background:#eef1f5;color:#4a5568;padding:.15em .55em;border-radius:99px;font-weight:600}
-.due{font-size:9pt;color:#c05621;font-weight:600}
-
-.ev{margin-top:.5em;padding:.5em .7em;background:#f7f9fb;border-radius:4px;
-  font-size:9.5pt;color:#3d4852;line-height:1.8}
-.ev .ts{display:block;margin-top:.25em;font-size:8.5pt;color:var(--dim);
-  font-variant-numeric:tabular-nums;unicode-bidi:isolate}
-.ts,.clock{unicode-bidi:isolate}
-
-.pre{border:1px solid var(--line);border-radius:5px;padding:.75em .9em;margin:.7em 0;break-inside:avoid}
-.pre-h{display:flex;align-items:baseline;gap:.7em;margin-bottom:.2em}
-.sig{font-size:8.5pt;color:var(--dim)}
-
-.acts td:first-child{width:22%;font-weight:600}
-.acts td:nth-child(2){width:20%;white-space:nowrap}
-.acts tr.no td{color:var(--dim)}
+/* ── جدول واژه‌نامه ───────────────────────────────────── */
 .gloss td:first-child{width:24%}
 .gloss td:nth-child(2){width:24%;direction:ltr;text-align:left;font-size:9.2pt}
 
@@ -292,21 +187,9 @@ th{background:#f7f9fb;font-weight:600;color:#3d4852}
 
   <div class="headline">${escapeHtml(r.headline)}</div>
 
-  <h3>در یک نگاه</h3>
-  <ul class="tldr">${r.student_summary.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>
-
-  <h3>ترکیب زمانی کلاس</h3>
-  ${compositionBar(r)}
-  <p class="dim">سهم سکوت و وقفه با اندازه‌گیری مستقیم سیگنال صوتی به دست آمده؛ تقسیم بقیهٔ زمان بر پایهٔ تحلیل محتوای رونوشت است.</p>
-
-  <h3>استاد در این جلسه چه کرد</h3>
-  ${actionsHtml(r)}
-</section>
-
-<section class="section">
-  <h2>برای امتحان</h2>
-  <p class="dim">هر مورد با عین جملهٔ استاد و زمانش در فایل صوتی. آنچه نقل‌قولش در رونوشت تأیید نشد، حذف شده است.</p>
-  ${keyPointsHtml(r)}
+  <h3>کلاس چطور گذشت</h3>
+  <p class="recap">${escapeHtml(r.class_recap)}</p>
+  <p class="dim">حضور و غیاب، تکلیف‌ها، مهلت‌ها و خبرهای کلاس در پیام‌های تلگرام آمده‌اند و اینجا تکرار نمی‌شوند؛ این جزوه فقط محتوای درس است. نکته‌های امتحانی داخل متن، با رنگ متفاوت مشخص شده‌اند.</p>
 </section>
 
 <section class="section">

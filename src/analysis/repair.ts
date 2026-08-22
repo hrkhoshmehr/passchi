@@ -79,12 +79,12 @@ const SEGMENT_KINDS = new Set(["teaching", "qa", "admin", "offtopic", "technical
  */
 export function isDegenerate(a: Obj): string | null {
   const headline = typeof a.headline === "string" ? a.headline.trim() : "";
-  const summary = Array.isArray(a.student_summary) ? a.student_summary.length : 0;
+  const recap = typeof a.class_recap === "string" ? a.class_recap.trim().length : 0;
   const topics = Array.isArray(a.topics) ? a.topics.length : 0;
-  const timeline = Array.isArray(a.timeline) ? a.timeline.length : 0;
+  const chapters = Array.isArray(a.chapters) ? a.chapters.length : 0;
 
-  if (!headline && summary === 0) return "مدل سرخط و خلاصه را تولید نکرد";
-  if (topics === 0 && timeline === 0) return "مدل نه سرفصلی داد نه خط زمانی";
+  if (!headline && recap < 40) return "مدل سرخط و روایت کلاس را تولید نکرد";
+  if (topics === 0 && chapters === 0) return "مدل نه سرفصلی داد نه بخش‌بندی زمانی";
   return null;
 }
 
@@ -95,17 +95,22 @@ export function repairAnalysis(input: unknown): Obj {
     session_title: asString(r.session_title) ?? "جلسهٔ کلاس",
     course_guess: asString(r.course_guess),
     headline: asString(r.headline) ?? "",
-    student_summary: stringArray(r.student_summary),
+    // مدل ضعیف گاهی به‌جای پاراگراف، آرایهٔ بولت می‌دهد — به یک پاراگراف چسبانده می‌شود
+    class_recap: asString(r.class_recap) ?? stringArray(r.student_summary ?? r.summary).join(" "),
 
-    timeline: arr(r.timeline)
+    chapters: arr(r.chapters ?? r.timeline)
       .filter(isObj)
-      .map((s) => ({
-        start_ms: num(s.start_ms),
-        end_ms: num(s.end_ms),
-        kind: SEGMENT_KINDS.has(String(s.kind)) ? s.kind : "teaching",
-        label: asString(s.label) ?? "",
+      .map((c) => ({
+        start_ms: num(c.start_ms),
+        end_ms: num(c.end_ms),
+        kind: SEGMENT_KINDS.has(String(c.kind)) ? c.kind : "teaching",
+        title: asString(c.title ?? c.label) ?? "",
+        parts: arr(c.parts)
+          .filter(isObj)
+          .map((p) => ({ at_ms: num(p.at_ms ?? p.start_ms), label: asString(p.label ?? p.title) ?? "" }))
+          .filter((p) => p.label),
       }))
-      .filter((s) => s.end_ms > s.start_ms),
+      .filter((c) => c.end_ms > c.start_ms),
 
     professor_actions: arr(r.professor_actions)
       .filter(isObj)
@@ -122,6 +127,7 @@ export function repairAnalysis(input: unknown): Obj {
       .map((k) => ({
         kind: KP_KINDS.has(String(k.kind)) ? k.kind : "emphasis",
         title: asString(k.title) ?? "",
+        detail: asString(k.detail) ?? "",
         due: asString(k.due),
         evidence: evidence(k.evidence),
       }))

@@ -4,7 +4,7 @@ import { config } from "./config.js";
 import { logger } from "./util/logger.js";
 import { fmtDuration } from "./util/time.js";
 import { preprocess } from "./audio/preprocess.js";
-import { TimeMap } from "./audio/ffmpeg.js";
+import { TimeMap, trimTo } from "./audio/ffmpeg.js";
 import { transcribe } from "./stt/soniox.js";
 import { lookup as cacheLookup, store as cacheStore, type CachedTranscript } from "./stt/cache.js";
 import { buildTranscript, renderPlain } from "./stt/transcript.js";
@@ -13,7 +13,7 @@ import { renderPdf, pdfFileName } from "./pdf/render.js";
 import type { AnalysisReport } from "./analysis/schema.js";
 import {
   courseTerms, getCourse, mergeCourseTerms, updateSession,
-  type CourseRow, type SessionStatus,
+  type CourseRow, type SessionMode, type SessionStatus,
 } from "./db/index.js";
 
 export type Stage =
@@ -28,17 +28,30 @@ export interface PipelineInput {
   course: CourseRow | null;
   sessionDate: string | null;
   makePdf: boolean;
+  /**
+   * `free_transcript` یعنی فقط رونویسی: نه تحلیل، نه جزوه، نه تماسی با مدل
+   * زبانی. اجرای رایگانِ یک‌بارهٔ کاربر تازه از همین مسیر می‌رود، و گران‌ترین
+   * بخش خط لوله اصلاً روشن نمی‌شود.
+   */
+  mode: SessionMode;
+  /** سقف مدتی که رونویسی می‌شود؛ مازادش بریده می‌شود. */
+  limitMs?: number;
   onProgress: (s: Stage) => void;
   signal?: AbortSignal;
 }
 
 export interface PipelineOutput {
-  report: AnalysisReport;
+  /** در حالت رایگان null است — تحلیلی انجام نشده. */
+  report: AnalysisReport | null;
   notesMarkdown: string;
   pdfPath: string | null;
   pdfName: string | null;
   transcriptPath: string;
+  /** متن رونوشت، برای وقتی که پیام مستقیماً از آن ساخته می‌شود */
+  transcriptText: string;
   originalDurationMs: number;
+  /** اگر به‌خاطر سقف رایگان بریده شد، چقدر از فایل رونویسی نشد */
+  skippedMs: number;
   billedDurationMs: number;
   savedMs: number;
   costUsd: number;
@@ -85,8 +98,36 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
     ? `درس «${inp.course.name}»${inp.course.professor ? ` با استاد ${inp.course.professor}` : ""}. سخنرانی دانشگاهی به زبان فارسی با اصطلاحات تخصصی انگلیسی.`
     : "سخنرانی دانشگاهی به زبان فارسی با اصطلاحات تخصصی انگلیسی.";
 
-  // اگر عین همین فایل قبلاً رونویسی شده، دوباره پول نمی‌دهیم
-  const cached = await cacheLookup(inp.audioFile);
+  /**
+   * برش سقف رایگان.
+   *
+   * روی فایلِ *پردازش‌شده* انجام می‌شود نه فایل اصلی: فایل اصلی باید دست‌نخورده
+   * بماند تا دکمه‌های زمان و کلیپ‌ها کار کنند، و تا اگر کاربر بعداً سکه خرید،
+   * تحلیل کامل روی کل جلسه اجرا شود.
+   */
+  let sttFile = pre.processedFile;
+  let skippedMs = 0;
+  if (inp.limitMs && pre.originalDurationMs > inp.limitMs) {
+    skippedMs = pre.originalDurationMs - inp.limitMs;
+    // پسوند باید همان پسوند ورودی بماند: برش با `-c copy` انجام می‌شود و
+    // ffmpeg ظرف خروجی را از روی پسوند انتخاب می‌کند — mp3 داخل ogg نمی‌رود.
+    sttFile = path.join(config.workDir, `${sessionId}.limited${path.extname(pre.processedFile) || ".ogg"}`);
+    await trimTo(pre.processedFile, sttFile, inp.limitMs);
+    inp.onProgress({
+      stage: "preprocess",
+      detail: `رایگان تا ${fmtDuration(inp.limitMs)} — بقیهٔ فایل رونویسی نمی‌شود`,
+    });
+  }
+
+  /**
+   * اگر عین همین فایل قبلاً رونویسی شده، دوباره پول نمی‌دهیم.
+   *
+   * کلید کش فایل *اصلی* است نه فایل پردازش‌شده — همان چیزی که کاربر فرستاده.
+   * اجرای بریده‌شده کلید خودش را دارد، وگرنه رونوشتِ ۳۰ دقیقه‌ای به‌جای
+   * رونوشت کل جلسه تحویل داده می‌شد.
+   */
+  const cacheKey = sttFile === pre.processedFile ? inp.audioFile : sttFile;
+  const cached = await cacheLookup(cacheKey);
   let stt: CachedTranscript;
 
   if (cached) {
@@ -94,14 +135,14 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
     inp.onProgress({ stage: "stt", detail: "از کش خوانده شد — هزینه‌ای نداشت" });
   } else {
     const fresh = await transcribe({
-      filePath: pre.processedFile,
+      filePath: sttFile,
       languageHints: ["fa", "en"],
       context: { text: contextText, ...(terms.length ? { terms } : {}) },
       clientReferenceId: sessionId,
       onStatus: (s) => inp.onProgress({ stage: "stt", detail: s }),
       ...(inp.signal ? { signal: inp.signal } : {}),
     });
-    await cacheStore(inp.audioFile, fresh.raw, {
+    await cacheStore(cacheKey, fresh.raw, {
       source: pre.source,
       originalDurationMs: pre.originalDurationMs,
       billedDurationMs: pre.billedDurationMs,
@@ -128,6 +169,40 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
   // processedFile خودِ فایل اصلی کاربر است و پاک‌کردنش یعنی از دست دادن
   // مرجع نقل‌قول‌ها و کلیپ‌ها.
   if (pre.transcoded) await fs.unlink(pre.processedFile).catch(() => {});
+  if (sttFile !== pre.processedFile) await fs.unlink(sttFile).catch(() => {});
+
+  /**
+   * اجرای رایگان همین‌جا تمام می‌شود.
+   *
+   * عمداً *بعد* از رونویسی و *قبل* از تحلیل: رونوشت چیزی است که ارزش محصول را
+   * نشان می‌دهد، و تحلیل و جزوه چیزی است که بابتش پول گرفته می‌شود. مرز بین
+   * این دو، همین خط است.
+   */
+  if (inp.mode === "free_transcript") {
+    updateSession(sessionId, {
+      title: "رونوشت جلسه",
+      session_date: inp.sessionDate,
+      status: "done",
+      finished_at: new Date().toISOString(),
+    });
+    logger.info({ sessionId, skippedMs }, "free transcript done");
+    return {
+      report: null,
+      notesMarkdown: "",
+      pdfPath: null,
+      pdfName: null,
+      transcriptPath,
+      transcriptText,
+      originalDurationMs: pre.originalDurationMs,
+      skippedMs,
+      billedDurationMs: pre.billedDurationMs,
+      savedMs: pre.savedMs,
+      costUsd: 0,
+      qualityWarnings: pre.quality.warnings,
+      preprocessSteps: pre.steps,
+      notesError: null,
+    };
+  }
 
   // ── ۳) تحلیل ────────────────────────────────────────────────────────────
   setStatus(sessionId, "analyze");
@@ -207,7 +282,9 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
     pdfPath,
     pdfName,
     transcriptPath,
+    transcriptText,
     originalDurationMs: pre.originalDurationMs,
+    skippedMs,
     billedDurationMs: pre.billedDurationMs,
     savedMs: pre.savedMs,
     costUsd: analysis.usage.estimatedUsd,

@@ -22,6 +22,13 @@ CREATE TABLE IF NOT EXISTS users (
   total_used_sec INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS user_flags (
+  tg_id      INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
+  -- جلسهٔ رایگانِ «فقط رونوشت» یک بار در عمر هر کاربر است
+  free_used  INTEGER NOT NULL DEFAULT 0,
+  used_at    TEXT
+);
+
 CREATE TABLE IF NOT EXISTS courses (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   tg_id        INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
@@ -71,6 +78,9 @@ for (const [column, ddl] of [
   // فوری است، و بدون آن لینک‌های زمانی برای او کار نمی‌کنند.
   ["audio_file_id", "ALTER TABLE sessions ADD COLUMN audio_file_id TEXT"],
   ["share_enabled", "ALTER TABLE sessions ADD COLUMN share_enabled INTEGER NOT NULL DEFAULT 0"],
+  // free_transcript | full — جلسهٔ رایگان فقط رونوشت دارد و تحلیلی ندارد،
+  // پس تاریخچه و دکمه‌هایش باید فرق کنند.
+  ["mode", "ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'full'"],
 ] as const) {
   const cols = db.prepare("PRAGMA table_info(sessions)").all() as unknown as Array<{ name: string }>;
   if (!cols.some((c) => c.name === column)) db.exec(ddl);
@@ -98,6 +108,20 @@ CREATE TABLE IF NOT EXISTS session_members (
   PRIMARY KEY (session_id, tg_id)
 );
 CREATE INDEX IF NOT EXISTS idx_members_user ON session_members(tg_id, joined_at DESC);
+
+CREATE TABLE IF NOT EXISTS topups (
+  id            TEXT PRIMARY KEY,
+  tg_id         INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+  package_id    TEXT NOT NULL,
+  coins         INTEGER NOT NULL,
+  price_toman   INTEGER NOT NULL,
+  status        TEXT NOT NULL,            -- awaiting_receipt|pending|approved|rejected
+  receipt_file_id TEXT,
+  decided_by    INTEGER,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  decided_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_topups_user ON topups(tg_id, created_at DESC);
 `);
 
 // ─── users ───────────────────────────────────────────────────────────────────
@@ -120,6 +144,25 @@ export function upsertUser(tgId: number, name: string | null, username: string |
 
 export function getUser(tgId: number): UserRow | null {
   return (db.prepare(`SELECT * FROM users WHERE tg_id = ?`).get(tgId) as unknown as UserRow | undefined) ?? null;
+}
+
+// ─── سهمیهٔ رایگان ───────────────────────────────────────────────────────────
+//
+// یک بار در عمرِ هر کاربر: یک جلسهٔ «فقط رونوشت». پرچمش جدا از جدول users
+// نگه داشته می‌شود تا با /forget و پاک‌کردن جلسات، از نو زنده نشود.
+
+export function freeRunUsed(tgId: number): boolean {
+  const row = db.prepare(`SELECT free_used FROM user_flags WHERE tg_id = ?`).get(tgId) as unknown as
+    | { free_used: number }
+    | undefined;
+  return Boolean(row?.free_used);
+}
+
+export function markFreeRunUsed(tgId: number): void {
+  db.prepare(
+    `INSERT INTO user_flags (tg_id, free_used, used_at) VALUES (?, 1, datetime('now'))
+     ON CONFLICT(tg_id) DO UPDATE SET free_used = 1, used_at = datetime('now')`,
+  ).run(tgId);
 }
 
 export function addCredit(tgId: number, seconds: number): void {
@@ -215,7 +258,10 @@ export interface SessionRow {
   download_route: string | null;
   audio_file_id: string | null;
   share_enabled: number;
+  mode: SessionMode;
 }
+
+export type SessionMode = "free_transcript" | "full";
 
 export function createSession(id: string, tgId: number, courseId: number | null): void {
   db.prepare(`INSERT INTO sessions (id, tg_id, course_id, status) VALUES (?, ?, ?, 'queued')`).run(
@@ -240,7 +286,7 @@ type Updatable = Partial<
     | "silence_ms" | "time_map_json" | "report_json" | "notes_md" | "transcript_txt"
     | "pdf_path" | "cost_usd" | "error" | "finished_at" | "course_id"
     | "audio_chat_id" | "audio_message_id" | "download_route"
-    | "audio_file_id" | "share_enabled"
+    | "audio_file_id" | "share_enabled" | "mode"
   >
 >;
 
@@ -290,4 +336,83 @@ export function purgeSession(id: string): void {
 
 export function clearAudioPath(id: string): void {
   db.prepare(`UPDATE sessions SET original_file = NULL WHERE id = ?`).run(id);
+}
+
+// ─── شارژ (کارت‌به‌کارت) ─────────────────────────────────────────────────────
+
+export type TopupStatus = "awaiting_receipt" | "pending" | "approved" | "rejected";
+
+export interface TopupRow {
+  id: string;
+  tg_id: number;
+  package_id: string;
+  coins: number;
+  price_toman: number;
+  status: TopupStatus;
+  receipt_file_id: string | null;
+  decided_by: number | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+export function createTopup(
+  id: string,
+  tgId: number,
+  packageId: string,
+  coins: number,
+  priceToman: number,
+): TopupRow {
+  db.prepare(
+    `INSERT INTO topups (id, tg_id, package_id, coins, price_toman, status)
+     VALUES (?, ?, ?, ?, ?, 'awaiting_receipt')`,
+  ).run(id, tgId, packageId, coins, priceToman);
+  return getTopup(id)!;
+}
+
+export function getTopup(id: string): TopupRow | null {
+  return (db.prepare(`SELECT * FROM topups WHERE id = ?`).get(id) as unknown as TopupRow | undefined) ?? null;
+}
+
+/**
+ * آخرین سفارشی که منتظر رسید است.
+ *
+ * کاربر رسید را به‌صورت یک عکسِ ساده می‌فرستد، بدون اینکه چیزی به آن پیوست
+ * باشد که بگوید مال کدام سفارش است. پس اتصال از روی «آخرین سفارشِ باز» انجام
+ * می‌شود — همان مدلی که کاربر هم در ذهن دارد.
+ */
+export function openTopup(tgId: number): TopupRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT * FROM topups WHERE tg_id = ? AND status = 'awaiting_receipt'
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(tgId) as unknown as TopupRow | undefined) ?? null
+  );
+}
+
+export function setTopupStatus(
+  id: string,
+  status: TopupStatus,
+  patch: { receiptFileId?: string; decidedBy?: number } = {},
+): void {
+  db.prepare(
+    `UPDATE topups SET status = ?,
+       receipt_file_id = COALESCE(?, receipt_file_id),
+       decided_by = COALESCE(?, decided_by),
+       decided_at = CASE WHEN ? IN ('approved','rejected') THEN datetime('now') ELSE decided_at END
+     WHERE id = ?`,
+  ).run(status, patch.receiptFileId ?? null, patch.decidedBy ?? null, status, id);
+}
+
+export function listTopups(tgId: number, limit = 10): TopupRow[] {
+  return db
+    .prepare(`SELECT * FROM topups WHERE tg_id = ? ORDER BY created_at DESC LIMIT ?`)
+    .all(tgId, limit) as unknown as TopupRow[];
+}
+
+export function pendingTopups(limit = 20): TopupRow[] {
+  return db
+    .prepare(`SELECT * FROM topups WHERE status = 'pending' ORDER BY created_at LIMIT ?`)
+    .all(limit) as unknown as TopupRow[];
 }
