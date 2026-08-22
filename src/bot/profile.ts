@@ -14,31 +14,32 @@ import { logger } from "../util/logger.js";
 
 /** حداکثر ۱۲۰ کاراکتر — زیر نام ربات در صفحهٔ پروفایل و در نتایج جست‌وجو */
 export const SHORT_DESCRIPTION =
-  "صوت کلاس را بفرست: تحلیل جلسه، نکات با ذکر منبع، و جزوهٔ کامل PDF بگیر.";
+  "صوت کلاستو بفرست، بگم توش چی گذشت و چی به درد امتحان می‌خوره.";
 
 /** حداکثر ۵۱۲ کاراکتر — در چت خالی، قبل از اینکه کاربر /start بزند */
-export const DESCRIPTION = `صوت کلاست را بفرست، در چند دقیقه تحویل بگیر:
+export const DESCRIPTION = `صوت کلاستو بفرست، چند دقیقه بعد بگیر:
 
-📋 تحلیل جلسه — زمان کلاس صرف چه شد، استاد چه اعلام کرد
-🎯 نکات با ذکر منبع — هر تکلیف و نکتهٔ امتحانی با عین جملهٔ استاد و زمانش
-🧩 پیش‌نیازها — چیزهایی که استاد فرض کرد بلدی و توضیح نداد
-📕 جزوهٔ کامل PDF — بازسازی درس، نه خلاصه
+📋 خلاصهٔ کلاس در یک نگاه
+🎯 هرچی به امتحان می‌خوره، با عین حرف استاد و دقیقه‌ش
+📕 جزوهٔ کامل PDF
 
-هزینه را می‌توانی با هم‌کلاسی‌ها تقسیم کنی: هرچه بیشتر باشید سهم هرکس کمتر می‌شود.
+خرجشو با هم‌کلاسیات نصف کن — هرچی بیشتر باشین سهم هرکس کمتر میشه.
 
-برای شروع /start را بزن.`;
+۹۰ دقیقه اول مهمون مایی. /start بزن.`;
 
+/**
+ * فقط دستورهایی که دانشجو واقعاً لازم دارد.
+ *
+ * منوی ده‌تایی خودش یک مانع است: کاربر فکر می‌کند باید یاد بگیرد کدام را کی
+ * بزند، در حالی که کار اصلی هیچ دستوری لازم ندارد — فقط فرستادن صوت.
+ * /privacy و /forget و /cancel همچنان کار می‌کنند، فقط در منو نیستند.
+ */
 export const COMMANDS = [
-  { command: "start", description: "شروع و راهنمای سریع" },
-  { command: "course", description: "ثبت درس جدید — دقت را بالا می‌برد" },
-  { command: "courses", description: "فهرست درس‌های من" },
-  { command: "history", description: "جلسات اخیر و جزوه‌هایشان" },
-  { command: "shared", description: "جلسات اشتراکی و سهم من" },
-  { command: "credit", description: "اعتبار باقی‌مانده" },
-  { command: "privacy", description: "با صوت و داده‌ام چه می‌شود" },
-  { command: "forget", description: "حذف داده‌های من" },
-  { command: "help", description: "راهنمای کامل" },
-  { command: "cancel", description: "لغو کار در حال انجام" },
+  { command: "start", description: "شروع" },
+  { command: "history", description: "جلسه‌های قبلی" },
+  { command: "credit", description: "اعتبارم" },
+  { command: "course", description: "ثبت درس" },
+  { command: "help", description: "راهنما" },
 ] as const;
 
 function check(label: string, text: string, max: number): void {

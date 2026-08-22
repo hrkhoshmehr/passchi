@@ -29,8 +29,7 @@ export const bot = new Bot(
 
 type Pending =
   | { kind: "await_course_name" }
-  | { kind: "await_professor"; courseName: string }
-  | { kind: "await_mode"; sessionId: string; audioFile: string; courseId: number | null; durationSec: number };
+  | { kind: "await_professor"; courseName: string };
 
 const convo = new Map<number, Pending>();
 const shortId = () => randomBytes(6).toString("hex");
@@ -85,10 +84,8 @@ bot.command("start", async (ctx) => {
     return;
   }
 
+  void u;
   await reply(ctx, S.WELCOME);
-  if (u && u.credit_sec > 0) {
-    await reply(ctx, `🎁 <b>${fmtDuration(u.credit_sec * 1000)}</b> اعتبار آزمایشی برایت گذاشتم. امتحانش کن.`);
-  }
 });
 
 bot.command("help", (ctx) => reply(ctx, S.HELP));
@@ -104,7 +101,7 @@ bot.command("course", async (ctx) => {
   convo.set(ctx.from!.id, { kind: "await_course_name" });
   await reply(
     ctx,
-    "نام درس را بفرست.\n\n<i>مثال: ریاضی مهندسی — یا هر اسمی که خودت می‌شناسی.</i>",
+    "اسم درس چیه؟\n\n<i>مثلاً: ریاضی مهندسی</i>",
   );
 });
 
@@ -112,15 +109,15 @@ bot.command("courses", async (ctx) => {
   touchUser(ctx);
   const courses = listCourses(ctx.from!.id);
   if (courses.length === 0) {
-    await reply(ctx, "هنوز درسی ثبت نکرده‌ای. با /course شروع کن.");
+    await reply(ctx, "هنوز درسی ثبت نکردی. با /course اضافه کن.");
     return;
   }
-  const lines = ["<b>درس‌های تو</b>", ""];
+  const lines = ["<b>درسات</b>", ""];
   for (const c of courses) {
     const terms = courseTerms(c).length;
     lines.push(
       `• <b>${escapeHtml(c.name)}</b>${c.professor ? ` — ${escapeHtml(c.professor)}` : ""}` +
-        (terms ? `\n  <i>${toFaDigits(terms)} اصطلاح تخصصی از جلسات قبل یاد گرفته شده</i>` : ""),
+        (terms ? `\n  <i>${toFaDigits(terms)} اصطلاح ازش یاد گرفتم</i>` : ""),
     );
   }
   await reply(ctx, lines.join("\n"));
@@ -130,7 +127,7 @@ bot.command("history", async (ctx) => {
   touchUser(ctx);
   const rows = listSessions(ctx.from!.id, 10);
   if (rows.length === 0) {
-    await reply(ctx, "هنوز جلسه‌ای پردازش نکرده‌ای.");
+    await reply(ctx, "هنوز جلسه‌ای نفرستادی. یه صوت بفرست تا شروع کنیم 🎧");
     return;
   }
   for (const s of rows) {
@@ -153,7 +150,7 @@ bot.command("cancel", async (ctx) => {
   let done = false;
   for (const s of rows) if (cancelJob(s.id)) { updateSession(s.id, { status: "cancelled" }); done = true; }
   convo.delete(id);
-  await reply(ctx, done ? "لغو شد." : "کاری در حال انجام نیست.");
+  await reply(ctx, done ? "لغو شد ✅" : "کاری در جریان نیست.");
 });
 
 bot.command("grant", async (ctx) => {
@@ -234,13 +231,13 @@ bot.on("message:text", async (ctx) => {
 
   const state = convo.get(id);
   if (!state) {
-    await reply(ctx, "یک فایل صوتی بفرست تا شروع کنم. /help راهنما را نشان می‌دهد.");
+    await reply(ctx, "یه فایل صوتی بفرست تا شروع کنم 🎧");
     return;
   }
 
   if (state.kind === "await_course_name") {
     convo.set(id, { kind: "await_professor", courseName: text.slice(0, 80) });
-    await reply(ctx, "نام استاد؟ اگر نمی‌خواهی بنویسی، «-» بفرست.");
+    await reply(ctx, "اسم استاد؟ اگه نمی‌خوای بنویسی «-» بفرست.");
     return;
   }
 
@@ -250,9 +247,9 @@ bot.on("message:text", async (ctx) => {
     convo.delete(id);
     await reply(
       ctx,
-      `✅ درس <b>${escapeHtml(c.name)}</b> ثبت شد.\n\n` +
-        "<i>از این به بعد اصطلاحات تخصصی هر جلسه ذخیره می‌شوند و در جلسات بعدی به موتور تشخیص گفتار داده می‌شوند — یعنی دقت این درس به‌مرور بهتر می‌شود.</i>\n\n" +
-        "حالا صوت کلاس را بفرست.",
+      `✅ <b>${escapeHtml(c.name)}</b> ثبت شد.\n\n` +
+        "<i>اصطلاحای تخصصی این درسو یاد می‌گیرم، پس هر جلسه دقیق‌تر میشم.</i>\n\n" +
+        "حالا صوت کلاسو بفرست 🎧",
     );
   }
 });
@@ -269,12 +266,12 @@ bot.on(["message:audio", "message:voice", "message:document", "message:video_not
     msg.audio ?? msg.voice ?? msg.video_note ?? (msg.document?.mime_type?.startsWith("audio/") ? msg.document : null);
 
   if (!media) {
-    await reply(ctx, "این فایل صوتی نیست. یک فایل mp3، m4a، ogg، wav یا ویس تلگرام بفرست.");
+    await reply(ctx, "این صوت نیست 🤔 یه فایل صوتی یا ویس بفرست.");
     return;
   }
 
   if (isBusy(String(id))) {
-    await reply(ctx, "یک کار در حال انجام است. صبر کن تمام شود یا /cancel بزن.");
+    await reply(ctx, "یه کار دارم انجام می‌دم، صبر کن تموم شه 🙏");
     return;
   }
 
@@ -282,8 +279,8 @@ bot.on(["message:audio", "message:voice", "message:document", "message:video_not
   if (durationSec > 0 && u.credit_sec < durationSec) {
     await reply(
       ctx,
-      `اعتبارت کافی نیست.\n\nطول این فایل ${fmtDuration(durationSec * 1000)} است ولی ` +
-        `${fmtDuration(u.credit_sec * 1000)} اعتبار داری.\n\n/credit`,
+      `اعتبارت کم میاد 😅\n\nاین فایل ${fmtDuration(durationSec * 1000)}ست ولی ` +
+        `${fmtDuration(u.credit_sec * 1000)} داری.`,
     );
     return;
   }
@@ -291,7 +288,7 @@ bot.on(["message:audio", "message:voice", "message:document", "message:video_not
   const sessionId = shortId();
   const sizeMb = Math.round((media.file_size ?? 0) / 1024 / 1024);
   const statusMsg = await ctx.reply(
-    `⬇️ در حال دریافت فایل${sizeMb > 20 ? ` (${toFaDigits(sizeMb)} مگابایت)` : ""}…`,
+    `⬇️ دارم فایلو می‌گیرم${sizeMb > 20 ? ` (${toFaDigits(sizeMb)} مگ)` : ""}…`,
     { parse_mode: "HTML" },
   );
 
@@ -314,7 +311,7 @@ bot.on(["message:audio", "message:voice", "message:document", "message:video_not
         if (p <= lastShown || p >= 100) return;
         lastShown = p;
         void ctx.api
-          .editMessageText(ctx.chat!.id, statusMsg.message_id, `⬇️ در حال دریافت فایل… ${toFaDigits(p)}٪`)
+          .editMessageText(ctx.chat!.id, statusMsg.message_id, `⬇️ دارم فایلو می‌گیرم… ${toFaDigits(p)}٪`)
           .catch(() => {});
       },
     });
@@ -333,16 +330,10 @@ bot.on(["message:audio", "message:voice", "message:document", "message:video_not
       return;
     }
     logger.error({ err: String(e) }, "download failed");
-    await ctx.api.editMessageText(ctx.chat!.id, statusMsg.message_id, "❌ دریافت فایل ناموفق بود. دوباره بفرست.");
+    await ctx.api.editMessageText(ctx.chat!.id, statusMsg.message_id, "❌ نشد فایلو بگیرم. یه بار دیگه بفرست.");
     return;
   }
 
-  const courses = listCourses(id);
-  const kb = new InlineKeyboard();
-  for (const c of courses.slice(0, 8)) kb.text(c.name, `pick:${sessionId}:${c.id}`).row();
-  kb.text("بدون درس مشخص", `pick:${sessionId}:0`);
-
-  convo.set(id, { kind: "await_mode", sessionId, audioFile, courseId: null, durationSec });
   createSession(sessionId, id, null);
   // شناسهٔ پیام صوتی نگه داشته می‌شود تا نتایج «ریپلای» همان پیام شوند —
   // شرط لازم برای اینکه تلگرام زمان‌های داخل متن را لینک پخش کند.
@@ -353,55 +344,27 @@ bot.on(["message:audio", "message:voice", "message:document", "message:video_not
     download_route: route,
   });
 
-  await ctx.api.editMessageText(
-    ctx.chat!.id,
-    statusMsg.message_id,
-    courses.length
-      ? "✅ فایل رسید. این جلسه مربوط به کدام درس است؟"
-      : "✅ فایل رسید.\n\n<i>هنوز درسی ثبت نکرده‌ای. ثبت درس دقت تشخیص اصطلاحات را بالا می‌برد — بعداً با /course انجامش بده.</i>",
-    { parse_mode: "HTML", reply_markup: kb },
-  );
+  /**
+   * انتخاب درس بدون پرسیدن.
+   *
+   * قبلاً دو سؤال بین «فایل را فرستادم» و «کار شروع شد» بود: کدام درس، و
+   * جزوه می‌خواهی یا نه. هر دو حذف شدند. کاربر تازه‌وارد جواب هیچ‌کدام را
+   * نمی‌داند — هنوز ندیده جزوه چه شکلی است — و هر سؤال یک جای رهاکردن است.
+   *
+   * پس: درسی نداری، بدون درس جلو می‌رویم. یک درس داری، همان. چند تا داری،
+   * آخرین درسی که استفاده کردی. تصحیحش بعد از دیدن نتیجه یک کلیک است.
+   */
+  const courses = listCourses(id);
+  const recent = listSessions(id, 20).find((s) => s.course_id !== null)?.course_id ?? null;
+  const courseId =
+    courses.length === 1 ? courses[0]!.id : (recent && courses.some((c) => c.id === recent) ? recent : null);
+  if (courseId) updateSession(sessionId, { course_id: courseId });
+
+  await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
+  await startJob(ctx, sessionId, audioFile, courseId, true, durationSec);
 });
 
 // ─── کلیک‌ها ────────────────────────────────────────────────────────────────
-
-bot.callbackQuery(/^pick:([a-f0-9]+):(\d+)$/, async (ctx) => {
-  const [, sessionId, courseIdRaw] = ctx.match!;
-  const courseId = Number(courseIdRaw) || null;
-  const state = convo.get(ctx.from.id);
-  if (!state || state.kind !== "await_mode" || state.sessionId !== sessionId) {
-    await ctx.answerCallbackQuery({ text: "این درخواست منقضی شده." });
-    return;
-  }
-  convo.set(ctx.from.id, { ...state, courseId });
-  updateSession(sessionId, { course_id: courseId });
-
-  const kb = new InlineKeyboard()
-    .text("📕 تحلیل + جزوهٔ کامل", `go:${sessionId}:1`)
-    .row()
-    .text("⚡ فقط تحلیل (سریع‌تر)", `go:${sessionId}:0`);
-
-  await ctx.editMessageText(
-    "چه چیزی می‌خواهی؟\n\n" +
-      "📕 <b>تحلیل + جزوه</b> — همه‌چیز، شامل جزوهٔ PDF کامل درس.\n" +
-      "⚡ <b>فقط تحلیل</b> — خلاصه، نکات با منبع، پیش‌نیازها و سرفصل‌ها. سریع‌تر است.\n\n" +
-      "<i>در هر دو حالت اعتبار به اندازهٔ مدت صوت کم می‌شود؛ جزوه هزینهٔ اضافه ندارد.</i>",
-    { parse_mode: "HTML", reply_markup: kb },
-  );
-  await ctx.answerCallbackQuery();
-});
-
-bot.callbackQuery(/^go:([a-f0-9]+):([01])$/, async (ctx) => {
-  const [, sessionId, pdfFlag] = ctx.match!;
-  const state = convo.get(ctx.from.id);
-  if (!state || state.kind !== "await_mode" || state.sessionId !== sessionId) {
-    await ctx.answerCallbackQuery({ text: "این درخواست منقضی شده." });
-    return;
-  }
-  convo.delete(ctx.from.id);
-  await ctx.answerCallbackQuery();
-  await startJob(ctx, sessionId!, state.audioFile, state.courseId, pdfFlag === "1", state.durationSec);
-});
 
 bot.callbackQuery(/^clip:([a-f0-9]+):(\d+)$/, async (ctx) => {
   const [, sessionId, atMsRaw] = ctx.match!;
@@ -492,7 +455,7 @@ async function startJob(
   } catch (e) {
     if (e instanceof InsufficientCredit) {
       await edit(
-        `اعتبارت کافی نیست.\n\nاین جلسه <b>${fmtDuration(e.needed * 1000)}</b> لازم دارد ` +
+        `اعتبارت کم میاد 😅\n\nسهم این جلسه <b>${fmtDuration(e.needed * 1000)}</b>ست ` +
           `ولی <b>${fmtDuration(e.balance * 1000)}</b> داری.\n\n/credit`,
       );
       return;
@@ -592,11 +555,9 @@ async function sendResults(
   const cost = Math.round(out.originalDurationMs / 1000);
   if (u) {
     await ctx.reply(
-      `✅ تمام شد. <b>${fmtDuration(cost * 1000)}</b> اعتبار کم شد.\n` +
-        `⏱ باقی‌مانده: <b>${fmtDuration(u.credit_sec * 1000)}</b>\n\n` +
-        `<b>می‌خواهی هزینه‌اش را با هم‌کلاسی‌ها تقسیم کنی؟</b>\n` +
-        `اگر ${toFaDigits(4)} نفر دیگر هم بردارند، سهم هرکس ` +
-        `${fmtDuration(fairShare(cost, 5) * 1000)} می‌شود و بقیه‌اش به تو برمی‌گردد.`,
+      `تمومه ✅  <b>${fmtDuration(u.credit_sec * 1000)}</b> اعتبار برات مونده.\n\n` +
+        `اگه ۴ نفر از بچه‌های کلاس هم برش دارن، سهم هرکس ` +
+        `${fmtDuration(fairShare(cost, 5) * 1000)} میشه و بقیه‌ش برمی‌گرده به تو 👇`,
       { parse_mode: "HTML", reply_markup: shareToggleKeyboard(sessionId, false) },
     );
   }

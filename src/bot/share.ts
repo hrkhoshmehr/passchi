@@ -33,12 +33,11 @@ export async function invitationMessage(api: Api, s: SessionRow): Promise<string
     `📓 <b>${escapeHtml(s.title ?? "جلسهٔ کلاس")}</b>`,
     course ? `<i>${escapeHtml(course.name)}</i>` : "",
     "",
-    `صوت این جلسه تحلیل شده: خلاصه، نکات امتحانی با ذکر منبع${s.pdf_path ? "، و جزوهٔ کامل PDF" : ""}.`,
+    `خلاصهٔ کلاس، نکات امتحانی با عین حرف استاد${s.pdf_path ? "، و جزوهٔ کامل PDF" : ""}.`,
     "",
-    `👥 تا الان <b>${toFaDigits(st?.memberCount ?? 1)}</b> نفر برداشته‌اند.`,
-    `سهم نفر بعدی: <b>${fmtDuration(nextShare * 1000)}</b> اعتبار`,
+    `👥 ${toFaDigits(st?.memberCount ?? 1)} نفر برداشتن · سهم تو: <b>${fmtDuration(nextShare * 1000)}</b>`,
     "",
-    "<i>هرچه بیشتر باشیم سهم هرکس کمتر می‌شود و به قبلی‌ها برمی‌گردد — چون جلسه فقط یک بار پردازش شده.</i>",
+    "<i>هرچی بیشتر باشیم سهم هرکس کمتر میشه.</i>",
     "",
     link,
   ]
@@ -48,7 +47,7 @@ export async function invitationMessage(api: Api, s: SessionRow): Promise<string
 
 export function shareToggleKeyboard(sessionId: string, enabled: boolean): InlineKeyboard {
   return new InlineKeyboard().text(
-    enabled ? "🔗 دریافت لینک دعوت" : "👥 اشتراک‌گذاری با هم‌کلاسی‌ها",
+    enabled ? "🔗 لینک دعوت" : "👥 تقسیم با هم‌کلاسیا",
     enabled ? `slink:${sessionId}` : `son:${sessionId}`,
   );
 }
@@ -66,17 +65,13 @@ export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyb
     "",
     r?.headline ? escapeHtml(r.headline) : "",
     "",
-    "<b>با پیوستن اینها را می‌گیری</b>",
-    "• کلاس در یک نگاه",
-    `• ${toFaDigits(r?.key_points.length ?? 0)} نکتهٔ امتحانی با ذکر منبع`,
-    `• ${toFaDigits(r?.topics.length ?? 0)} سرفصل با زمان`,
+    "<b>چی گیرت میاد</b>",
+    "• خلاصهٔ کلاس در یک نگاه",
+    `• ${toFaDigits(r?.key_points.length ?? 0)} نکتهٔ امتحانی با عین حرف استاد`,
     s.pdf_path ? "• جزوهٔ کامل PDF" : "",
-    "• فایل صوتی و رونوشت کامل",
+    "• صوت و رونوشت کامل",
     "",
-    `👥 تا الان ${toFaDigits(st.memberCount)} نفر`,
-    `💳 سهم تو: <b>${fmtDuration(st.nextShareSec * 1000)}</b> اعتبار`,
-    "",
-    `<i>هزینهٔ کل این جلسه ${fmtDuration(st.costSec * 1000)} بود و بین همه تقسیم می‌شود. با پیوستن تو، سهم هرکس به ${fmtDuration(st.nextShareSec * 1000)} می‌رسد و مابه‌التفاوت به قبلی‌ها برمی‌گردد.</i>`,
+    `👥 ${toFaDigits(st.memberCount)} نفر برداشتن · سهم تو <b>${fmtDuration(st.nextShareSec * 1000)}</b>`,
   ]
     .filter((l) => l !== "")
     .join("\n");
@@ -84,9 +79,9 @@ export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyb
   return {
     text,
     keyboard: new InlineKeyboard()
-      .text(`✅ مشارکت و دریافت`, `jdo:${s.id}`)
+      .text("✅ برش می‌دارم", `jdo:${s.id}`)
       .row()
-      .text("انصراف", `jno:${s.id}`),
+      .text("فعلاً نه", `jno:${s.id}`),
   };
 }
 
@@ -142,7 +137,7 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
 
   if (s.pdf_path) {
     await ctx
-      .replyWithDocument(new InputFile(s.pdf_path), { caption: "📕 جزوهٔ کامل این جلسه" })
+      .replyWithDocument(new InputFile(s.pdf_path), { caption: "📕 جزوهٔ این جلسه" })
       .catch(() => {});
   }
   if (s.transcript_txt) {
@@ -170,14 +165,14 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
     if (e instanceof AlreadyMember) {
       const s = getSession(sessionId);
       if (s) await deliverSession(ctx, s);
-      return { ok: true, message: "این جلسه از قبل مال توست — دوباره برایت فرستادم." };
+      return { ok: true, message: "این جلسه از قبل مال خودته — دوباره فرستادم 👍" };
     }
     if (e instanceof InsufficientCredit) {
       return {
         ok: false,
         message:
-          `اعتبارت کافی نیست.\n\nسهم این جلسه <b>${fmtDuration(e.needed * 1000)}</b> است ` +
-          `ولی <b>${fmtDuration(e.balance * 1000)}</b> داری.\n\n/credit`,
+          `اعتبارت کم میاد 😅\n\nسهم این جلسه <b>${fmtDuration(e.needed * 1000)}</b>ست ` +
+          `ولی <b>${fmtDuration(e.balance * 1000)}</b> داری.`,
       };
     }
     if (e instanceof NotShareable) return { ok: false, message: e.message };
@@ -193,10 +188,9 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
     await ctx.api
       .sendMessage(
         rf.tgId,
-        `💰 <b>${fmtDuration(rf.amountSec * 1000)}</b> اعتبار به تو برگشت.\n\n` +
-          `یک نفر دیگر به جلسهٔ «${escapeHtml(s.title ?? "کلاس")}» پیوست، ` +
-          `پس سهم هرکس به ${fmtDuration(result.shareSec * 1000)} رسید. ` +
-          `الان ${toFaDigits(result.memberCount)} نفرید.`,
+        `💰 <b>${fmtDuration(rf.amountSec * 1000)}</b> برگشت به حسابت!\n\n` +
+          `یکی دیگه «${escapeHtml(s.title ?? "کلاس")}» رو برداشت. ` +
+          `الان ${toFaDigits(result.memberCount)} نفرین و سهم هرکس ${fmtDuration(result.shareSec * 1000)}ست.`,
         { parse_mode: "HTML" },
       )
       .catch(() => {});
@@ -205,8 +199,7 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
   return {
     ok: true,
     message:
-      `✅ جلسه برایت باز شد. <b>${fmtDuration(result.chargedSec * 1000)}</b> اعتبار کم شد — ` +
-      `سهم ${toFaDigits(result.memberCount)} نفره.`,
+      `✅ گرفتیش! <b>${fmtDuration(result.chargedSec * 1000)}</b> کم شد — سهم ${toFaDigits(result.memberCount)} نفره.`,
     session: s,
   };
 }
