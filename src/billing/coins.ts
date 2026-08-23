@@ -105,7 +105,18 @@ export interface CoinPackage {
  * مقدار واقعی هر جلسه در ستون `cost_usd` می‌نشیند؛ `scripts/costs.mjs`
  * میانگین واقعی را از همان درمی‌آورد.
  */
-export const COST_PER_AUDIO_HOUR_USD = 0.13;
+export const STT_COST_PER_HOUR_USD = 0.1;
+export const LLM_COST_PER_HOUR_USD = 0.03;
+export const COST_PER_AUDIO_HOUR_USD = STT_COST_PER_HOUR_USD + LLM_COST_PER_HOUR_USD;
+
+/**
+ * قیمت مدلی که رقم بالا با آن اندازه‌گیری شد — دلار بر یک میلیون توکن.
+ *
+ * `scripts/price-watch.mjs` قیمت زندهٔ OpenRouter را با همین مقایسه می‌کند و
+ * اگر گران شده باشد می‌گوید حاشیه کجا می‌رود. بدون این پایه، گران‌شدن مدل
+ * فقط وقتی معلوم می‌شد که صورتحساب آمده باشد.
+ */
+export const MODEL_PRICE_BASELINE = { id: "google/gemini-3.7-flash", in: 0.375, out: 1.875 };
 
 /** نرخ تبدیل برای قیمت‌گذاری. با تغییر محسوس بازار باید به‌روز شود. */
 export const USD_TOMAN = 120_000;
