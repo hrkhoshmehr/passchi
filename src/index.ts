@@ -28,5 +28,16 @@ await publishProfile(bot.api);
 
 void cleanupOldAudio();
 
-logger.info({ model: config.ANALYSIS_MODEL, stt: config.SONIOX_MODEL }, "خرخوان در حال اجراست");
+// مدلی که *واقعاً* اجرا می‌شود لاگ شود، نه مقدار ANALYSIS_MODEL: وقتی
+// ارائه‌دهنده OpenRouter است آن مقدار اصلاً خوانده نمی‌شود و لاگ گمراه‌کننده
+// می‌شود — همان اشتباهی که یک بار موقع بررسی سرور رخ داد.
+const effectiveModel =
+  config.ANALYSIS_PROVIDER === "openrouter"
+    ? (config.OPENROUTER_ANALYSIS_MODEL || config.OPENROUTER_MODEL).split(",")[0]
+    : config.ANALYSIS_MODEL;
+
+logger.info(
+  { provider: config.ANALYSIS_PROVIDER, model: effectiveModel, stt: config.SONIOX_MODEL },
+  "خرخوان در حال اجراست",
+);
 await bot.start({ drop_pending_updates: true });
