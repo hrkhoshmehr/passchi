@@ -84,7 +84,7 @@ const Schema = z.object({
   // اشتراکی» کافی است و به‌اندازهٔ پردازش یک کلاس کامل نیست.
   FREE_TRIAL_COINS: num(100),
   // اولین جلسهٔ هر کاربر رایگان است ولی فقط رونوشت، و فقط تا این مدت.
-  FREE_TRANSCRIPT_MINUTES: num(30),
+  FREE_TRANSCRIPT_MINUTES: num(15),
   MAX_CONCURRENT_JOBS: num(2),
   DATA_DIR: z.string().optional().default("./data"),
   KEEP_AUDIO_DAYS: num(7),

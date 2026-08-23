@@ -1,95 +1,61 @@
 /**
- * شبیه‌سازی تقسیم هزینه — روی یک دیتابیس موقت، بدون دست‌زدن به دادهٔ واقعی.
+ * سقف بازپرداخت را روی دفتر کل واقعی می‌سنجد، نه روی فرمول.
+ *
+ * ده نفر یکی‌یکی به یک جلسهٔ ۹۰ دقیقه‌ای می‌پیوندند و بعد بررسی می‌شود که
+ * مالک بیش از سقف پس نگرفته باشد و مجموع سکه‌های جمع‌شده از هزینهٔ جلسه کمتر
+ * نشده باشد. اجرا: DATA_DIR=./data/tmp-share node scripts/test-sharing.mjs
  */
-import { db, createSession, updateSession, upsertUser, getUser } from "../src/db/index.js";
-import { grant, currentBalance, history, totalShareRefunds } from "../src/billing/ledger.js";
-import { fairShare, joinSession, registerOwner, setShareEnabled, shareStatus, members } from "../src/billing/sharing.js";
-import { fmtDuration, toFaDigits } from "../src/util/time.js";
+process.env.BOT_TOKEN ||= "x";
 
-const SID = "simtest01";
-const OWNER = 900000001;
-const JOINERS = [900000002, 900000003, 900000004, 900000005, 900000006];
-const COST_SEC = 3000; // ۵۰ دقیقه، دقیقاً مثل صوت نمونه
+const { db, upsertUser } = await import("../src/db/index.ts");
+const { grant, currentBalance } = await import("../src/billing/ledger.ts");
+const { joinSession, registerOwner, setShareEnabled, members } = await import("../src/billing/sharing.ts");
+const { REFUND_CAP_PCT, SHARE_TARGET, balanceCoins, coinsToSec, costCoins } = await import(
+  "../src/billing/coins.ts"
+);
 
-// ── پاک‌سازی اجرای قبلی ────────────────────────────────────────────────────
-db.exec(`DELETE FROM session_members WHERE session_id = '${SID}'`);
-db.exec(`DELETE FROM sessions WHERE id = '${SID}'`);
-for (const id of [OWNER, ...JOINERS]) {
-  db.exec(`DELETE FROM credit_ledger WHERE tg_id = ${id}`);
-  db.exec(`DELETE FROM users WHERE tg_id = ${id}`);
-}
+const CLASS_SEC = 90 * 60;
+const SESSION = "testsession01";
+const OWNER = 5_000_001;
 
-// ── آماده‌سازی ─────────────────────────────────────────────────────────────
-upsertUser(OWNER, "فرستنده", null);
-grant(OWNER, COST_SEC, "grant");
-createSession(SID, OWNER, null);
-updateSession(SID, { status: "done", title: "جلسهٔ نمونه", original_ms: COST_SEC * 1000 });
-setShareEnabled(SID, true);
-
-// فرستنده کل هزینه را داده
-db.prepare(`UPDATE users SET credit_sec = 0 WHERE tg_id = ?`).run(OWNER);
+upsertUser(OWNER, "مالک", null);
 db.prepare(
-  `INSERT INTO credit_ledger (tg_id, delta_sec, balance_after, reason, session_id) VALUES (?, ?, 0, 'reserve', ?)`,
-).run(OWNER, -COST_SEC, SID);
-registerOwner(SID, OWNER, COST_SEC);
+  `INSERT OR REPLACE INTO sessions (id, tg_id, status, original_ms, share_enabled, mode)
+   VALUES (?, ?, 'done', ?, 1, 'full')`,
+).run(SESSION, OWNER, CLASS_SEC * 1000);
+db.prepare(`DELETE FROM session_members WHERE session_id = ?`).run(SESSION);
+setShareEnabled(SESSION, true);
+registerOwner(SESSION, OWNER, CLASS_SEC);
 
-for (const id of JOINERS) {
-  upsertUser(id, `دانشجو ${id % 10}`, null);
-  grant(id, 3600, "grant");
+const classCoins = costCoins(CLASS_SEC);
+console.log(`جلسهٔ ${classCoins} سکه‌ای · سقف بازگشت ${Math.round(REFUND_CAP_PCT * 100)}٪\n`);
+
+for (let i = 2; i <= SHARE_TARGET; i++) {
+  const joiner = 5_000_000 + i;
+  upsertUser(joiner, `عضو ${i}`, null);
+  grant(joiner, coinsToSec(700), "grant");
+  const r = joinSession(SESSION, joiner);
+  const owner = members(SESSION).find((m) => m.role === "owner");
+  console.log(
+    `${String(i).padStart(2)} نفر · سهم تازه‌وارد ${String(costCoins(r.shareSec)).padStart(3)} سکه` +
+      ` · مالک روی ${String(costCoins(owner.paid_sec)).padStart(3)} سکه مانده` +
+      ` · تا حالا ${String(classCoins - costCoins(owner.paid_sec)).padStart(3)} سکه پس گرفته`,
+  );
 }
 
-const row = (n, share, ownerBal, refunded) =>
-  `${String(toFaDigits(n)).padStart(3)}  ${fmtDuration(share * 1000).padStart(16)}  ` +
-  `${fmtDuration(ownerBal * 1000).padStart(16)}  ${fmtDuration(refunded * 1000).padStart(16)}`;
+const list = members(SESSION);
+const owner = list.find((m) => m.role === "owner");
+const ownerPaid = costCoins(owner.paid_sec);
+const refunded = classCoins - ownerPaid;
+const collected = list.reduce((sum, m) => sum + costCoins(m.paid_sec), 0);
+const cap = Math.ceil(classCoins * REFUND_CAP_PCT);
 
-console.log(`هزینهٔ جلسه: ${fmtDuration(COST_SEC * 1000)}  ·  کف سهم: ${fmtDuration(90 * 1000)}\n`);
-console.log("نفر   سهم هر نفر        اعتبار فرستنده     پس‌گرفتهٔ فرستنده");
-console.log("─".repeat(70));
-console.log(row(1, COST_SEC, currentBalance(OWNER), 0));
+console.log(`\nمالک ${refunded} سکه پس گرفت (سقف ${cap})`);
+console.log(`مجموع جمع‌آوری‌شده از ${list.length} نفر: ${collected} سکه · هزینهٔ جلسه: ${classCoins} سکه`);
+console.log(`موجودی نهایی مالک: ${balanceCoins(currentBalance(OWNER))} سکه`);
 
-for (const id of JOINERS) {
-  const r = joinSession(SID, id);
-  console.log(row(r.memberCount, r.shareSec, currentBalance(OWNER), totalShareRefunds(OWNER)));
-}
-
-// ── راستی‌آزمایی ───────────────────────────────────────────────────────────
-console.log("\n── بررسی درستی ──");
-const list = members(SID);
-const collected = list.reduce((a, m) => a + m.paid_sec, 0);
-console.log(`مجموع پرداختی همه:      ${fmtDuration(collected * 1000)}`);
-console.log(`هزینهٔ واقعی جلسه:       ${fmtDuration(COST_SEC * 1000)}`);
-console.log(`اختلاف (سود گردکردن):    ${collected - COST_SEC} ثانیه`);
-
-const ownerRefund = totalShareRefunds(OWNER);
-console.log(`\nفرستنده پس گرفت:        ${fmtDuration(ownerRefund * 1000)}`);
-console.log(`سقف مجاز (آنچه داده):    ${fmtDuration(COST_SEC * 1000)}`);
-console.log(ownerRefund <= COST_SEC ? "✅ فرستنده سود نکرد" : "❌ فرستنده بیش از پرداختی‌اش گرفت");
-
-const allEqual = list.every((m) => m.paid_sec === list[0].paid_sec);
-console.log(allEqual ? "✅ سهم همه برابر است" : "❌ سهم‌ها نابرابرند");
-
-// ── تراز دفتر کل ──────────────────────────────────────────────────────────
-console.log("\n── تراز دفتر کل ──");
-let allOk = true;
-for (const id of [OWNER, ...JOINERS]) {
-  const rows = history(id, 100);
-  const sum = rows.reduce((a, r) => a + r.delta_sec, 0);
-  const bal = currentBalance(id);
-  const ok = sum === bal;
-  allOk &&= ok;
-  console.log(`  ${id}  دفتر ${String(sum).padStart(6)}  موجودی ${String(bal).padStart(6)}  ${ok ? "✅" : "❌"}`);
-}
-console.log(allOk ? "✅ دفتر کل با موجودی‌ها می‌خواند" : "❌ ناترازی");
-
-console.log("\n── دفتر فرستنده ──");
-for (const r of history(OWNER, 10).reverse()) {
-  console.log(`  ${String(r.delta_sec).padStart(7)}  →  ${String(r.balance_after).padStart(6)}  ${r.reason}${r.note ? ` (${r.note})` : ""}`);
-}
-
-// پاک‌سازی
-db.exec(`DELETE FROM session_members WHERE session_id = '${SID}'`);
-db.exec(`DELETE FROM sessions WHERE id = '${SID}'`);
-for (const id of [OWNER, ...JOINERS]) {
-  db.exec(`DELETE FROM credit_ledger WHERE tg_id = ${id}`);
-  db.exec(`DELETE FROM users WHERE tg_id = ${id}`);
-}
+let bad = 0;
+if (refunded > cap) { console.log(`❌ بازگشت از سقف رد شد`); bad++; }
+if (collected < classCoins) { console.log(`❌ کمتر از هزینهٔ جلسه جمع شد`); bad++; }
+console.log(bad === 0 ? "\n✅ سقف رعایت شد و پلتفرم زیر هزینه نرفت." : `\n${bad} خطا`);
+process.exit(bad === 0 ? 0 : 1);

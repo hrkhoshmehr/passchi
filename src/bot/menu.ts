@@ -13,7 +13,8 @@
 import { InlineKeyboard, Keyboard } from "grammy";
 import { config } from "../config.js";
 import {
-  COINS_PER_MINUTE, PACKAGES, SHARE_TARGET, classesFor, coinsAsMinutes, fmtCoins, fmtToman,
+  COINS_PER_MINUTE, PACKAGES, REFUND_CAP_PCT, SHARE_TARGET, classesFor, coinsAsMinutes, fmtCoins,
+  fmtToman,
 } from "../billing/coins.js";
 import { toFaDigits } from "../util/time.js";
 
@@ -85,7 +86,7 @@ export const HOW_IT_WORKS = `<b>❓ چطور کار می‌کنه</b>
 اولین صوت هر کسی رایگان <b>پیاده</b> می‌شود — تا ${toFaDigits(config.FREE_TRANSCRIPT_MINUTES)} دقیقه. یعنی مرحلهٔ اول از این چهار مرحله. سه مرحلهٔ بعد سکه می‌خواهد، چون هزینهٔ واقعی همان‌جاست.
 
 <b>و چطور تقریباً مجانی می‌شود</b>
-یک جلسه یک بار پردازش می‌شود. جزوه‌اش را که برای بچه‌های کلاس بفرستی، هرکس برش دارد سهم همه کمتر می‌شود و مابه‌التفاوت به تو برمی‌گردد — با ${toFaDigits(SHARE_TARGET)} نفر، حدود ۹۰٪ سکه‌هایت را پس گرفته‌ای.
+یک جلسه یک بار پردازش می‌شود. جزوه‌اش را که برای بچه‌های کلاس بفرستی، هرکس برش دارد سهم همه کمتر می‌شود و مابه‌التفاوت به تو برمی‌گردد — تا سقف ${toFaDigits(Math.round(REFUND_CAP_PCT * 100))}٪ آنچه داده‌ای.
 
 <b>یک قاعده که رعایت می‌کنم</b>
 هر نکته‌ای که به‌عنوان «حرف استاد» نقل می‌کنم، عیناً در صوت گفته شده. اگر نتوانم جمله را در صوت پیدا کنم، آن نکته را حذف می‌کنم نه اینکه حدس بزنم.
@@ -138,7 +139,7 @@ export function packagesMessage(): string {
     "",
     `💰 <b>قبل از خرید اینو بدون:</b> لازم نیست خرج کلاس رو تنها بدی. بعد از هر تحلیل یه دکمه ` +
       `می‌بینی که جزوه رو برای بچه‌های کلاس می‌فرسته. هرکی برش داره سهم همه کمتر می‌شه و ` +
-      `مابه‌التفاوتش برمی‌گرده به حسابت — با ${toFaDigits(SHARE_TARGET)} نفر، حدود <b>۹۰٪</b> سکه‌هات برمی‌گرده.`,
+      `مابه‌التفاوتش برمی‌گرده به حسابت — با ${toFaDigits(SHARE_TARGET)} نفر <b>نصف</b> سکه‌هات برمی‌گرده.`,
     "",
     "پکیجت رو از دکمه‌های پایین انتخاب کن.",
   );

@@ -144,16 +144,37 @@ export function classesFor(coins: number, minutesPerClass = 90): number {
 /**
  * تعداد نفراتی که در پیام‌ها به‌عنوان «تقسیم با هم‌کلاسیا» پیشنهاد می‌شود.
  *
- * ده نفر، چون هم در یک گروه کلاسی واقعی به‌راحتی جمع می‌شود و هم بازگشت
- * حاصلش (۹۰٪) عددی است که آدم را وادار به فرستادن لینک می‌کند.
+ * ده نفر، چون در یک گروه کلاسی واقعی به‌راحتی جمع می‌شود.
  */
 export const SHARE_TARGET = 10;
 
-/** اگر جلسه‌ای با هزینهٔ costSec بین SHARE_TARGET نفر تقسیم شود، چقدر برمی‌گردد. */
+/**
+ * سقف بازگشت به فرستنده — و چرا صد درصد نیست.
+ *
+ * بازپرداخت، سکه‌های خریداری‌شده را به فرستنده برمی‌گرداند و او دوباره
+ * خرجشان می‌کند. با نرخ بازگشت r، هر خرید در نهایت **۱/(۱−r)** برابر خودش
+ * پردازش می‌خرد. با r=۰٫۹ یعنی ده برابر، در حالی که حاشیهٔ ما بین ۲٫۴ تا ۳
+ * برابر است — پس نرخ سربه‌سر حوالی ۶۰٪ می‌افتد.
+ *
+ * بدتر اینکه بازپرداخت از جیب کسانی می‌آید که می‌پیوندند، و اگر حساب تازه
+ * باشند سهمشان را با سکهٔ *هدیه* می‌دهند: پولی وارد نشده ولی سکهٔ واقعیِ
+ * فرستنده برگشته است. با ۹۰٪ بازگشت، یک خریدِ ۴۴۹ هزار تومانی در شبیه‌سازی
+ * ۱٫۶ میلیون تومان هزینه روی دست ما می‌گذاشت.
+ *
+ * پنجاه درصد فاصلهٔ امنی تا نرخ سربه‌سر دارد و هنوز پیشنهاد قابل‌گفتنی است:
+ * «نصف سکه‌هات برمی‌گرده». `scripts/economics.mjs` این را می‌سنجد.
+ */
+export const REFUND_CAP_PCT = 0.5;
+
+/**
+ * اگر جلسه‌ای با هزینهٔ costSec بین `people` نفر تقسیم شود، برای فرستنده چه
+ * می‌ماند و چقدر برمی‌گردد — با احتساب سقف بازگشت.
+ */
 export function shareBack(costSec: number, people = SHARE_TARGET): { share: number; back: number; pct: number } {
-  const share = costCoins(Math.ceil(costSec / people));
   const total = costCoins(costSec);
-  const back = Math.max(0, total - share);
+  const share = costCoins(Math.ceil(costSec / people));
+  const floor = Math.ceil(total * (1 - REFUND_CAP_PCT));
+  const back = Math.max(0, total - Math.max(share, floor));
   return { share, back, pct: total > 0 ? Math.round((back / total) * 100) : 0 };
 }
 
