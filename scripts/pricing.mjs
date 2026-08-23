@@ -9,7 +9,7 @@ import {
   USD_TOMAN, classesFor, costCoins, shareBack,
 } from "../src/billing/coins.ts";
 
-const MIN_MARGIN = 1.5;
+const MIN_MARGIN = 2.0;
 const fa = (n) => n.toLocaleString("fa-IR", { maximumFractionDigits: 0 });
 
 console.log("فرض‌های هزینه");

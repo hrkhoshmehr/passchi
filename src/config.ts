@@ -34,14 +34,23 @@ const Schema = z.object({
   NOTES_MODEL: z.string().optional().default("claude-opus-5"),
   ANALYSIS_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).optional().default("high"),
 
-  // مسیر OpenRouter — برای اجرای بدون هزینه با مدل‌های رایگان
+  // مسیر OpenRouter — مسیر تولیدِ فعلی
   OPENROUTER_API_KEY: z.string().optional(),
-  // فهرست جداشده با کاما — به ترتیب امتحان می‌شود. لایهٔ رایگان مدام
-  // rate-limit می‌شود و اسلاگ‌ها بدون اطلاع عوض می‌شوند، پس جایگزین لازم است.
-  OPENROUTER_MODEL: z.string().optional().default("google/gemma-4-31b-it:free,openai/gpt-oss-20b:free,google/gemma-4-26b-a4b-it:free,z-ai/glm-5.2:free"),
+  /**
+   * فهرست جداشده با کاما، به ترتیب امتحان می‌شود.
+   *
+   * gemini-3.7-flash روی یک کلاس فارسی واقعی سنجیده شد و برنده بود: مرزهای
+   * زمانی درست، نکات دقیق با نقل‌قول تأییدشدنی، و فارسیِ روان — با ۰٫۰۱۲
+   * دلار برای پنجاه دقیقه. deepseek-v3.2 روایت کلاس را خالی برگرداند و
+   * qwen3-235b زمان‌ها را در مقیاس غلط داد، پس qwen فقط جایگزین آخر است.
+   */
+  OPENROUTER_MODEL: z
+    .string()
+    .optional()
+    .default("google/gemini-3.7-flash,google/gemini-2.5-flash,qwen/qwen3-235b-a22b-2507"),
   // کدام پاس روی کدام ارائه‌دهنده برود
-  ANALYSIS_PROVIDER: z.enum(["anthropic", "openrouter"]).optional().default("anthropic"),
-  NOTES_PROVIDER: z.enum(["anthropic", "openrouter"]).optional().default("anthropic"),
+  ANALYSIS_PROVIDER: z.enum(["anthropic", "openrouter"]).optional().default("openrouter"),
+  NOTES_PROVIDER: z.enum(["anthropic", "openrouter"]).optional().default("openrouter"),
   OPENROUTER_ANALYSIS_MODEL: z.string().optional(),
   OPENROUTER_NOTES_MODEL: z.string().optional(),
 
