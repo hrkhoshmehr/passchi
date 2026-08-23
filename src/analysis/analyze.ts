@@ -5,6 +5,7 @@ import { logger } from "../util/logger.js";
 import { fmtClock, fmtDuration, pct } from "../util/time.js";
 import type { BuiltTranscript } from "../stt/transcript.js";
 import { anchorTopics, renderForModel, verifyQuote } from "../stt/transcript.js";
+import { normalizeFa } from "../util/text.js";
 import {
   ClassAnalysis,
   type AnalysisReport,
@@ -95,6 +96,33 @@ function verifyEvidence(t: BuiltTranscript, e: Evidence | null): VerifiedEvidenc
     verified: m.ok,
     score: Math.round(m.score * 100) / 100,
   };
+}
+
+/**
+ * نشانه‌های زبانیِ «استاد گفت این مهم است».
+ *
+ * فهرست عمداً از عبارت‌های *صریح* ساخته شده، نه هر کلمه‌ای که بوی اهمیت
+ * می‌دهد. با `normalizeFa` مقایسه می‌شود، پس نیم‌فاصله و «ي» عربی و اعراب
+ * مانعش نمی‌شوند.
+ */
+const IMPORTANCE_MARKERS = [
+  "امتحان", "میان ترم", "میانترم", "پایان ترم", "پایانترم", "کوییز", "نمره", "سوال میاد",
+  "مهم", "اهمیت", "حتما", "یاد بگیر", "یادبگیر", "بلد باش", "حفظ کن", "دقت کن",
+  "توجه کن", "یادداشت کن", "تاکید", "فراموش نکن", "کلیدی", "اساسی", "جدی بگیر",
+].map(normalizeFa);
+
+/**
+ * آیا این نقل‌قول *خودش* ادعای «مهم است» را ثابت می‌کند؟
+ *
+ * دروازهٔ دوم است، بعد از اینکه ثابت شد جمله واقعاً در صوت گفته شده. مدل
+ * می‌تواند جمله‌ای کاملاً واقعی نقل کند و رویش برچسب «تأکید استاد» بزند در
+ * حالی که آن جمله فقط ادامهٔ درس بوده — و این بدترین حالت است، چون هم
+ * ظاهرِ مستند دارد و هم دانشجو را به‌سمت مطلبی می‌فرستد که استاد هیچ‌وقت
+ * مهمش ندانسته. پس ادعای اهمیت باید در خودِ کلمات استاد باشد، نه در تفسیر.
+ */
+export function statesImportance(quote: string): boolean {
+  const q = normalizeFa(quote);
+  return IMPORTANCE_MARKERS.some((m) => q.includes(m));
 }
 
 function computeComposition(
@@ -310,6 +338,11 @@ export async function analyzeClass(
       dropped++;
       logger.debug({ title: kp.title, score: ev?.score }, "نقل‌قول تأیید نشد — نکته حذف شد");
       continue; // بدون منبعِ تأییدشده، نکته نمایش داده نمی‌شود
+    }
+    if ((kp.kind === "exam" || kp.kind === "emphasis") && !statesImportance(kp.evidence.quote)) {
+      dropped++;
+      logger.debug({ title: kp.title, quote: kp.evidence.quote }, "نقل‌قول ادعای تأکید را ثابت نمی‌کند");
+      continue;
     }
     keyPoints.push({ ...kp, evidence: ev });
   }

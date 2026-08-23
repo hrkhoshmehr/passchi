@@ -77,6 +77,9 @@ function markHighlights(html: string): string {
   return html.replace(/<blockquote>([\s\S]*?)<\/blockquote>/g, (m, inner: string) => {
     if (inner.includes("در امتحان می‌آید")) return `<blockquote class="exam">${inner}</blockquote>`;
     if (inner.includes("تأکید استاد")) return `<blockquote class="emph">${inner}</blockquote>`;
+    // «خارج از کلاس» باید *متفاوت* دیده شود، نه برجسته: خواننده باید در یک
+    // نگاه بفهمد این جمله را استاد نگفته و اعتبارش با بقیهٔ جزوه یکی نیست.
+    if (inner.includes("خارج از کلاس")) return `<blockquote class="outside">${inner}</blockquote>`;
     return m;
   });
 }
@@ -129,9 +132,6 @@ body{
 .meta div{font-size:10pt}
 .meta b{color:var(--dim);font-weight:500;margin-left:.4em}
 
-.headline{background:var(--accent-soft);border-right:3px solid var(--accent);
-  padding:1em 1.2em;border-radius:4px;font-size:12pt;font-weight:600;margin:1.4em 0}
-.recap{font-size:11pt;line-height:2.05;margin:.6em 0 1.2em}
 
 /* ── عناوین ──────────────────────────────────────────── */
 h1,h2,h3,h4{line-height:1.6;font-weight:700;break-after:avoid}
@@ -150,6 +150,9 @@ blockquote.exam{background:#fff5f5;border-right-color:#e53e3e}
 blockquote.exam strong{color:#c53030}
 blockquote.emph{background:#fffbea;border-right-color:#d69e2e}
 blockquote.emph strong{color:#975a16}
+/* گفتهٔ استاد نیست: خاکستری و با حاشیهٔ خط‌چین، عمداً کم‌رنگ‌تر از متن جزوه */
+blockquote.outside{background:#fafbfc;border-right:2px dashed #a0aec0;color:#4a5568;font-size:9.6pt}
+blockquote.outside strong{color:#718096}
 blockquote p{margin:.2em 0}
 code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9em;background:#f4f6f8;
   padding:.1em .35em;border-radius:3px;direction:ltr;display:inline-block}
@@ -185,11 +188,8 @@ th{background:#f7f9fb;font-weight:600;color:#3d4852}
     <div><b>سرفصل‌ها:</b>${fa(r.topics.length)} بخش</div>
   </div>
 
-  <div class="headline">${escapeHtml(r.headline)}</div>
 
-  <h3>کلاس چطور گذشت</h3>
-  <p class="recap">${escapeHtml(r.class_recap)}</p>
-  <p class="dim">حضور و غیاب، تکلیف‌ها، مهلت‌ها و خبرهای کلاس در پیام‌های تلگرام آمده‌اند و اینجا تکرار نمی‌شوند؛ این جزوه فقط محتوای درس است. نکته‌های امتحانی داخل متن، با رنگ متفاوت مشخص شده‌اند.</p>
+  <p class="dim">این جزوه فقط محتوای درس است — روایت جلسه، حضور و غیاب، تکلیف‌ها و خبرهای کلاس در پیام‌های تلگرام آمده‌اند و اینجا تکرار نمی‌شوند. نکته‌های امتحانی داخل متن با رنگ متفاوت مشخص شده‌اند، و هر جمله‌ای که استاد نگفته باشد با برچسب «خارج از کلاس» جدا شده است.</p>
 </section>
 
 <section class="section">
