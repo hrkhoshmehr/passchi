@@ -25,7 +25,7 @@ try {
     sessionId: id, audioFile: file, course: null,
     sessionDate: new Date().toLocaleDateString("fa-IR"),
     makePdf: makePdf && !free,
-    mode: free ? "free_transcript" : "full",
+    mode: free ? "free_trial" : "full",
     ...(free ? { limitMs: config.FREE_TRANSCRIPT_MINUTES * 60_000 } : {}),
     onProgress: (s) => console.log(`  [${s.stage}] ${s.detail ?? ""}`),
   });

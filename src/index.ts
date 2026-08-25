@@ -5,6 +5,8 @@ import { bot, cleanupOldAudio } from "./bot/index.js";
 import { closeBrowser } from "./pdf/render.js";
 import { disconnect as mtprotoDisconnect } from "./bot/mtproto.js";
 import { publishProfile } from "./bot/profile.js";
+import { APP_NAME } from "./bot/menu.js";
+import { archiveStatus } from "./bot/archive.js";
 
 for (const dir of [config.dataDir, config.audioDir, config.workDir, config.outDir]) {
   fs.mkdirSync(dir, { recursive: true });
@@ -37,7 +39,13 @@ const effectiveModel =
     : config.ANALYSIS_MODEL;
 
 logger.info(
-  { provider: config.ANALYSIS_PROVIDER, model: effectiveModel, stt: config.SONIOX_MODEL },
-  "خرخوان در حال اجراست",
+  {
+    provider: config.ANALYSIS_PROVIDER,
+    model: effectiveModel,
+    stt: config.SONIOX_MODEL,
+    // بایگانی بی‌صدا شکست می‌خورد، پس دست‌کم موقع بالاآمدن معلوم باشد روشن است یا نه
+    archive: archiveStatus(),
+  },
+  `${APP_NAME} در حال اجراست`,
 );
 await bot.start({ drop_pending_updates: true });

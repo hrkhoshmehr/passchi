@@ -193,6 +193,26 @@ export function findPackage(id: string): CoinPackage | null {
   return PACKAGES.find((p) => p.id === id) ?? null;
 }
 
+/**
+ * تقریبِ تومانیِ یک مقدار سکه — برای لحظهٔ تصمیم خرید.
+ *
+ * «۶۳۰ سکه» به کسی که تازه آمده هیچ نمی‌گوید، و برای فهمیدنش باید یک کلیک
+ * دیگر تا صفحهٔ شارژ برود. آن کلیک جایی است که آدم‌ها می‌روند — نه چون قیمت
+ * زیاد است، چون نامعلوم است و نامعلوم همیشه بدتر از واقعیت تخمین زده می‌شود.
+ *
+ * نرخِ **ارزان‌ترین** پکیج ملاک است تا عددی که نشان می‌دهیم از چیزی که کاربر
+ * در عمل می‌پردازد بیشتر نباشد.
+ */
+export function coinsAsToman(coins: number): number {
+  const best = PACKAGES.reduce((a, p) => Math.min(a, p.price / p.coins), Infinity);
+  return Math.round((coins * best) / 1_000) * 1_000;
+}
+
+/** «۶۳۰ سکه (حدود ۵۷ هزار تومان)» */
+export function fmtCoinsWithToman(coins: number): string {
+  return `${fmtCoins(coins)} <i>(حدود ${fmtToman(coinsAsToman(coins))})</i>`;
+}
+
 export function fmtToman(price: number): string {
   return `${faGroup(price)} تومان`;
 }

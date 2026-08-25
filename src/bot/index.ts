@@ -15,14 +15,21 @@ import { commit, InsufficientCredit, grant, refund, reserve, totalShareRefunds }
 import { accessibleSessions, registerOwner, setShareEnabled, shareStatus } from "../billing/sharing.js";
 import { handleJoin, invitationMessage, joinPreview, shareToggleKeyboard } from "./share.js";
 import {
-  BTN, HOW_IT_WORKS, WELCOME, mainKeyboard, menuActionOf, packagesKeyboard, packagesMessage,
-  supportKeyboard, supportMessage,
+  BTN, HOW_IT_WORKS, WELCOME, WELCOME_CB, mainKeyboard, menuActionOf, packagesKeyboard,
+  packagesMessage, supportKeyboard, supportMessage,
 } from "./menu.js";
+import {
+  DEMO_CB, DEMO_INTRO, SAMPLE_COURSE, SAMPLE_DURATION_MS, SAMPLE_PDF_PATH, SAMPLE_REPORT,
+  SAMPLE_TRANSCRIPT_PATH, outroMessage, stepKeyboard,
+} from "./demo.js";
+import {
+  archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption,
+} from "./archive.js";
 import { beginTopup, cancelTopup, decide, paymentConfigured, receiveReceipt } from "./topup.js";
 import { coinsToSec, fmtCoins, fmtCost, fmtToman } from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio, freeRunUsed,
-  getCourse, getSession, getUser, listCourses, listSessions, markFreeRunUsed,
+  getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, markFreeRunUsed,
   pendingTopups, purgeSession, sessionReport, sessionTimeMap, updateSession, upsertUser,
   type SessionMode,
 } from "../db/index.js";
@@ -122,10 +129,11 @@ async function historyScreen(ctx: Context): Promise<void> {
     if (s.pdf_path) kb.text("📕 جزوه", `pdf:${s.id}`);
     if (s.report_json) kb.text("📋 تحلیل", `rep:${s.id}`);
     if (s.transcript_txt) kb.text("📄 رونوشت", `txt:${s.id}`);
-    if (s.mode === "free_transcript" && s.status === "done") {
+    // جلسهٔ رایگان فقط رونوشت دارد، پس دکمهٔ ارتقا به تحلیل کامل می‌گیرد.
+    if (isTranscriptOnly(s.mode) && s.status === "done") {
       kb.row().text("✨ تحلیل کامل این جلسه", `full:${s.id}`);
     }
-    if (s.mode !== "free_transcript" && s.status === "done") {
+    if (s.mode === "full" && s.status === "done") {
       kb.row().text(
         s.share_enabled ? "🔗 لینک دعوت" : "👥 تقسیم با هم‌کلاسیا",
         s.share_enabled ? `slink:${s.id}` : `son:${s.id}`,
@@ -211,10 +219,84 @@ bot.command("start", async (ctx) => {
   }
 
   void u;
+
+  /**
+   * گام یکِ تور نمونه.
+   *
+   * دو پیام لازم است چون تلگرام اجازه نمی‌دهد صفحه‌کلید ثابتِ پایین چت و
+   * دکمهٔ شیشه‌ایِ زیر پیام در یک پیام باشند. پیام اول منو را می‌نشاند و
+   * پیام دوم — همان توضیح محصول — دکمهٔ «نمونه رو ببین» را دارد.
+   */
+  await ctx.reply("سلام 👋", { reply_markup: mainKeyboard });
   await ctx.reply(WELCOME, {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
-    reply_markup: mainKeyboard,
+    reply_markup: new InlineKeyboard().text("👀 نمونه رو نشونم بده", WELCOME_CB),
+  });
+});
+
+// ─── تور نمونه ──────────────────────────────────────────────────────────────
+//
+// چهار گام، هرکدام پشت دکمهٔ خودش. کاربر تازه به‌جای خواندن توصیف، خروجی
+// واقعیِ یک کلاس واقعی را می‌بیند — و خودش تصمیم می‌گیرد جلو برود یا نه.
+
+/** دکمهٔ گام بعد را از پیامِ قبلی برمی‌دارد تا کاربر دوبار نزند. */
+async function advance(ctx: Context): Promise<void> {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+}
+
+bot.callbackQuery(DEMO_CB.recap, async (ctx) => {
+  await advance(ctx);
+  await reply(ctx, DEMO_INTRO);
+  await reply(
+    ctx,
+    S.recapMessage({
+      report: SAMPLE_REPORT,
+      courseName: SAMPLE_COURSE,
+      sessionDate: null,
+      durationMs: SAMPLE_DURATION_MS,
+      savedMs: 0,
+      qualityWarnings: [],
+    }),
+    { reply_markup: stepKeyboard(DEMO_CB.extracted, "بعدی: چی از کلاس درآوردم ←") },
+  );
+});
+
+bot.callbackQuery(DEMO_CB.extracted, async (ctx) => {
+  await advance(ctx);
+  await reply(ctx, S.extractedMessage(SAMPLE_REPORT), {
+    reply_markup: stepKeyboard(DEMO_CB.timeline, "بعدی: بخش‌بندی کلاس ←"),
+  });
+});
+
+bot.callbackQuery(DEMO_CB.timeline, async (ctx) => {
+  await advance(ctx);
+  // نمونه ریپلای هیچ صوتی نیست، پس زمان‌ها اینجا لینک پخش نمی‌شوند و نباید
+  // ادعایش را هم بکنیم — `linkable=false`.
+  await reply(ctx, S.timelineMessage(SAMPLE_REPORT, false), {
+    reply_markup: stepKeyboard(DEMO_CB.outro, "بعدی: جزوهٔ این جلسه ←"),
+  });
+});
+
+bot.callbackQuery(DEMO_CB.outro, async (ctx) => {
+  await advance(ctx);
+
+  // جزوه و رونوشتِ همان جلسهٔ نمونه — دو تکهٔ آخرِ خروجی واقعی.
+  await ctx
+    .replyWithDocument(new InputFile(SAMPLE_PDF_PATH, "نمونه-جزوه.pdf"), {
+      caption: "📕 <b>جزوهٔ همین جلسه</b>\n<i>فقط محتوای درس؛ نکته‌های امتحانی داخل متن رنگی‌اند.</i>",
+      parse_mode: "HTML",
+    })
+    .catch(() => {});
+  await ctx
+    .replyWithDocument(new InputFile(SAMPLE_TRANSCRIPT_PATH, "نمونه-رونوشت.txt"), {
+      caption: "📄 رونوشت کامل با مهر زمانی",
+    })
+    .catch(() => {});
+
+  await reply(ctx, outroMessage(config.FREE_TRANSCRIPT_MINUTES, config.SUPPORT_USERNAME), {
+    reply_markup: supportKeyboard(),
   });
 });
 
@@ -436,12 +518,15 @@ bot.on(["message:audio", "message:voice", "message:document", "message:video_not
   }
 
   /**
-   * اولین جلسهٔ هر کاربر رایگان است — ولی فقط رونوشت.
+   * اولین جلسهٔ هر کاربر رایگان است — **کامل**، ولی با سقف مدت.
    *
-   * دلیلش اقتصاد است: رونویسی ارزان است و تحلیل و جزوه گران. کاربر تازه با
-   * همین یک بار می‌بیند که ربات واقعاً کل حرف کلاس را کلمه‌به‌کلمه درمی‌آورد،
-   * و بعد خودش تصمیم می‌گیرد که برای تحلیل پول بدهد یا نه. هدیهٔ سکه‌ای هم
-   * عمداً کم است و بیشتر به درد «برداشتن جزوهٔ اشتراکیِ یک هم‌کلاسی» می‌خورد.
+   * مرزِ رایگان روی *مدت* است نه روی *قابلیت*. نسخهٔ قبلی فقط رونویسی می‌داد
+   * تا هزینهٔ مدل صفر بماند، ولی نتیجه‌اش این بود که کاربر تازه هیچ‌وقت آن
+   * چیزی را که می‌فروشیم نمی‌دید و باید بابت توصیف پول می‌داد. تحلیل ۱۵ دقیقه
+   * حدود نیم سنت است — ارزان‌تر از کاربری که می‌رود.
+   *
+   * هدیهٔ سکه‌ای جداست و عمداً کم: به درد «برداشتن جزوهٔ اشتراکیِ یک
+   * هم‌کلاسی» می‌خورد، که مسیر ورود کسی است که خودش صوت ندارد.
    */
   const freeRun = !freeRunUsed(id);
   const durationSec = "duration" in media && media.duration ? media.duration : 0;
@@ -528,15 +613,34 @@ bot.on(["message:audio", "message:voice", "message:document", "message:video_not
     courses.length === 1 ? courses[0]!.id : (recent && courses.some((c) => c.id === recent) ? recent : null);
   if (courseId) updateSession(sessionId, { course_id: courseId });
 
-  updateSession(sessionId, { mode: freeRun ? "free_transcript" : "full" });
+  updateSession(sessionId, { mode: freeRun ? "free_trial" : "full" });
   await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
+
+  /**
+   * یک نسخه به کانال بایگانی.
+   *
+   * همین‌جا و نه بعد از پردازش: اگر خط لوله شکست بخورد هم ادمین باید صوت را
+   * داشته باشد تا بفهمد چه چیزی شکست. گزارش بعداً ریپلایِ همین پیام می‌شود.
+   */
+  await archiveAudio(
+    ctx.api,
+    sessionId,
+    media.file_id,
+    audioCaption({
+      sender: { tgId: id, name: u.name, username: u.username },
+      mode: freeRun ? "free_trial" : "full",
+      durationMs: durationSec * 1000,
+      sessionId,
+      courseName: courseId ? (getCourse(courseId)?.name ?? null) : null,
+    }),
+  );
 
   if (freeRun) {
     await reply(
       ctx,
-      `🎁 <b>این جلسه مهمون منی</b>\n\n` +
-        `اولین صوت هر کسی رایگان <b>رونویسی</b> می‌شه — تا ${fmtDuration(freeLimitMs())}.\n` +
-        `<i>خلاصه، نکته‌های امتحانی و جزوه سکه می‌خواد؛ بعدش نشونت می‌دم چطور.</i>`,
+      `🎁 <b>این یکی مهمون منی</b>\n\n` +
+        `تا ${fmtDuration(freeLimitMs())} از این صوتو رایگان <b>پیاده</b> می‌کنم تا ببینی چقدر دقیق می‌شنوم.\n` +
+        `<i>خلاصه و نکته‌های امتحانی و جزوه — همونایی که نمونه‌شو دیدی — سکه می‌خواد.</i>`,
     );
   }
 
@@ -545,7 +649,7 @@ bot.on(["message:audio", "message:voice", "message:document", "message:video_not
     audioFile,
     courseId,
     declaredDurationSec: durationSec,
-    mode: freeRun ? "free_transcript" : "full",
+    mode: freeRun ? "free_trial" : "full",
   });
 });
 
@@ -634,6 +738,9 @@ bot.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
   await ctx.answerCallbackQuery({ text: "شروع کردم…" });
   await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   updateSession(sessionId, { mode: "full" });
+  // صوتش قبلاً در کانال هست؛ فقط خبر ارتقا ریپلای می‌شود تا کپشن «رایگان»
+  // آخرین حرف نباشد.
+  await archiveUpgrade(ctx.api, s);
   await startJob(ctx, {
     sessionId,
     audioFile: s.original_file,
@@ -738,7 +845,7 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
   const { sessionId, mode } = job;
   const chatId = ctx.chat!.id;
   const userId = ctx.from!.id;
-  const free = mode === "free_transcript";
+  const free = mode === "free_trial";
   const progress = await ctx.api.sendMessage(chatId, S.progressMessage("preprocess"), {
     parse_mode: "HTML",
   });
@@ -796,11 +903,19 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
       commit(userId, reservedSec, actualSec, sessionId);
       registerOwner(sessionId, userId, actualSec);
       await sendResults(ctx, sessionId, out, course?.name ?? null);
+
+      // گزارش جلسهٔ پولی، ریپلایِ صوتِ همان جلسه در کانال بایگانی
+      const saved = getSession(sessionId);
+      if (saved && out.report) {
+        await archiveReport(ctx.api, saved, out.report, course?.name ?? null);
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       logger.error({ sessionId, err: message }, "pipeline failed");
       updateSession(sessionId, { status: "error", error: message.slice(0, 500) });
       if (!free) refund(userId, reservedSec, sessionId, "کار ناموفق بود");
+      const failed = getSession(sessionId);
+      if (failed) await archiveFailure(ctx.api, failed, message);
       await edit(
         `❌ <b>پردازش ناموفق بود</b>\n\n${escapeHtml(message)}\n\n` +
           (free ? "<i>سهمیهٔ رایگانت مصرف نشد.</i>" : "<i>سکه‌های رزروشده کامل برگشت.</i>"),
@@ -812,15 +927,17 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
 /**
  * خروجی اجرای رایگان: رونوشت، و بعد پیشنهاد.
  *
- * پیشنهاد دقیقاً همین‌جا می‌آید و نه جای دیگر — کاربر تازه متن کلاسش را
- * گرفته و بهترین لحظه برای گفتن «بقیه‌اش چه شکلی است» همین است.
+ * سهمیهٔ رایگان کارِ مشخصی دارد — نشان‌دادن **دقت صوت به متن** روی صوت خودِ
+ * کاربر — و همین‌جا تمام می‌شود. اینکه تحلیل چه شکلی است، در تور نمونه
+ * (پس از `/start`) جواب داده شده، پس پیام فروش لازم نیست دوباره فهرستش کند؛
+ * فقط می‌گوید همان خروجی برای این جلسه چقدر خرج دارد.
  */
 async function sendFreeResult(ctx: Context, sessionId: string, out: PipelineOut): Promise<void> {
   await ctx.replyWithDocument(new InputFile(out.transcriptPath, "رونوشت کلاس.txt"), {
     caption:
       `📄 <b>رونوشت کامل کلاس</b> با مهر زمانی` +
       (out.skippedMs > 0
-        ? `\n<i>تا ${fmtDuration(freeLimitMs())} — ${fmtDuration(out.skippedMs)} باقیِ فایل رونویسی نشد.</i>`
+        ? `\n<i>تا ${fmtDuration(freeLimitMs())} — ${fmtDuration(out.skippedMs)} باقیِ فایل پیاده نشد.</i>`
         : ""),
     parse_mode: "HTML",
   });

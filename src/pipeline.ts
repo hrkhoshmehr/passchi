@@ -29,9 +29,11 @@ export interface PipelineInput {
   sessionDate: string | null;
   makePdf: boolean;
   /**
-   * `free_transcript` یعنی فقط رونویسی: نه تحلیل، نه جزوه، نه تماسی با مدل
-   * زبانی. اجرای رایگانِ یک‌بارهٔ کاربر تازه از همین مسیر می‌رود، و گران‌ترین
-   * بخش خط لوله اصلاً روشن نمی‌شود.
+   * `free_trial` اجرای رایگانِ یک‌بارهٔ کاربر تازه است: فقط رونویسی، با سقف
+   * مدت (`limitMs`). نه تحلیل، نه جزوه، نه تماسی با مدل زبانی.
+   *
+   * کارش سنجیدن **دقت صوت به متن** روی صوت خودِ کاربر است. نمایشِ تحلیل
+   * کار تور نمونه است (`bot/demo.ts`)، نه این.
    */
   mode: SessionMode;
   /** سقف مدتی که رونویسی می‌شود؛ مازادش بریده می‌شود. */
@@ -41,7 +43,7 @@ export interface PipelineInput {
 }
 
 export interface PipelineOutput {
-  /** در حالت رایگان null است — تحلیلی انجام نشده. */
+  /** فقط وقتی null است که تحلیل انجام نشده باشد (حالت رایگانِ قدیمی). */
   report: AnalysisReport | null;
   notesMarkdown: string;
   pdfPath: string | null;
@@ -115,7 +117,7 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
     await trimTo(pre.processedFile, sttFile, inp.limitMs);
     inp.onProgress({
       stage: "preprocess",
-      detail: `رایگان تا ${fmtDuration(inp.limitMs)} — بقیهٔ فایل رونویسی نمی‌شود`,
+      detail: `رایگان تا ${fmtDuration(inp.limitMs)} — بقیهٔ فایل تحلیل نمی‌شود`,
     });
   }
 
@@ -174,11 +176,15 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
   /**
    * اجرای رایگان همین‌جا تمام می‌شود.
    *
-   * عمداً *بعد* از رونویسی و *قبل* از تحلیل: رونوشت چیزی است که ارزش محصول را
-   * نشان می‌دهد، و تحلیل و جزوه چیزی است که بابتش پول گرفته می‌شود. مرز بین
-   * این دو، همین خط است.
+   * عمداً *بعد* از رونویسی و *قبل* از تحلیل. سهمیهٔ رایگان یک کار مشخص دارد:
+   * کاربر با گوش خودش بسنجد **صوت به متن** چقدر دقیق است — اصطلاح تخصصی درسش،
+   * لهجهٔ استادش، کیفیت ضبط گوشی‌اش. اینها را فقط روی صوت خودش می‌شود فهمید.
+   *
+   * اینکه خروجی تحلیل چه شکلی است سؤال دیگری است و جواب دیگری دارد: تور
+   * نمونه در `bot/demo.ts` که یک جلسهٔ واقعیِ از پیش پردازش‌شده را نشان
+   * می‌دهد. پس لازم نیست برای *نشان‌دادنِ* تحلیل، تحلیلِ رایگان بدهیم.
    */
-  if (inp.mode === "free_transcript") {
+  if (inp.mode === "free_trial") {
     updateSession(sessionId, {
       title: "رونوشت جلسه",
       session_date: inp.sessionDate,

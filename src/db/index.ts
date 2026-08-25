@@ -78,9 +78,15 @@ for (const [column, ddl] of [
   // فوری است، و بدون آن لینک‌های زمانی برای او کار نمی‌کنند.
   ["audio_file_id", "ALTER TABLE sessions ADD COLUMN audio_file_id TEXT"],
   ["share_enabled", "ALTER TABLE sessions ADD COLUMN share_enabled INTEGER NOT NULL DEFAULT 0"],
-  // free_transcript | full — جلسهٔ رایگان فقط رونوشت دارد و تحلیلی ندارد،
-  // پس تاریخچه و دکمه‌هایش باید فرق کنند.
+  // free_trial | full | free_transcript — حالت اجرای جلسه.
+  //
+  // `free_transcript` حالت رایگانِ *قدیمی* است: فقط رونوشت، بدون تحلیل. دیگر
+  // تولید نمی‌شود ولی سطرهای قبلی در پایگاه‌داده همین مقدار را دارند و واقعاً
+  // تحلیلی ندارند، پس مقدار باید بماند تا تاریخچه درست رفتار کند.
   ["mode", "ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'full'"],
+  // شناسهٔ پیام صوت در کانال بایگانی. گزارش بعداً **ریپلای همین پیام** فرستاده
+  // می‌شود، پس بدون نگه‌داشتنش گزارش از صوتش جدا می‌افتد.
+  ["archive_message_id", "ALTER TABLE sessions ADD COLUMN archive_message_id INTEGER"],
 ] as const) {
   const cols = db.prepare("PRAGMA table_info(sessions)").all() as unknown as Array<{ name: string }>;
   if (!cols.some((c) => c.name === column)) db.exec(ddl);
@@ -259,9 +265,21 @@ export interface SessionRow {
   audio_file_id: string | null;
   share_enabled: number;
   mode: SessionMode;
+  archive_message_id: number | null;
 }
 
-export type SessionMode = "free_transcript" | "full";
+/**
+ * `full` — جلسهٔ کامل با سکه.
+ * `free_trial` — اجرای رایگان یک‌باره: فقط رونوشت، با سقف مدت.
+ * `free_transcript` — نام قدیمیِ همان حالت رایگان. دیگر تولید نمی‌شود ولی
+ *   سطرهای قبلیِ پایگاه‌داده این مقدار را دارند.
+ */
+export type SessionMode = "free_trial" | "full" | "free_transcript";
+
+/** جلسه‌ای که تحلیل ندارد و فقط رونوشت دارد — هر دو نامِ حالت رایگان. */
+export function isTranscriptOnly(mode: SessionMode): boolean {
+  return mode === "free_trial" || mode === "free_transcript";
+}
 
 export function createSession(id: string, tgId: number, courseId: number | null): void {
   db.prepare(`INSERT INTO sessions (id, tg_id, course_id, status) VALUES (?, ?, ?, 'queued')`).run(
@@ -286,7 +304,7 @@ type Updatable = Partial<
     | "silence_ms" | "time_map_json" | "report_json" | "notes_md" | "transcript_txt"
     | "pdf_path" | "cost_usd" | "error" | "finished_at" | "course_id"
     | "audio_chat_id" | "audio_message_id" | "download_route"
-    | "audio_file_id" | "share_enabled" | "mode"
+    | "audio_file_id" | "share_enabled" | "mode" | "archive_message_id"
   >
 >;
 

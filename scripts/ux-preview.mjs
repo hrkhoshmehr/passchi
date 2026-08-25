@@ -9,6 +9,9 @@ import {
   HELP, PRIVACY, accountMessage, extractedMessage, lowBalanceMessage, recapMessage,
   settlementMessage, timelineMessage, upsellMessage,
 } from "../src/bot/strings.ts";
+import {
+  DEMO_INTRO, SAMPLE_COURSE, SAMPLE_DURATION_MS, SAMPLE_REPORT, outroMessage,
+} from "../src/bot/demo.ts";
 
 const line = (t) => console.log("\n" + "─".repeat(64) + `  ${t}\n`);
 const show = (t) => console.log(t.replace(/<\/?[a-z][^>]*>/g, ""));
@@ -127,8 +130,30 @@ show(timelineMessage(report, true));
 line("۴ — تسویه و پیشنهاد اشتراک");
 show(settlementMessage(5400, 1_800));
 
-line("پایان اجرای رایگان");
+line("پایان اجرای رایگان — رونوشت و پیشنهاد");
 show(upsellMessage(5400));
+
+// ── تور نمونه: همان چیزی که کاربر تازه پس از /start می‌بیند ────────────────
+line("تور نمونه — سرصفحه");
+show(DEMO_INTRO);
+line("تور نمونه — گام ۱: کلاس چه خبر بود");
+show(
+  recapMessage({
+    report: SAMPLE_REPORT,
+    courseName: SAMPLE_COURSE,
+    sessionDate: null,
+    durationMs: SAMPLE_DURATION_MS,
+    savedMs: 0,
+    qualityWarnings: [],
+  }),
+);
+line("تور نمونه — گام ۲: چی از کلاس درآوردم");
+show(extractedMessage(SAMPLE_REPORT));
+line("تور نمونه — گام ۳: بخش‌بندی کلاس");
+show(timelineMessage(SAMPLE_REPORT, false));
+line("تور نمونه — گام ۴: پایان تور");
+show(outroMessage(15, "SUPPORT_ID"));
+
 line("حساب");
 show(accountMessage({ creditSec: 857, usedSec: 0, refundedSec: 0, sessionCount: 1 }));
 line("شارژ");
