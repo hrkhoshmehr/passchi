@@ -25,6 +25,8 @@ import { grant } from "../billing/ledger.js";
 import {
   createTopup, getTopup, getUser, openTopup, setTopupStatus, type TopupRow,
 } from "../db/index.js";
+import { uid } from "./identity.js";
+import { notifyUser } from "./notify.js";
 
 const orderId = () => randomBytes(4).toString("hex");
 
@@ -69,7 +71,7 @@ export function beginTopup(tgId: number, packageId: string): { text: string; key
  * معمولی بی‌ربط، پاسخ اشتباه نگیرد.
  */
 export async function receiveReceipt(ctx: Context, fileId: string): Promise<boolean> {
-  const tgId = ctx.from!.id;
+  const tgId = uid(ctx);
   const t = openTopup(tgId);
   if (!t) return false;
 
@@ -146,28 +148,22 @@ export async function decide(
   if (approved) {
     grant(t.tg_id, coinsToSec(t.coins), "topup");
     const balance = getUser(t.tg_id)?.credit_sec ?? 0;
-    await api
-      .sendMessage(
-        t.tg_id,
-        `🪙 <b>${fmtCoins(t.coins)}</b> به حسابت اضافه شد!\n\n` +
-          `موجودی جدیدت: <b>${fmtBalance(balance)}</b>\n\nصوت کلاستو بفرست 🎧`,
-        { parse_mode: "HTML" },
-      )
-      .catch(() => {});
+    await notifyUser(
+      t.tg_id,
+      `🪙 <b>${fmtCoins(t.coins)}</b> به حسابت اضافه شد!\n\n` +
+        `موجودی جدیدت: <b>${fmtBalance(balance)}</b>\n\nصوت کلاستو بفرست 🎧`,
+    );
     logger.info({ topup: topupId, tgId: t.tg_id, coins: t.coins }, "topup approved");
     return { toast: "تأیید شد و سکه واریز شد.", adminNote: `✅ تأیید شد — ${fmtCoins(t.coins)}` };
   }
 
-  await api
-    .sendMessage(
-      t.tg_id,
-      `❌ رسید سفارش <code>${t.id}</code> تأیید نشد.\n\n` +
-        (config.SUPPORT_USERNAME
-          ? `اگر فکر می‌کنی اشتباهی شده به @${config.SUPPORT_USERNAME} پیام بده.`
-          : "دوباره تلاش کن یا با پشتیبانی تماس بگیر."),
-      { parse_mode: "HTML" },
-    )
-    .catch(() => {});
+  await notifyUser(
+    t.tg_id,
+    `❌ رسید سفارش <code>${t.id}</code> تأیید نشد.\n\n` +
+      (config.SUPPORT_USERNAME
+        ? `اگر فکر می‌کنی اشتباهی شده به @${config.SUPPORT_USERNAME} پیام بده.`
+        : "دوباره تلاش کن یا با پشتیبانی تماس بگیر."),
+  );
   logger.info({ topup: topupId }, "topup rejected");
   return { toast: "رد شد.", adminNote: "❌ رد شد" };
 }

@@ -25,14 +25,29 @@ export const BTN = {
   courses: "📘 درس‌های من",
   how: "❓ چطور کار می‌کنه",
   support: "👤 پشتیبانی",
+  /** فقط وقتی PUBLIC_URL تنظیم باشد روی صفحه‌کلید می‌آید */
+  app: "📱 باز کردن اپ",
 } as const;
 
-export const mainKeyboard = new Keyboard()
-  .text(BTN.send).text(BTN.history).row()
-  .text(BTN.account).text(BTN.courses).row()
-  .text(BTN.how).text(BTN.support)
-  .resized()
-  .persistent();
+/**
+ * صفحه‌کلید اصلی.
+ *
+ * اگر `PUBLIC_URL` تنظیم باشد، یک دکمهٔ **مینی‌اپ** هم اضافه می‌شود که همان
+ * سایت را داخل تلگرام یا بله باز می‌کند. بدون آن آدرس، دکمه ساخته نمی‌شود:
+ * هر دو سکو برای مینی‌اپ HTTPS اجبار می‌کنند و دکمه با آدرس نامعتبر یا
+ * ساخته نمی‌شود یا صفحهٔ سفید باز می‌کند — بدتر از نبودنش.
+ */
+export const mainKeyboard = (() => {
+  const kb = new Keyboard().text(BTN.send).text(BTN.history).row();
+  if (config.PUBLIC_URL.startsWith("https://")) {
+    kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`).row();
+  }
+  return kb
+    .text(BTN.account).text(BTN.courses).row()
+    .text(BTN.how).text(BTN.support)
+    .resized()
+    .persistent();
+})();
 
 /** برچسب دکمه → کاری که باید انجام شود. برای مسیریابی پیام‌های متنی. */
 export type MenuAction = keyof typeof BTN;

@@ -15,6 +15,7 @@ import {
   shareStatus,
 } from "../billing/sharing.js";
 import * as S from "./strings.js";
+import { uid } from "./identity.js";
 
 let botUsername: string | null = null;
 
@@ -160,7 +161,7 @@ export interface JoinOutcome {
 
 /** پیوستن + تحویل. پیام‌های بازپرداخت به اعضای قبلی هم از اینجا می‌رود. */
 export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinOutcome> {
-  const tgId = ctx.from!.id;
+  const tgId = uid(ctx);
   let result;
   try {
     result = joinSession(sessionId, tgId);

@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 /**
  * نرمال‌سازی متن فارسی برای «تطبیق نقل‌قول».
  * هدف: تشخیص اینکه جمله‌ای که مدل به‌عنوان نقل‌قول برگردانده، واقعاً در رونوشت هست یا نه.
@@ -66,4 +68,14 @@ export function chunkMessage(text: string, limit = 3800): string[] {
 
 export function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * شناسهٔ کوتاه جلسه — دوازده رقم شانزده‌شانزدهی.
+ *
+ * پیش‌تر داخل `bot/index.ts` تعریف شده بود؛ با آمدن مسیر وب که آن هم جلسه
+ * می‌سازد، به اینجا آمد تا هر دو از یک فضای شناسه استفاده کنند.
+ */
+export function shortId(): string {
+  return randomBytes(6).toString("hex");
 }

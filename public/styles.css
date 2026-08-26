@@ -1,0 +1,202 @@
+/*
+ * پاسچی — شیوه‌نامهٔ مشترک لندینگ و اپ.
+ *
+ * سه تصمیم که بقیه از آن‌ها می‌آید:
+ *
+ * ۱. راست‌به‌چپ پایه است، نه استثنا. `dir="rtl"` روی <html> نشسته و همه‌جا
+ *    از ویژگی‌های منطقی (`inline-start`, `margin-inline`) استفاده می‌شود نه
+ *    `left/right` — وگرنه هر بار که چیزی اضافه شود باید دوباره وارونه‌اش کرد.
+ *
+ * ۲. تم روشن و تاریک هر دو کامل تعریف می‌شوند. مینی‌اپ داخل تلگرام و بله
+ *    باز می‌شود و تم آن‌ها را کاربر انتخاب کرده، نه ما.
+ *
+ * ۳. عدد و زمان با `font-variant-numeric: tabular-nums` تا موقع به‌روزرسانی
+ *    پیشرفت، عرضشان نپرد.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #fbfaf8;
+  --bg-soft: #f3f1ec;
+  --surface: #ffffff;
+  --surface-2: #f7f5f1;
+  --border: #e4e0d8;
+  --border-strong: #d2ccc0;
+
+  --text: #1b1a17;
+  --text-soft: #56524a;
+  --text-dim: #8a857a;
+
+  --brand: #b8562f;
+  --brand-soft: #f4e5dd;
+  --brand-text: #97431f;
+  --accent: #2f6b5e;
+  --accent-soft: #dceee8;
+
+  --danger: #a3312a;
+  --warn: #8a6410;
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  --radius-lg: 22px;
+  --shadow: 0 1px 2px rgba(27, 26, 23, .05), 0 8px 24px -12px rgba(27, 26, 23, .16);
+  --shadow-lg: 0 2px 6px rgba(27, 26, 23, .06), 0 24px 60px -28px rgba(27, 26, 23, .3);
+
+  --maxw: 1080px;
+  --font: Vazirmatn, "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14130f;
+    --bg-soft: #1b1a16;
+    --surface: #1e1d18;
+    --surface-2: #262420;
+    --border: #33302a;
+    --border-strong: #454138;
+
+    --text: #f2efe8;
+    --text-soft: #b8b2a6;
+    --text-dim: #8b8579;
+
+    --brand: #e07a4d;
+    --brand-soft: #3a2418;
+    --brand-text: #f0a077;
+    --accent: #5fbfa8;
+    --accent-soft: #16302a;
+
+    --danger: #e8756b;
+    --warn: #d9a441;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -12px rgba(0, 0, 0, .6);
+    --shadow-lg: 0 2px 6px rgba(0, 0, 0, .35), 0 24px 60px -28px rgba(0, 0, 0, .8);
+  }
+}
+
+/* تمی که کاربر داخل اپ دستی انتخاب می‌کند بر تم سیستم می‌چربد. */
+:root[data-theme="dark"] {
+  --bg: #14130f; --bg-soft: #1b1a16; --surface: #1e1d18; --surface-2: #262420;
+  --border: #33302a; --border-strong: #454138;
+  --text: #f2efe8; --text-soft: #b8b2a6; --text-dim: #8b8579;
+  --brand: #e07a4d; --brand-soft: #3a2418; --brand-text: #f0a077;
+  --accent: #5fbfa8; --accent-soft: #16302a;
+  --danger: #e8756b; --warn: #d9a441;
+}
+:root[data-theme="light"] {
+  --bg: #fbfaf8; --bg-soft: #f3f1ec; --surface: #ffffff; --surface-2: #f7f5f1;
+  --border: #e4e0d8; --border-strong: #d2ccc0;
+  --text: #1b1a17; --text-soft: #56524a; --text-dim: #8a857a;
+  --brand: #b8562f; --brand-soft: #f4e5dd; --brand-text: #97431f;
+  --accent: #2f6b5e; --accent-soft: #dceee8;
+  --danger: #a3312a; --warn: #8a6410;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4 {
+  line-height: 1.35;
+  margin: 0;
+  font-weight: 700;
+  letter-spacing: -.01em;
+}
+
+p { margin: 0; }
+
+a { color: inherit; }
+
+/* عددها هم‌عرض بمانند تا شمارنده‌ها نلرزند */
+.num, time, .stat-value, .coin { font-variant-numeric: tabular-nums; }
+
+.wrap {
+  max-width: var(--maxw);
+  margin-inline: auto;
+  padding-inline: 22px;
+}
+
+/* ─── دکمه‌ها ──────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 13px 24px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font: inherit;
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform .12s ease, background .15s ease, border-color .15s ease, opacity .15s;
+  white-space: nowrap;
+}
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.btn-primary { background: var(--brand); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--brand-text); }
+
+.btn-ghost {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--surface-2); }
+
+.btn-block { width: 100%; }
+.btn-sm { padding: 8px 15px; font-size: 13.5px; border-radius: var(--radius-sm); }
+
+/* ─── کارت ─────────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 26px;
+  box-shadow: var(--shadow);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.muted { color: var(--text-soft); }
+.dim { color: var(--text-dim); font-size: 14px; }
+
+/* دسترس‌پذیری: حلقهٔ فوکوس هرگز حذف نمی‌شود، فقط خوش‌شکل می‌شود */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

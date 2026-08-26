@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>پاسچی — دیگه لازم نیست سر کلاس جزوه بنویسی</title>
+<meta name="description" content="صوت کلاست رو بفرست: خلاصهٔ جلسه، نکته‌های امتحانی با عین حرف استاد، و جزوهٔ کامل PDF.">
+<meta name="theme-color" content="#b8562f" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14130f" media="(prefers-color-scheme: dark)">
+
+<meta property="og:title" content="پاسچی — دستیار درسی">
+<meta property="og:description" content="صوت کلاست رو بفرست: خلاصهٔ جلسه، نکته‌های امتحانی با عین حرف استاد، و جزوهٔ کامل PDF.">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="fa_IR">
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📓</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+/* ─── سربرگ ─────────────────────────────────────────────────────────────── */
+
+.nav {
+  position: sticky; top: 0; z-index: 50;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid transparent;
+  transition: border-color .2s;
+}
+.nav.scrolled { border-bottom-color: var(--border); }
+.nav-in {
+  display: flex; align-items: center; gap: 18px;
+  height: 66px;
+}
+.logo {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 800; font-size: 19px; text-decoration: none;
+  letter-spacing: -.02em;
+}
+.logo-mark {
+  width: 32px; height: 32px; border-radius: 9px;
+  background: var(--brand); color: #fff;
+  display: grid; place-items: center; font-size: 17px;
+}
+.nav-links { display: flex; gap: 4px; margin-inline-start: auto; align-items: center; }
+.nav-links a {
+  padding: 8px 13px; border-radius: var(--radius-sm);
+  text-decoration: none; color: var(--text-soft);
+  font-size: 14.5px; font-weight: 500;
+}
+.nav-links a:hover { background: var(--surface-2); color: var(--text); }
+@media (max-width: 860px) { .nav-links .hide-sm { display: none; } }
+
+/* ─── قهرمان ────────────────────────────────────────────────────────────── */
+
+.hero { padding: 76px 0 20px; position: relative; overflow: hidden; }
+.hero::before {
+  content: ""; position: absolute; inset-block-start: -280px; inset-inline-start: 50%;
+  width: 900px; height: 640px; transform: translateX(50%);
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--brand) 15%, transparent), transparent);
+  pointer-events: none;
+}
+.hero-in { position: relative; text-align: center; max-width: 760px; margin-inline: auto; }
+.hero h1 {
+  font-size: clamp(34px, 6.2vw, 58px);
+  font-weight: 800; letter-spacing: -.03em;
+  margin: 22px 0 0; line-height: 1.22;
+}
+.hero h1 em { font-style: normal; color: var(--brand); }
+.hero-sub {
+  font-size: clamp(16.5px, 2.3vw, 20px);
+  color: var(--text-soft); margin-top: 20px;
+  max-width: 620px; margin-inline: auto;
+}
+.hero-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 34px; }
+.hero-note { margin-top: 16px; font-size: 13.5px; color: var(--text-dim); }
+
+/* ─── نمایش خروجی ───────────────────────────────────────────────────────── */
+
+.showcase { margin-top: 54px; position: relative; }
+.window {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  overflow: hidden; max-width: 760px; margin-inline: auto;
+}
+.window-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+.window-title { font-size: 13px; color: var(--text-dim); margin-inline-start: 8px; }
+.window-body { padding: 22px; text-align: start; }
+
+.msg { margin-bottom: 18px; }
+.msg:last-child { margin-bottom: 0; }
+.msg-head { font-size: 13px; color: var(--text-dim); margin-bottom: 7px; }
+.bubble {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 15px 17px; font-size: 14.5px;
+}
+.bubble b { color: var(--text); }
+.quote {
+  border-inline-start: 3px solid var(--brand);
+  padding-inline-start: 12px; margin: 10px 0;
+  color: var(--text-soft); font-size: 14px;
+}
+.ts {
+  display: inline-block; font-size: 12.5px; font-weight: 600;
+  color: var(--brand-text); background: var(--brand-soft);
+  padding: 2px 8px; border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── بخش‌ها ────────────────────────────────────────────────────────────── */
+
+section { padding: 78px 0; }
+.section-head { text-align: center; max-width: 640px; margin: 0 auto 46px; }
+.section-head h2 {
+  font-size: clamp(26px, 4vw, 38px); letter-spacing: -.025em;
+}
+.section-head p { color: var(--text-soft); margin-top: 14px; font-size: 17px; }
+
+.steps { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(238px, 1fr)); }
+.step { position: relative; }
+.step-n {
+  width: 34px; height: 34px; border-radius: 10px;
+  background: var(--brand-soft); color: var(--brand-text);
+  display: grid; place-items: center;
+  font-weight: 700; font-size: 15px; margin-bottom: 15px;
+}
+.step h3 { font-size: 17.5px; margin-bottom: 9px; }
+.step p { color: var(--text-soft); font-size: 14.8px; }
+
+.feat { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); }
+.feat .card { padding: 24px; }
+.feat h3 { font-size: 16.5px; margin: 13px 0 8px; }
+.feat p { color: var(--text-soft); font-size: 14.5px; }
+.ico {
+  width: 40px; height: 40px; border-radius: 11px;
+  background: var(--accent-soft); color: var(--accent);
+  display: grid; place-items: center; font-size: 19px;
+}
+
+/* ─── قیمت ──────────────────────────────────────────────────────────────── */
+
+.prices { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.price { text-align: center; position: relative; display: flex; flex-direction: column; }
+.price.featured { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft), var(--shadow); }
+.price-tag {
+  position: absolute; inset-block-start: -12px; inset-inline-start: 50%;
+  transform: translateX(50%);
+}
+.price h3 { font-size: 15px; color: var(--text-soft); font-weight: 600; }
+.price-coins { font-size: 33px; font-weight: 800; margin: 10px 0 2px; letter-spacing: -.02em; }
+.price-toman { font-size: 19px; font-weight: 700; color: var(--brand-text); }
+.price-worth { color: var(--text-dim); font-size: 13.5px; margin-top: 8px; }
+.price .btn { margin-top: 20px; }
+
+.split-note {
+  margin-top: 30px; padding: 22px 24px;
+  background: var(--accent-soft); border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  font-size: 15px;
+}
+.split-note b { color: var(--text); }
+
+/* ─── پرسش‌ها ───────────────────────────────────────────────────────────── */
+
+.faq { max-width: 720px; margin-inline: auto; }
+details {
+  border-bottom: 1px solid var(--border);
+  padding: 4px 0;
+}
+summary {
+  cursor: pointer; padding: 17px 4px; font-weight: 600; font-size: 16px;
+  list-style: none; display: flex; align-items: center; gap: 12px;
+}
+summary::-webkit-details-marker { display: none; }
+summary::after {
+  content: "+"; margin-inline-start: auto; color: var(--text-dim);
+  font-size: 21px; font-weight: 400; line-height: 1;
+  transition: transform .2s;
+}
+details[open] summary::after { transform: rotate(45deg); }
+details p { padding: 0 4px 19px; color: var(--text-soft); font-size: 15px; }
+
+/* ─── پایان ─────────────────────────────────────────────────────────────── */
+
+.cta-band { text-align: center; }
+.cta-band .card {
+  padding: 52px 30px;
+  background: linear-gradient(160deg, var(--surface), var(--surface-2));
+}
+.cta-band h2 { font-size: clamp(25px, 4vw, 35px); letter-spacing: -.025em; }
+.cta-band p { color: var(--text-soft); margin-top: 13px; font-size: 16.5px; }
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 34px 0; margin-top: 30px;
+  color: var(--text-dim); font-size: 14px;
+}
+.foot-in { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+.foot-in a { text-decoration: none; color: var(--text-soft); }
+.foot-in a:hover { color: var(--text); }
+.foot-links { margin-inline-start: auto; display: flex; gap: 18px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<nav class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a class="logo" href="/"><span class="logo-mark">📓</span> پاسچی</a>
+    <div class="nav-links">
+      <a href="#how" class="hide-sm">چطور کار می‌کنه</a>
+      <a href="#what" class="hide-sm">چی تحویل می‌گیری</a>
+      <a href="#price">قیمت</a>
+      <a class="btn btn-primary btn-sm" href="/app">شروع کن</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-in">
+    <span class="pill">🎧 اولین صوتت رایگان پیاده می‌شود</span>
+    <h1>دیگه لازم نیست<br>سر کلاس <em>جزوه بنویسی</em></h1>
+    <p class="hero-sub">
+      صوت کلاس رو بفرست. خلاصهٔ جلسه، نکته‌های امتحانی با عین حرف استاد،
+      تکلیف‌ها و مهلت‌ها، و یک جزوهٔ کامل PDF تحویل بگیر.
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="/app">🎧 صوت کلاسمو بفرستم</a>
+      <a class="btn btn-ghost" href="#how">چطور کار می‌کنه؟</a>
+    </div>
+    <p class="hero-note">در مرورگر، مینی‌اپ تلگرام، و مینی‌اپ بله</p>
+  </div>
+
+  <div class="wrap showcase">
+    <div class="window">
+      <div class="window-bar">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="window-title">حقوق مدنی ۳ — جلسهٔ اول · ۹۴ دقیقه</span>
+      </div>
+      <div class="window-body">
+        <div class="msg">
+          <div class="msg-head">📋 کلاس چه خبر بود</div>
+          <div class="bubble">
+            استاد بعد از معرفی سرفصل‌ها، وارد <b>عقد بیع</b> شد و بیشتر وقت کلاس روی
+            شرایط اساسی صحت معامله گذشت. آخر کلاس هم تکلیف هفتهٔ آینده را داد.
+          </div>
+        </div>
+        <div class="msg">
+          <div class="msg-head">⭐ نکتهٔ امتحانی — با عین حرف استاد</div>
+          <div class="bubble">
+            <span class="ts">۳۱:۰۴</span>
+            <div class="quote">«این چهار شرط رو حتماً یادداشت کنید، تو امتحان ازش سؤال میاد.»</div>
+            شرایط اساسی صحت معامله طبق مادهٔ ۱۹۰ قانون مدنی.
+          </div>
+        </div>
+        <div class="msg">
+          <div class="msg-head">📕 جزوهٔ کامل</div>
+          <div class="bubble">
+            <b>جزوه — حقوق مدنی ۳، جلسهٔ اول.pdf</b>
+            <div class="dim" style="margin-top:6px">
+              مرتب، قابل چاپ، با نکته‌های امتحانی رنگ‌شده سر جای خودشان
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="how">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>چطور کار می‌کنه</h2>
+      <p>چهار مرحله، از فایل صوتی تا جزوهٔ آماده</p>
+    </div>
+    <div class="steps">
+      <article class="card step">
+        <div class="step-n">۱</div>
+        <h3>می‌شنوم</h3>
+        <p>
+          کل صوت کلمه‌به‌کلمه متن می‌شود، با مهر زمانی روی هر جمله.
+          حرف استاد از حرف دانشجو جدا می‌ماند.
+        </p>
+      </article>
+      <article class="card step">
+        <div class="step-n">۲</div>
+        <h3>تمیز می‌کنم</h3>
+        <p>
+          اسم فرمول‌ها، اصطلاح‌های تخصصی و عددها اصلاح می‌شوند. هرچه از
+          جلسه‌های قبلی درس خودت یاد گرفته‌ام اینجا به کار می‌آید.
+        </p>
+      </article>
+      <article class="card step">
+        <div class="step-n">۳</div>
+        <h3>درمی‌آورم</h3>
+        <p>
+          خلاصهٔ جلسه، نکته‌های امتحانی با عین جملهٔ استاد، تکلیف‌ها و
+          مهلت‌ها، کوییز و حضور و غیاب، و بخش‌بندی زمانی کلاس.
+        </p>
+      </article>
+      <article class="card step">
+        <div class="step-n">۴</div>
+        <h3>می‌نویسم</h3>
+        <p>
+          یک جزوهٔ کامل PDF، مرتب و قابل چاپ — فقط محتوای درس، با
+          نکته‌های امتحانی رنگ‌شده سر جای مبحث خودشان.
+        </p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="what" style="background:var(--bg-soft)">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>چی تحویل می‌گیری</h2>
+      <p>نه یک خلاصهٔ کلی — جواب دقیق سؤال‌هایی که بعد از هر کلاس داری</p>
+    </div>
+    <div class="feat">
+      <article class="card">
+        <div class="ico">⭐</div>
+        <h3>نکته‌های امتحانی</h3>
+        <p>هرچه استاد گفت «در امتحان می‌آید» یا رویش تأکید کرد — با عین جمله‌اش و زمان دقیقش در صوت.</p>
+      </article>
+      <article class="card">
+        <div class="ico">📝</div>
+        <h3>تکلیف و مهلت</h3>
+        <p>تکلیف‌ها با جزئیات و ددلاین، کوییز، حضور و غیاب، و کلاس جبرانی. جواب قطعی، نه «چیزی پیدا نکردم».</p>
+      </article>
+      <article class="card">
+        <div class="ico">🕐</div>
+        <h3>بخش‌بندی زمانی</h3>
+        <p>کجا درس داد، کجا حاشیه رفت، کجا سؤال و جواب بود. روی زمان که بزنی، صوت از همان‌جا پخش می‌شود.</p>
+      </article>
+      <article class="card">
+        <div class="ico">📕</div>
+        <h3>جزوهٔ PDF</h3>
+        <p>جزوهٔ کامل و قابل چاپ، بدون حاشیه و حضور و غیاب — فقط آنچه باید بخوانی.</p>
+      </article>
+      <article class="card">
+        <div class="ico">🔍</div>
+        <h3>پیش‌نیازهای فرض‌شده</h3>
+        <p>آنچه استاد فرض کرده بلدی و توضیح نداده — تا بدانی قبل از جلسهٔ بعد چه باید مرور کنی.</p>
+      </article>
+      <article class="card">
+        <div class="ico">✅</div>
+        <h3>ذکر منبع، واقعی</h3>
+        <p>هر نقل‌قول در خودِ صوت جست‌وجو و تأیید می‌شود. اگر پیدا نشود، آن نکته حذف می‌شود — نه اینکه حدس زده شود.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="price">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>قیمت</h2>
+      <p>هر دقیقه صوت ۷ سکه. اولین صوتت رایگان پیاده می‌شود.</p>
+    </div>
+    <div class="prices" id="prices">
+      <!-- از /api/packages پر می‌شود؛ این نسخه‌ها اگر جاوااسکریپت نبود می‌مانند -->
+      <article class="card price">
+        <h3>یک کلاس</h3>
+        <div class="price-coins num">۷۰۰</div>
+        <div class="price-toman num">۷۹٬۰۰۰ تومان</div>
+        <p class="price-worth">۱ کلاس ۹۰ دقیقه‌ای</p>
+        <a class="btn btn-ghost btn-block" href="/app">انتخاب</a>
+      </article>
+      <article class="card price featured">
+        <span class="pill price-tag">محبوب</span>
+        <h3>چند جلسه</h3>
+        <div class="price-coins num">۲٬۰۰۰</div>
+        <div class="price-toman num">۱۹۹٬۰۰۰ تومان</div>
+        <p class="price-worth">۳ کلاس ۹۰ دقیقه‌ای</p>
+        <a class="btn btn-primary btn-block" href="/app">انتخاب</a>
+      </article>
+      <article class="card price">
+        <h3>یک ترم</h3>
+        <div class="price-coins num">۵٬۰۰۰</div>
+        <div class="price-toman num">۴۴۹٬۰۰۰ تومان</div>
+        <p class="price-worth">۷ کلاس ۹۰ دقیقه‌ای</p>
+        <a class="btn btn-ghost btn-block" href="/app">انتخاب</a>
+      </article>
+    </div>
+
+    <div class="split-note">
+      💰 <b>لازم نیست خرج کلاس رو تنها بدی.</b>
+      بعد از هر تحلیل یک دکمه می‌بینی که جزوه را برای بچه‌های کلاس می‌فرستد.
+      هرکس برش دارد سهم همه کمتر می‌شود و مابه‌التفاوتش به حسابت برمی‌گردد —
+      با ۱۰ نفر، <b>نصف</b> سکه‌هایت برمی‌گردد.
+      از آن طرف هم همین‌طور: اگر هم‌کلاسی‌ات جلسه‌ای را به اشتراک گذاشته باشد،
+      تو فقط سهم خودت را می‌دهی نه هزینهٔ کل جلسه را.
+    </div>
+  </div>
+</section>
+
+<section style="background:var(--bg-soft)">
+  <div class="wrap faq">
+    <div class="section-head">
+      <h2>سؤال‌های پرتکرار</h2>
+    </div>
+
+    <details open>
+      <summary>چقدرش رایگان است؟</summary>
+      <p>
+        اولین صوت هر کسی رایگان <b>پیاده</b> می‌شود — تا ۱۵ دقیقه. یعنی مرحلهٔ
+        اول از آن چهار مرحله، و کارش این است که با گوش خودت بسنجی چقدر دقیق
+        می‌شنوم: اصطلاح‌های تخصصی درس خودت، لهجهٔ استادت، کیفیت ضبط گوشی‌ات.
+        سه مرحلهٔ بعد سکه می‌خواهد، چون هزینهٔ واقعی همان‌جاست.
+      </p>
+    </details>
+
+    <details>
+      <summary>از کجا مطمئن باشم حرف استاد را درست نقل می‌کند؟</summary>
+      <p>
+        هر نکته‌ای که به‌عنوان «حرف استاد» نقل می‌شود، عیناً در صوت جست‌وجو و
+        تأیید می‌شود. اگر جمله در رونوشت پیدا نشود، آن نکته حذف می‌شود نه اینکه
+        حدس زده شود. زمان هر نقل‌قول هم کنارش هست تا خودت گوش بدهی.
+      </p>
+    </details>
+
+    <details>
+      <summary>صوت کلاس من کجا می‌ماند؟</summary>
+      <p>
+        فایل صوتی بعد از مدت کوتاهی خودکار پاک می‌شود و تحلیل و جزوه‌ات
+        می‌ماند. یک نسخه برای بازبینی کیفیت نگه داشته می‌شود. جزئیات کامل در
+        <code>/privacy</code> داخل ربات آمده است.
+      </p>
+    </details>
+
+    <details>
+      <summary>روی تلگرام و بله هم هست؟</summary>
+      <p>
+        بله. همان حساب و همان سکه‌ها در هر سه جا کار می‌کنند: مرورگر، مینی‌اپ
+        تلگرام، و مینی‌اپ بله. اگر با یک شماره وارد شوی، سکه‌ها و جلسه‌هایت
+        همه‌جا یکی است.
+      </p>
+    </details>
+
+    <details>
+      <summary>چه فایلی قبول می‌کند؟</summary>
+      <p>
+        هر فایل صوتی معمولی — ویس، ضبط گوشی، mp3، m4a، ogg. کیفیت ضبط گوشی
+        داخل کلاس برای تشخیص گفتار کافی است.
+      </p>
+    </details>
+  </div>
+</section>
+
+<section class="cta-band">
+  <div class="wrap">
+    <div class="card">
+      <h2>صوت کلاس امروزت رو بفرست</h2>
+      <p>اولین صوتت رایگان پیاده می‌شود. ببین چقدر دقیق می‌شنوم.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="/app">🎧 شروع کن</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-in">
+    <a class="logo" href="/"><span class="logo-mark">📓</span> پاسچی</a>
+    <div class="foot-links">
+      <a href="#how">چطور کار می‌کنه</a>
+      <a href="#price">قیمت</a>
+      <a href="/app">ورود</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+// سایهٔ زیر سربرگ فقط وقتی صفحه اسکرول شده
+const nav = document.getElementById("nav");
+const onScroll = () => nav.classList.toggle("scrolled", window.scrollY > 8);
+onScroll();
+addEventListener("scroll", onScroll, { passive: true });
+
+/*
+ * قیمت‌ها از سرور خوانده می‌شوند تا با `billing/coins.ts` یکی بمانند.
+ * نسخهٔ داخل HTML صرفاً چیزی است که بدون جاوااسکریپت دیده می‌شود؛ اگر
+ * درخواست موفق شد، جای خودش را به دادهٔ واقعی می‌دهد.
+ */
+const fa = (n) => n.toLocaleString("en-US").replace(/[0-9]/g, d => "۰۱۲۳۴۵۶۷۸۹"[d]).replace(/,/g, "٬");
+
+fetch("/api/packages")
+  .then(r => r.ok ? r.json() : Promise.reject())
+  .then(({ packages, coinsPerMinute }) => {
+    if (!Array.isArray(packages) || !packages.length) return;
+    const featured = packages.findIndex(p => p.tag === "محبوب");
+    document.getElementById("prices").innerHTML = packages.map((p, i) => {
+      const classes = Math.floor(p.coins / (90 * coinsPerMinute));
+      const worth = classes >= 1
+        ? `${fa(classes)} کلاس ۹۰ دقیقه‌ای`
+        : `${fa(Math.floor(p.coins / coinsPerMinute))} دقیقه صوت`;
+      const hot = i === featured;
+      return `<article class="card price${hot ? " featured" : ""}">
+        ${p.tag ? `<span class="pill price-tag">${p.tag}</span>` : ""}
+        <h3>${p.tag ?? "پکیج"}</h3>
+        <div class="price-coins num">${fa(p.coins)}</div>
+        <div class="price-toman num">${fa(p.price)} تومان</div>
+        <p class="price-worth">${worth}</p>
+        <a class="btn ${hot ? "btn-primary" : "btn-ghost"} btn-block" href="/app">انتخاب</a>
+      </article>`;
+    }).join("");
+  })
+  .catch(() => {});
+</script>
+</body>
+</html>

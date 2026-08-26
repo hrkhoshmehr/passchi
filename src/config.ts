@@ -114,6 +114,34 @@ const Schema = z.object({
     .transform((v) => (v && v.trim() ? Number(v.trim()) : undefined))
     .pipe(z.number().int().optional()),
 
+  /**
+   * ربات بله — همان محصول، سکوی دیگر.
+   *
+   * بله کلونِ Bot API تلگرام است، پس همان کتابخانه و همان دست‌کدها کار
+   * می‌کنند و فقط `apiRoot` فرق دارد. خالی بگذاری، مسیر بله کامل خاموش است.
+   */
+  BALE_BOT_TOKEN: z.string().optional().default(""),
+  BALE_API_ROOT: z.string().optional().default("https://tapi.bale.ai"),
+
+  // ─── سرور وب ─────────────────────────────────────────────────────────────
+  WEB_ENABLED: bool(true),
+  WEB_PORT: num(3000),
+  /**
+   * آدرس عمومی سایت — برای ساختن لینک مینی‌اپ و دکمه‌های `web_app`.
+   *
+   * تلگرام و بله هر دو **اجبار** می‌کنند که آدرس مینی‌اپ HTTPS باشد؛ با
+   * `http://localhost` دکمه اصلاً ساخته نمی‌شود. برای توسعهٔ محلی یک تونل
+   * (مثل cloudflared یا ngrok) لازم است.
+   */
+  PUBLIC_URL: z.string().optional().default(""),
+
+  // ─── پیامک (ورود با شماره از مرورگر) ─────────────────────────────────────
+  /** نام ارائه‌دهنده، فقط برای لاگ. خالی = پیامک خاموش و کد در پاسخ برمی‌گردد. */
+  SMS_PROVIDER: z.string().optional().default(""),
+  /** آدرس با جاگذاری `{phone}` و `{code}`؛ عوض‌کردن درگاه یعنی عوض‌کردن همین. */
+  SMS_ENDPOINT: z.string().optional().default(""),
+  SMS_METHOD: z.string().optional().default("GET"),
+
   LOG_LEVEL: z.string().optional().default("info"),
   ADMIN_IDS: z
     .string()

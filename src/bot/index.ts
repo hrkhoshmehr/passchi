@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
-import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
+import { Bot, Composer, InlineKeyboard, InputFile, type Context } from "grammy";
 import { config, requireKey } from "../config.js";
 import { logger } from "../util/logger.js";
-import { chunkMessage, escapeHtml } from "../util/text.js";
+import { chunkMessage, escapeHtml, shortId } from "../util/text.js";
 import { fmtClock, fmtDuration, toFaDigits } from "../util/time.js";
 import { extractClip, TimeMap } from "../audio/ffmpeg.js";
 import { runPipeline } from "../pipeline.js";
@@ -30,14 +29,42 @@ import { coinsToSec, fmtCoins, fmtCost, fmtToman } from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio, freeRunUsed,
   getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, markFreeRunUsed,
-  pendingTopups, purgeSession, sessionReport, sessionTimeMap, updateSession, upsertUser,
+  pendingTopups, purgeSession, sessionReport, sessionTimeMap, updateSession,
   type SessionMode,
 } from "../db/index.js";
+import { findIdentity, resolveIdentity } from "../db/identity.js";
+import { platformOf, setBaleApi, uid } from "./identity.js";
 
 export const bot = new Bot(
   requireKey("BOT_TOKEN"),
   config.TELEGRAM_API_ROOT ? { client: { apiRoot: config.TELEGRAM_API_ROOT } } : undefined,
 );
+
+/**
+ * ربات بله — همان دست‌کدها، سرور دیگر.
+ *
+ * بله Bot API تلگرام را کلون کرده، پس grammY بدون تغییر رویش کار می‌کند و
+ * فقط `apiRoot` عوض می‌شود. به همین دلیل هیچ دست‌کدی دو بار نوشته نشده:
+ * `registerHandlers` هر دو نمونه را می‌گیرد.
+ *
+ * `null` یعنی توکنی تنظیم نشده و کل این مسیر خاموش است.
+ */
+export const baleBot = config.BALE_BOT_TOKEN
+  ? new Bot(config.BALE_BOT_TOKEN, {
+      client: { apiRoot: `${config.BALE_API_ROOT.replace(/\/+$/, "")}/bot` },
+    })
+  : null;
+
+setBaleApi(baleBot?.api ?? null);
+
+/**
+ * همهٔ دست‌کدها اینجا ثبت می‌شوند، نه مستقیم روی `bot`.
+ *
+ * `Composer` یک بستهٔ دست‌کدِ مستقل از نمونهٔ ربات است. با آن، تلگرام و بله
+ * **عیناً** یک مجموعه رفتار می‌گیرند و امکان اینکه یکی از دو سکو از دیگری
+ * عقب بماند از بین می‌رود — هزینه‌ای که کپی‌کردن فایل حتماً داشت.
+ */
+const handlers = new Composer<Context>();
 
 // ─── وضعیت گفت‌وگوی کوتاه‌مدت (در حافظه) ────────────────────────────────────
 
@@ -46,7 +73,6 @@ type Pending =
   | { kind: "await_professor"; courseName: string };
 
 const convo = new Map<number, Pending>();
-const shortId = () => randomBytes(6).toString("hex");
 
 function isAdmin(id: number): boolean {
   return config.ADMIN_IDS.includes(id);
@@ -58,15 +84,32 @@ async function reply(ctx: Context, text: string, extra: Record<string, unknown> 
   }
 }
 
+/**
+ * کاربر را از روی `ctx.from` پیدا کن یا بساز.
+ *
+ * از `upsertUser` مستقیم استفاده **نمی‌شود** و به جایش `resolveIdentity` صدا
+ * زده می‌شود: با آمدن بله، `ctx.from.id` دیگر یکتا نیست. شناسه‌های بله از
+ * فضای شمارهٔ خودشان می‌آیند و می‌توانند با شناسهٔ یک کاربر تلگرامی برابر
+ * شوند — یعنی دو نفر روی یک حساب، با سکه‌ها و جلسه‌های مشترک.
+ *
+ * برای تلگرام نتیجه دقیقاً مثل قبل است (شناسهٔ داخلی همان شناسهٔ تلگرام)، پس
+ * کاربران فعلی هیچ تغییری نمی‌بینند.
+ */
 function touchUser(ctx: Context) {
   const u = ctx.from;
   if (!u) return null;
-  const existing = getUser(u.id);
-  const row = upsertUser(u.id, [u.first_name, u.last_name].filter(Boolean).join(" ") || null, u.username ?? null);
+  const platform = platformOf(ctx);
+  const known = findIdentity(platform, String(u.id));
+  const row = resolveIdentity({
+    platform,
+    platformUserId: String(u.id),
+    name: [u.first_name, u.last_name].filter(Boolean).join(" ") || null,
+    username: u.username ?? null,
+  });
   // هدیهٔ شروع فقط یک بار، هنگام اولین دیدار
-  if (!existing && config.FREE_TRIAL_COINS > 0) {
-    grant(u.id, coinsToSec(config.FREE_TRIAL_COINS), "trial");
-    return getUser(u.id);
+  if (!known && config.FREE_TRIAL_COINS > 0) {
+    grant(row.tg_id, coinsToSec(config.FREE_TRIAL_COINS), "trial");
+    return getUser(row.tg_id);
   }
   return row;
 }
@@ -117,7 +160,7 @@ async function topupScreen(ctx: Context): Promise<void> {
  */
 async function historyScreen(ctx: Context): Promise<void> {
   touchUser(ctx);
-  const rows = listSessions(ctx.from!.id, 10);
+  const rows = listSessions(uid(ctx), 10);
   if (rows.length === 0) {
     await reply(ctx, "هنوز جلسه‌ای نفرستادی 📭\n\nیه فایل صوتی یا ویس بفرست تا شروع کنیم 🎧");
     return;
@@ -156,7 +199,7 @@ async function historyScreen(ctx: Context): Promise<void> {
 
 async function coursesScreen(ctx: Context): Promise<void> {
   touchUser(ctx);
-  const courses = listCourses(ctx.from!.id);
+  const courses = listCourses(uid(ctx));
   const kb = new InlineKeyboard().text("➕ درس جدید", "newcourse");
   if (courses.length === 0) {
     await reply(
@@ -193,7 +236,7 @@ async function sendPrompt(ctx: Context): Promise<void> {
 
 // ─── دستورها ────────────────────────────────────────────────────────────────
 
-bot.command("start", async (ctx) => {
+handlers.command("start", async (ctx) => {
   const u = touchUser(ctx);
 
   // لینک دعوت: /start j_<sessionId>
@@ -205,7 +248,7 @@ bot.command("start", async (ctx) => {
       await reply(ctx, "این لینک معتبر نیست یا صاحبش اشتراک‌گذاری را خاموش کرده.");
       return;
     }
-    if (s.tg_id === ctx.from!.id) {
+    if (s.tg_id === uid(ctx)) {
       await reply(ctx, `این جلسهٔ خودت است. از «${BTN.history}» بازش کن.`);
       return;
     }
@@ -273,7 +316,7 @@ function demoAudioIdOf(ctx: Context): number | null {
   return demoAudioMsg.get(ctx.from!.id) ?? null;
 }
 
-bot.callbackQuery(DEMO_CB.recap, async (ctx) => {
+handlers.callbackQuery(DEMO_CB.recap, async (ctx) => {
   await advance(ctx);
   await reply(ctx, DEMO_INTRO);
 
@@ -320,7 +363,7 @@ function demoReplyTo(ctx: Context): Record<string, unknown> {
 }
 
 // الگو پسوند اختیاریِ شناسهٔ صوت را هم می‌پذیرد: `demo:extracted:4213`
-bot.callbackQuery(new RegExp(String.raw`^${DEMO_CB.extracted}(?::\d+)?$`), async (ctx) => {
+handlers.callbackQuery(new RegExp(String.raw`^${DEMO_CB.extracted}(?::\d+)?$`), async (ctx) => {
   await advance(ctx);
   const audioId = demoAudioIdOf(ctx);
   await reply(ctx, S.extractedMessage(SAMPLE_REPORT), {
@@ -332,7 +375,7 @@ bot.callbackQuery(new RegExp(String.raw`^${DEMO_CB.extracted}(?::\d+)?$`), async
   });
 });
 
-bot.callbackQuery(new RegExp(String.raw`^${DEMO_CB.timeline}(?::\d+)?$`), async (ctx) => {
+handlers.callbackQuery(new RegExp(String.raw`^${DEMO_CB.timeline}(?::\d+)?$`), async (ctx) => {
   await advance(ctx);
   // زمان‌ها فقط وقتی لینک می‌شوند که پیام واقعاً ریپلایِ صوت باشد.
   const audioId = demoAudioIdOf(ctx);
@@ -342,7 +385,7 @@ bot.callbackQuery(new RegExp(String.raw`^${DEMO_CB.timeline}(?::\d+)?$`), async 
   });
 });
 
-bot.callbackQuery(DEMO_CB.outro, async (ctx) => {
+handlers.callbackQuery(DEMO_CB.outro, async (ctx) => {
   await advance(ctx);
 
   // جزوه و رونوشتِ همان جلسهٔ نمونه — دو تکهٔ آخرِ خروجی واقعی.
@@ -364,24 +407,24 @@ bot.callbackQuery(DEMO_CB.outro, async (ctx) => {
   demoAudioMsg.delete(ctx.from.id);
 });
 
-bot.command("help", (ctx) => reply(ctx, S.HELP, { reply_markup: mainKeyboard }));
-bot.command("menu", (ctx) => ctx.reply("بفرما 👇", { reply_markup: mainKeyboard }));
-bot.command("credit", (ctx) => accountScreen(ctx));
-bot.command("buy", (ctx) => topupScreen(ctx));
+handlers.command("help", (ctx) => reply(ctx, S.HELP, { reply_markup: mainKeyboard }));
+handlers.command("menu", (ctx) => ctx.reply("بفرما 👇", { reply_markup: mainKeyboard }));
+handlers.command("credit", (ctx) => accountScreen(ctx));
+handlers.command("buy", (ctx) => topupScreen(ctx));
 
-bot.command("course", async (ctx) => {
+handlers.command("course", async (ctx) => {
   touchUser(ctx);
-  convo.set(ctx.from!.id, { kind: "await_course_name" });
+  convo.set(uid(ctx), { kind: "await_course_name" });
   await reply(
     ctx,
     "اسم درس چیه؟\n\n<i>مثلاً: ریاضی مهندسی</i>",
   );
 });
 
-bot.command("courses", (ctx) => coursesScreen(ctx));
-bot.command("history", (ctx) => historyScreen(ctx));
+handlers.command("courses", (ctx) => coursesScreen(ctx));
+handlers.command("history", (ctx) => historyScreen(ctx));
 
-bot.command("cancel", async (ctx) => {
+handlers.command("cancel", async (ctx) => {
   const id = ctx.from!.id;
   const rows = listSessions(id, 5).filter((s) => !["done", "error", "cancelled"].includes(s.status));
   let done = false;
@@ -390,7 +433,7 @@ bot.command("cancel", async (ctx) => {
   await reply(ctx, done ? "لغو شد ✅" : "کاری در جریان نیست.");
 });
 
-bot.command("grant", async (ctx) => {
+handlers.command("grant", async (ctx) => {
   if (!isAdmin(ctx.from!.id)) return;
   const [, target, minutes] = (ctx.match as string | undefined)?.split(/\s+/) ?? [];
   const t = Number(target);
@@ -404,7 +447,7 @@ bot.command("grant", async (ctx) => {
   await reply(ctx, `${fmtCost(sec)} به ${toFaDigits(t)} اضافه شد.`);
 });
 
-bot.command("privacy", (ctx) => reply(ctx, S.PRIVACY));
+handlers.command("privacy", (ctx) => reply(ctx, S.PRIVACY));
 
 /**
  * حذف داده به‌خواستِ کاربر.
@@ -414,7 +457,7 @@ bot.command("privacy", (ctx) => reply(ctx, S.PRIVACY));
  * جلسه‌ای که اشتراکی شده استثناست: پاک‌کردنش دسترسی کسانی را که بابتش
  * پرداخت کرده‌اند از بین می‌برد، پس فقط اشتراک‌گذاری‌اش خاموش می‌شود.
  */
-bot.command("forget", async (ctx) => {
+handlers.command("forget", async (ctx) => {
   const id = ctx.from!.id;
   const arg = (ctx.match as string | undefined)?.trim() ?? "";
 
@@ -454,7 +497,7 @@ bot.command("forget", async (ctx) => {
   );
 });
 
-bot.command("stats", async (ctx) => {
+handlers.command("stats", async (ctx) => {
   if (!isAdmin(ctx.from!.id)) return;
   const q = queueDepth();
   await reply(
@@ -465,7 +508,7 @@ bot.command("stats", async (ctx) => {
 });
 
 /** فهرست شارژهای منتظر تأیید — برای وقتی که پیامِ اعلانِ ادمین گم شده باشد. */
-bot.command("pending", async (ctx) => {
+handlers.command("pending", async (ctx) => {
   if (!isAdmin(ctx.from!.id)) return;
   const rows = pendingTopups(20);
   if (rows.length === 0) {
@@ -488,7 +531,7 @@ bot.command("pending", async (ctx) => {
 
 // ─── پیام متنی: اول منو، بعد ادامهٔ گفت‌وگو ─────────────────────────────────
 
-bot.on("message:text", async (ctx) => {
+handlers.on("message:text", async (ctx) => {
   const id = ctx.from.id;
   const text = ctx.message.text.trim();
   if (text.startsWith("/")) return;
@@ -508,6 +551,19 @@ bot.on("message:text", async (ctx) => {
     if (action === "account") return void (await accountScreen(ctx));
     if (action === "courses") return void (await coursesScreen(ctx));
     if (action === "how") return void (await reply(ctx, HOW_IT_WORKS));
+    /**
+     * دکمهٔ مینی‌اپ خودش پنجره را باز می‌کند و اصلاً متنی نمی‌فرستد، پس
+     * عملاً به اینجا نمی‌رسد. صریح نوشته شده تا اگر روزی رسید (کلاینت
+     * قدیمی، یا کاربری که برچسب را دستی تایپ کند) جواب «پشتیبانی» نگیرد.
+     */
+    if (action === "app") {
+      return void (await reply(
+        ctx,
+        config.PUBLIC_URL
+          ? `اپ را از دکمهٔ «${BTN.app}» باز کن، یا از مرورگر: ${config.PUBLIC_URL}`
+          : "فعلاً نسخهٔ تحت وب فعال نیست. همین‌جا صوتت را بفرست 🎧",
+      ));
+    }
     return void (await reply(ctx, supportMessage(), { reply_markup: supportKeyboard() }));
   }
 
@@ -544,7 +600,7 @@ bot.on("message:text", async (ctx) => {
 // پیش از هندلر صوت می‌آید و اگر عکس را مصرف نکند با next() رد می‌کند، تا
 // سندِ صوتی همچنان به مسیر اصلی برسد.
 
-bot.on(["message:photo", "message:document"], async (ctx, next) => {
+handlers.on(["message:photo", "message:document"], async (ctx, next) => {
   const doc = ctx.message?.document;
   const fileId =
     ctx.message?.photo?.at(-1)?.file_id ?? (doc?.mime_type?.startsWith("image/") ? doc.file_id : undefined);
@@ -562,7 +618,7 @@ bot.on(["message:photo", "message:document"], async (ctx, next) => {
 
 // ─── دریافت صوت ─────────────────────────────────────────────────────────────
 
-bot.on(["message:audio", "message:voice", "message:document", "message:video_note"], async (ctx) => {
+handlers.on(["message:audio", "message:voice", "message:document", "message:video_note"], async (ctx) => {
   const u = touchUser(ctx);
   if (!u) return;
   const id = ctx.from!.id;
@@ -719,18 +775,18 @@ bot.on(["message:audio", "message:voice", "message:document", "message:video_not
 
 // ─── کلیک‌ها ────────────────────────────────────────────────────────────────
 
-bot.callbackQuery("topup", async (ctx) => {
+handlers.callbackQuery("topup", async (ctx) => {
   await ctx.answerCallbackQuery();
   await topupScreen(ctx);
 });
 
-bot.callbackQuery("newcourse", async (ctx) => {
+handlers.callbackQuery("newcourse", async (ctx) => {
   await ctx.answerCallbackQuery();
   convo.set(ctx.from.id, { kind: "await_course_name" });
   await reply(ctx, "اسم درس چیه؟\n\n<i>مثلاً: ریاضی مهندسی</i>");
 });
 
-bot.callbackQuery(/^buy:(\w+)$/, async (ctx) => {
+handlers.callbackQuery(/^buy:(\w+)$/, async (ctx) => {
   touchUser(ctx);
   const out = beginTopup(ctx.from.id, ctx.match![1]!);
   if (!out) {
@@ -741,7 +797,7 @@ bot.callbackQuery(/^buy:(\w+)$/, async (ctx) => {
   await reply(ctx, out.text, { reply_markup: out.keyboard });
 });
 
-bot.callbackQuery(/^bcancel:([a-f0-9]+)$/, async (ctx) => {
+handlers.callbackQuery(/^bcancel:([a-f0-9]+)$/, async (ctx) => {
   const ok = cancelTopup(ctx.match![1]!, ctx.from.id);
   await ctx.answerCallbackQuery({ text: ok ? "سفارش لغو شد." : "این سفارش دیگر باز نیست." });
   if (ok) await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
@@ -753,7 +809,7 @@ bot.callbackQuery(/^bcancel:([a-f0-9]+)$/, async (ctx) => {
  * دکمه‌ها پس از تصمیم برداشته می‌شوند، چون همان پیام برای *همهٔ* ادمین‌ها
  * فرستاده شده و بدون این کار دومی روی سفارشِ بسته کلیک می‌کند.
  */
-bot.callbackQuery(/^(tok|trej):([a-f0-9]+)$/, async (ctx) => {
+handlers.callbackQuery(/^(tok|trej):([a-f0-9]+)$/, async (ctx) => {
   if (!isAdmin(ctx.from.id)) {
     await ctx.answerCallbackQuery({ text: "این دکمه مال تو نیست." });
     return;
@@ -772,7 +828,7 @@ bot.callbackQuery(/^(tok|trej):([a-f0-9]+)$/, async (ctx) => {
  * همان فایل کامل است — نه نسخهٔ بریدهٔ ۳۰ دقیقه‌ای — پس هزینه‌اش هم بر پایهٔ
  * کل جلسه حساب می‌شود.
  */
-bot.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
+handlers.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
   const sessionId = ctx.match![1]!;
   const s = getSession(sessionId);
   const u = touchUser(ctx);
@@ -814,7 +870,7 @@ bot.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
   });
 });
 
-bot.callbackQuery(/^txt:([a-f0-9]+)$/, async (ctx) => {
+handlers.callbackQuery(/^txt:([a-f0-9]+)$/, async (ctx) => {
   const s = getSession(ctx.match![1]!);
   await ctx.answerCallbackQuery();
   if (!s?.transcript_txt) {
@@ -826,7 +882,7 @@ bot.callbackQuery(/^txt:([a-f0-9]+)$/, async (ctx) => {
   });
 });
 
-bot.callbackQuery(/^clip:([a-f0-9]+):(\d+)$/, async (ctx) => {
+handlers.callbackQuery(/^clip:([a-f0-9]+):(\d+)$/, async (ctx) => {
   const [, sessionId, atMsRaw] = ctx.match!;
   const s = getSession(sessionId!);
   if (!s || !s.original_file) {
@@ -850,7 +906,7 @@ bot.callbackQuery(/^clip:([a-f0-9]+):(\d+)$/, async (ctx) => {
   }
 });
 
-bot.callbackQuery(/^pdf:([a-f0-9]+)$/, async (ctx) => {
+handlers.callbackQuery(/^pdf:([a-f0-9]+)$/, async (ctx) => {
   const s = getSession(ctx.match![1]!);
   await ctx.answerCallbackQuery();
   if (!s?.pdf_path) {
@@ -862,7 +918,7 @@ bot.callbackQuery(/^pdf:([a-f0-9]+)$/, async (ctx) => {
   });
 });
 
-bot.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
+handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
   const s = getSession(ctx.match![1]!);
   await ctx.answerCallbackQuery();
   const r = s ? sessionReport(s) : null;
@@ -1084,7 +1140,7 @@ async function sendResults(
     caption: "📄 رونوشت کامل با مهر زمانی",
   });
 
-  const u = getUser(ctx.from!.id);
+  const u = getUser(uid(ctx));
   const cost = Math.round(out.originalDurationMs / 1000);
   if (u) {
     await ctx.reply(S.settlementMessage(cost, u.credit_sec), {
@@ -1096,7 +1152,7 @@ async function sendResults(
 
 // ─── اشتراک‌گذاری ───────────────────────────────────────────────────────────
 
-bot.callbackQuery(/^son:([a-f0-9]+)$/, async (ctx) => {
+handlers.callbackQuery(/^son:([a-f0-9]+)$/, async (ctx) => {
   const sessionId = ctx.match![1]!;
   const s = getSession(sessionId);
   if (!s || s.tg_id !== ctx.from.id) {
@@ -1108,7 +1164,7 @@ bot.callbackQuery(/^son:([a-f0-9]+)$/, async (ctx) => {
   await sendInvitation(ctx, sessionId);
 });
 
-bot.callbackQuery(/^slink:([a-f0-9]+)$/, async (ctx) => {
+handlers.callbackQuery(/^slink:([a-f0-9]+)$/, async (ctx) => {
   const sessionId = ctx.match![1]!;
   const s = getSession(sessionId);
   if (!s || s.tg_id !== ctx.from.id) {
@@ -1135,7 +1191,7 @@ async function sendInvitation(ctx: Context, sessionId: string): Promise<void> {
   );
 }
 
-bot.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {
+handlers.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {
   const sessionId = ctx.match![1]!;
   await ctx.answerCallbackQuery({ text: "در حال آماده‌سازی…" });
   await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
@@ -1148,14 +1204,14 @@ bot.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {
   }
 });
 
-bot.callbackQuery(/^jno:([a-f0-9]+)$/, async (ctx) => {
+handlers.callbackQuery(/^jno:([a-f0-9]+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText("باشد، منصرف شدی. هر وقت خواستی دوباره روی لینک بزن.");
 });
 
-bot.command("shared", async (ctx) => {
+handlers.command("shared", async (ctx) => {
   touchUser(ctx);
-  const ids = accessibleSessions(ctx.from!.id, 15);
+  const ids = accessibleSessions(uid(ctx), 15);
   if (ids.length === 0) {
     await reply(ctx, "هنوز در هیچ جلسهٔ اشتراکی نیستی.");
     return;
@@ -1165,7 +1221,7 @@ bot.command("shared", async (ctx) => {
     const s = getSession(id);
     if (!s) continue;
     const st = shareStatus(id);
-    const mine = s.tg_id === ctx.from!.id ? "فرستادهٔ خودت" : "پیوسته‌ای";
+    const mine = s.tg_id === uid(ctx) ? "فرستادهٔ خودت" : "پیوسته‌ای";
     lines.push(
       `• <b>${escapeHtml(s.title ?? "بدون عنوان")}</b> — ${mine}\n` +
         `  ${toFaDigits(st?.memberCount ?? 1)} نفر · سهم هرکس ${fmtCost(st?.currentShareSec ?? 0)}`,
@@ -1183,8 +1239,19 @@ export async function cleanupOldAudio(): Promise<void> {
   }
 }
 
-bot.catch((err) => {
-  logger.error({ err: String(err.error), update: err.ctx.update.update_id }, "bot error");
-});
+/**
+ * دست‌کدها روی هر دو ربات سوار می‌شوند.
+ *
+ * بعد از تعریف شدنشان انجام می‌شود، نه بالای فایل: `Composer` در لحظهٔ
+ * `use` محتوایش را می‌گیرد.
+ */
+bot.use(handlers);
+baleBot?.use(handlers);
+
+const onError = (label: string) => (err: { error: unknown; ctx: { update: { update_id: number } } }) => {
+  logger.error({ err: String(err.error), update: err.ctx.update.update_id, bot: label }, "bot error");
+};
+bot.catch(onError("telegram"));
+baleBot?.catch(onError("bale"));
 
 export { TimeMap, sessionTimeMap };
