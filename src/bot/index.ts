@@ -25,7 +25,7 @@ import {
   archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption,
 } from "./archive.js";
 import { beginTopup, cancelTopup, decide, paymentConfigured, receiveReceipt } from "./topup.js";
-import { coinsToSec, fmtCoins, fmtCost, fmtToman } from "../billing/coins.js";
+import { coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman } from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio, freeRunUsed,
   getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, markFreeRunUsed,
@@ -414,7 +414,7 @@ handlers.command("buy", (ctx) => topupScreen(ctx));
 
 handlers.command("course", async (ctx) => {
   touchUser(ctx);
-  convo.set(uid(ctx), { kind: "await_course_name" });
+  convo.set(ctx.from!.id, { kind: "await_course_name" });
   await reply(
     ctx,
     "اسم درس چیه؟\n\n<i>مثلاً: ریاضی مهندسی</i>",
@@ -425,11 +425,11 @@ handlers.command("courses", (ctx) => coursesScreen(ctx));
 handlers.command("history", (ctx) => historyScreen(ctx));
 
 handlers.command("cancel", async (ctx) => {
-  const id = ctx.from!.id;
+  const id = uid(ctx);
   const rows = listSessions(id, 5).filter((s) => !["done", "error", "cancelled"].includes(s.status));
   let done = false;
   for (const s of rows) if (cancelJob(s.id)) { updateSession(s.id, { status: "cancelled" }); done = true; }
-  convo.delete(id);
+  convo.delete(ctx.from!.id);
   await reply(ctx, done ? "لغو شد ✅" : "کاری در جریان نیست.");
 });
 
@@ -458,7 +458,7 @@ handlers.command("privacy", (ctx) => reply(ctx, S.PRIVACY));
  * پرداخت کرده‌اند از بین می‌برد، پس فقط اشتراک‌گذاری‌اش خاموش می‌شود.
  */
 handlers.command("forget", async (ctx) => {
-  const id = ctx.from!.id;
+  const id = uid(ctx);
   const arg = (ctx.match as string | undefined)?.trim() ?? "";
 
   if (arg !== "همه" && arg !== "all") {
@@ -755,11 +755,51 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
     }),
   );
 
+  /**
+   * صوتِ بلندترِ از سقف رایگان: انتخاب را **پیش از** مصرف سهمیه بپرس.
+   *
+   * سهمیهٔ رایگان یک بار در عمر هر کاربر است. اگر کسی اولین کارش یک کلاس
+   * ۹۰ دقیقه‌ای باشد و بی‌سؤال جلو برویم، سهمیه‌اش را خرج می‌کند و در عوض
+   * رونوشتِ ۱۵ دقیقهٔ اولش را می‌گیرد — چیزی که نه کل کلاس است نه آن
+   * تحلیلی که در تور نمونه دیده. کاربر این را «رایگانِ ناقص» می‌فهمد، و
+   * حق دارد.
+   *
+   * پس دو راه جلویش گذاشته می‌شود و خودش می‌گزیند. هیچ‌کدام پیش‌فرض نیست:
+   * انتخاب سهمیه برای کسی که می‌خواهد اول دقت را بسنجد درست است، و تحلیل
+   * کامل برای کسی که سکه دارد و کل جلسه را می‌خواهد.
+   */
+  const overFreeLimit = freeRun && durationSec * 1000 > freeLimitMs();
+  if (overFreeLimit) {
+    pendingChoice.set(id, { sessionId, audioFile, courseId, durationSec });
+    const kb = new InlineKeyboard()
+      .text(`📄 رونوشت رایگان ${fmtDuration(freeLimitMs())} اول`, `fc:free:${sessionId}`)
+      .row();
+    if (u.credit_sec >= durationSec) {
+      kb.text("✨ تحلیل کامل کل جلسه", `fc:full:${sessionId}`).row();
+    } else {
+      kb.text("🪙 شارژ برای تحلیل کامل", "topup").row();
+    }
+    await reply(
+      ctx,
+      `🎧 <b>این صوت ${fmtDuration(durationSec * 1000)} است.</b>\n\n` +
+        `سهمیهٔ رایگانت <b>یک بار</b> است و تا ${fmtDuration(freeLimitMs())} صوت را ` +
+        `فقط <b>پیاده</b> می‌کند — یعنی رونوشتِ همان ابتدای کلاس، بدون خلاصه و ` +
+        `نکته‌های امتحانی و جزوه.\n\n` +
+        `برای این جلسه <b>${fmtCost(durationSec)}</b> لازم است` +
+        (u.credit_sec >= durationSec
+          ? ` و موجودی‌ات کافی است (${fmtBalance(u.credit_sec)}).`
+          : ` و موجودی‌ات ${fmtBalance(u.credit_sec)} است.`) +
+        `\n\n<i>کدام را می‌خواهی؟ سهمیهٔ رایگان تا وقتی خرجش نکنی سر جایش می‌ماند.</i>`,
+      { reply_markup: kb },
+    );
+    return;
+  }
+
   if (freeRun) {
     await reply(
       ctx,
       `🎁 <b>این یکی مهمون منی</b>\n\n` +
-        `تا ${fmtDuration(freeLimitMs())} از این صوتو رایگان <b>پیاده</b> می‌کنم تا ببینی چقدر دقیق می‌شنوم.\n` +
+        `این صوتو رایگان <b>پیاده</b> می‌کنم تا ببینی چقدر دقیق می‌شنوم.\n` +
         `<i>خلاصه و نکته‌های امتحانی و جزوه — همونایی که نمونه‌شو دیدی — سکه می‌خواد.</i>`,
     );
   }
@@ -770,6 +810,57 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
     courseId,
     declaredDurationSec: durationSec,
     mode: freeRun ? "free_trial" : "full",
+  });
+});
+
+/**
+ * جلسه‌هایی که منتظر انتخاب کاربرند (رایگان یا کامل).
+ *
+ * در حافظه می‌ماند نه در پایگاه‌داده: عمرش چند ثانیه است و اگر ربات
+ * ری‌استارت شود، فایل صوتی هنوز روی دیسک است و کاربر می‌تواند دوباره
+ * بفرستد. سطر `sessions` هم ساخته شده و در حالت `queued` می‌ماند.
+ */
+const pendingChoice = new Map<
+  number,
+  { sessionId: string; audioFile: string; courseId: number | null; durationSec: number }
+>();
+
+handlers.callbackQuery(/^fc:(free|full):([a-f0-9]+)$/, async (ctx) => {
+  const [, kind, sessionId] = ctx.match!;
+  const u = touchUser(ctx);
+  const id = uid(ctx);
+  const job = pendingChoice.get(ctx.from.id);
+
+  if (!u || !job || job.sessionId !== sessionId) {
+    await ctx.answerCallbackQuery({ text: "این انتخاب منقضی شده. صوت را دوباره بفرست." });
+    return;
+  }
+
+  // اگر بین نمایش دکمه و زدنش سهمیه مصرف شده باشد (مثلاً از سکوی دیگر)
+  if (kind === "free" && freeRunUsed(id)) {
+    await ctx.answerCallbackQuery({ text: "سهمیهٔ رایگانت قبلاً استفاده شده." });
+    return;
+  }
+  if (kind === "full" && u.credit_sec < job.durationSec) {
+    await ctx.answerCallbackQuery();
+    await reply(ctx, S.lowBalanceMessage(job.durationSec, u.credit_sec), {
+      reply_markup: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
+    });
+    return;
+  }
+
+  pendingChoice.delete(ctx.from.id);
+  await ctx.answerCallbackQuery({ text: "شروع کردم…" });
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+
+  const mode: SessionMode = kind === "free" ? "free_trial" : "full";
+  updateSession(sessionId, { mode });
+  await startJob(ctx, {
+    sessionId,
+    audioFile: job.audioFile,
+    courseId: job.courseId,
+    declaredDurationSec: job.durationSec,
+    mode,
   });
 });
 

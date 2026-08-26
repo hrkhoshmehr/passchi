@@ -11,6 +11,8 @@ export interface RunResult {
   code: number;
   stdout: string;
   stderr: string;
+  /** سیگنالی که پروسه را کشت — برای assertion فِیل شدن ffmpeg برابر SIGABRT است */
+  signal?: string | null;
 }
 
 /** بعضی بیلدهای ffmpeg (از جمله ffmpeg-static ویندوز) بدون libsoxr کامپایل شده‌اند. */
@@ -45,9 +47,17 @@ export function run(bin: string, args: string[], timeoutMs = 30 * 60_000): Promi
       clearTimeout(timer);
       reject(e);
     });
-    child.on("close", (code) => {
+    /**
+     * سیگنال هم مهم است، نه فقط کد خروج.
+     *
+     * وقتی ffmpeg با assertion می‌میرد (`Assertion ... failed`)، SIGABRT
+     * می‌گیرد و `code` برابر `null` می‌شود. اگر فقط به `code ?? -1` نگاه
+     * کنیم، خطا گرفته می‌شود ولی *دلیلش* در پیام گم می‌شود و لاگ فقط
+     * انبوهی از خط‌های پیشرفتِ ffmpeg را نشان می‌دهد.
+     */
+    child.on("close", (code, signal) => {
       clearTimeout(timer);
-      resolve({ code: code ?? -1, stdout, stderr });
+      resolve({ code: code ?? -1, stdout, stderr, signal: signal ?? null });
     });
   });
 }
@@ -427,6 +437,51 @@ export interface EncodeResult {
   outSizeBytes: number;
 }
 
+function encodeArgs(
+  input: string,
+  output: string,
+  chain: string[],
+  opt: EncodeOptions,
+): string[] {
+  return [
+    "-hide_banner", "-nostdin", "-vn", "-y",
+    "-i", input,
+    "-af", chain.join(","),
+    "-ac", "1",
+    "-ar", String(opt.sampleRate),
+    "-c:a", "libopus",
+    "-b:a", opt.bitrate,
+    "-vbr", "on",
+    "-application", "voip",
+    "-map_metadata", "-1",
+    output,
+  ];
+}
+
+/** خط assertion را از انبوه خط‌های پیشرفت بیرون می‌کشد. */
+function assertionOf(stderr: string): string | null {
+  return /Assertion .* failed at [^\s]+/.exec(stderr)?.[0] ?? null;
+}
+
+/**
+ * پیام خطای خوانا.
+ *
+ * `stderr` ffmpeg برای یک فایل بلند هزاران خط `size=… time=… bitrate=…` دارد
+ * و بریدن ساده‌ی انتهایش، دلیل واقعی را زیر همان زباله‌ها دفن می‌کند — دقیقاً
+ * همان چیزی که یک بار به کاربر نشان داده شد. پس اول دنبال خط assertion
+ * می‌گردیم و خط‌های پیشرفت را دور می‌ریزیم.
+ */
+function encodeError(res: RunResult): Error {
+  const assertion = assertionOf(res.stderr);
+  const meaningful = res.stderr
+    .split(/[\r\n]+/)
+    .filter((l) => l.trim() && !/^\s*(size|frame)=/.test(l))
+    .slice(-6)
+    .join("\n");
+  const why = assertion ?? (meaningful || "بدون جزئیات");
+  return new Error(`ffmpeg encode failed${res.signal ? ` (${res.signal})` : ""}: ${why}`);
+}
+
 export async function encode(
   input: string,
   output: string,
@@ -472,20 +527,35 @@ export async function encode(
   const soxr = await hasSoxr();
   chain.push(`aresample=${opt.sampleRate}${soxr ? ":resampler=soxr" : ""}`);
 
-  const { code, stderr } = await run(FFMPEG, [
-    "-hide_banner", "-nostdin", "-vn", "-y",
-    "-i", input,
-    "-af", chain.join(","),
-    "-ac", "1",
-    "-ar", String(opt.sampleRate),
-    "-c:a", "libopus",
-    "-b:a", opt.bitrate,
-    "-vbr", "on",
-    "-application", "voip",
-    "-map_metadata", "-1",
-    output,
-  ]);
-  if (code !== 0) throw new Error(`ffmpeg encode failed: ${stderr.slice(-800)}`);
+  let res = await run(FFMPEG, encodeArgs(input, output, chain, opt));
+
+  /**
+   * تلاش دوم بدون `loudnorm` — دور زدن یک باگ خودِ ffmpeg.
+   *
+   * ffmpeg 7.0 روی بعضی فایل‌های AAC وسط کار با
+   * `Assertion best_input >= 0 failed at ffmpeg_filter.c` می‌میرد. عاملش
+   * `loudnorm` است: یک فیلتر پویا که وقتی به ناپیوستگی مهر زمانی می‌رسد
+   * برنامه‌ریز فیلتر را به حالتی می‌برد که هیچ ورودی‌ای «بهترین» نیست.
+   * روی یک کلاس واقعی ۸۵ دقیقه‌ای، همیشه حوالی دقیقهٔ ۴۳ رخ می‌داد.
+   *
+   * نرمال‌سازی بلندی **خوب** است ولی ضروری نیست: بدون آن رونویسی کمی
+   * افت می‌کند، در حالی که با شکست، کاربر هیچ چیز نمی‌گیرد. پس اگر پاس
+   * اول با سیگنال مُرد، همان زنجیره بدون loudnorm دوباره اجرا می‌شود.
+   *
+   * فقط روی مرگ با سیگنال یا اثر انگشتِ همین assertion انجام می‌شود، نه هر
+   * خطایی — فایل واقعاً خراب باید همچنان شکست بخورد، نه اینکه دو بار وقت
+   * بگیرد و بعد شکست بخورد.
+   */
+  if ((res.signal || /Assertion .* failed/.test(res.stderr)) && opt.loudnorm !== undefined) {
+    const fallback = chain.filter((f) => !f.startsWith("loudnorm"));
+    logger.warn(
+      { signal: res.signal, hint: assertionOf(res.stderr) },
+      "encode crashed; retrying without loudnorm",
+    );
+    res = await run(FFMPEG, encodeArgs(input, output, fallback, opt));
+  }
+
+  if (res.code !== 0 || res.signal) throw encodeError(res);
 
   const info = await probe(output);
   const stat = await fs.stat(output);
