@@ -6,9 +6,10 @@
  * یک ادعای تبلیغاتی است مثل هر ادعای دیگر. تنها راهِ فهماندن، **نشان‌دادن**
  * است.
  *
- * پس یک جلسهٔ واقعی — همان `example.mp3`، پنجاه دقیقه درس اخلاق اسلامی —
- * یک بار از خط لولهٔ واقعی گذشته و خروجی‌اش اینجا ذخیره شده. کاربر تازه
- * دقیقاً همان چهار پیامی را می‌بیند که اگر خودش صوت می‌فرستاد می‌گرفت.
+ * پس یک جلسهٔ واقعی — `class example.m4a`، جلسهٔ اول «حقوق مدنی ۳» به طول
+ * ۹۴ دقیقه — یک بار از خط لولهٔ واقعی گذشته و خروجی‌اش اینجا ذخیره شده.
+ * کاربر تازه دقیقاً همان چیزی را می‌بیند که اگر خودش صوت می‌فرستاد می‌گرفت،
+ * **به‌علاوهٔ خودِ صوت** تا زمان‌ها واقعاً قابل کلیک باشند.
  *
  * دو قاعده که در پیاده‌سازی رعایت شده‌اند:
  *
@@ -26,7 +27,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { InlineKeyboard } from "grammy";
 import type { AnalysisReport } from "../analysis/schema.js";
-import { toFaDigits } from "../util/time.js";
+import { fmtDuration, toFaDigits } from "../util/time.js";
 import sampleReport from "./demo/sample-report.json" with { type: "json" };
 
 /**
@@ -37,10 +38,28 @@ import sampleReport from "./demo/sample-report.json" with { type: "json" };
  */
 export const SAMPLE_REPORT = sampleReport as unknown as AnalysisReport;
 
-/** مدت صوت نمونه (میلی‌ثانیه) — همان ۵۰ دقیقهٔ `example.mp3`. */
-export const SAMPLE_DURATION_MS = 3_001_025;
+/** مدت صوت نمونه (میلی‌ثانیه) — جلسهٔ ۹۴ دقیقه‌ای «حقوق مدنی ۳». */
+export const SAMPLE_DURATION_MS = 5_621_249;
 
-export const SAMPLE_COURSE = "اخلاق اسلامی";
+export const SAMPLE_COURSE = "حقوق مدنی ۳";
+
+/**
+ * صوت نمونه، با `file_id` تلگرام.
+ *
+ * **بدون این، تور نمونه ناقص است.** تلگرام زمان‌های `MM:SS` را فقط وقتی به
+ * لینک پخش تبدیل می‌کند که پیام، ریپلایِ یک پیام صوتی در *همان چت* باشد. تا
+ * وقتی صوت را نفرستیم، «۰۷:۲۴» فقط یک عدد است و کاربر نمی‌تواند امتحانش کند
+ * — یعنی همان قابلیتی که در پیام خوش‌آمد وعده‌اش را داده‌ایم، در خودِ نمونه
+ * کار نمی‌کند.
+ *
+ * `file_id` به‌جای آپلود: فایل ۹۱ مگابایتی است و تلگرام خودش داردش، پس هر
+ * بار که کاربر تازه‌ای تور را می‌بیند فقط یک ارجاع فرستاده می‌شود.
+ *
+ * ⚠️ `file_id` به هر ربات گره خورده است. اگر توکن ربات عوض شود این مقدار
+ * باطل می‌شود و باید دوباره از یک پیام در همان کانال گرفته شود.
+ */
+export const SAMPLE_AUDIO_FILE_ID =
+  "CQACAgQAAyEFAAMBBP7zpgADB2qOi_w8UrIzw07CzdHn5JNc8hIdAAL7AQACEPGpU3q7HFCSQT2dPQQ";
 
 /**
  * فایل‌های همراه نمونه.
@@ -64,9 +83,10 @@ export const DEMO_CB = {
 } as const;
 
 /** سرصفحهٔ گام اول — تا کاربر بداند این خروجیِ *نمونه* است نه جلسهٔ خودش. */
+// مدت از خودِ صوت می‌آید، نه عددِ دستی — وگرنه با عوض‌شدن نمونه از آن عقب می‌ماند.
 export const DEMO_INTRO =
   "🎬 <b>نمونهٔ یک کلاس واقعی</b>\n" +
-  `<i>یه جلسهٔ ${toFaDigits(50)} دقیقه‌ایِ «${SAMPLE_COURSE}» رو براش پیاده کردم. ` +
+  `<i>یه جلسهٔ «${SAMPLE_COURSE}» به طول ${fmtDuration(SAMPLE_DURATION_MS)} رو براش پیاده کردم. ` +
   "این دقیقاً همون چیزیه که تو هم تحویل می‌گیری 👇</i>";
 
 export function stepKeyboard(next: string, label: string): InlineKeyboard {
@@ -95,7 +115,8 @@ export function outroMessage(freeMinutes: number, supportUsername: string): stri
       "تا با گوش خودت بسنجی چقدر دقیق می‌شنوم. اصطلاح‌های تخصصی درس خودت، لهجهٔ استادت، " +
       "کیفیت ضبط گوشیت؛ اینا رو فقط روی صوت خودت می‌شه فهمید.",
     "",
-    "<i>اون ۱۵ دقیقه فقط متنِ کلاسه. خلاصه و نکته‌های امتحانی و جزوه — همونایی که بالا دیدی — سکه می‌خواد.</i>",
+    `<i>اون ${toFaDigits(freeMinutes)} دقیقه فقط متنِ کلاسه. خلاصه و نکته‌های امتحانی و جزوه — ` +
+      "همونایی که بالا دیدی — سکه می‌خواد.</i>",
   ];
   if (supportUsername) {
     out.push("", `❓ سوالی داشتی، به @${supportUsername} پیام بده.`);

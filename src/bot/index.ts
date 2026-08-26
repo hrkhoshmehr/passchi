@@ -19,8 +19,8 @@ import {
   packagesMessage, supportKeyboard, supportMessage,
 } from "./menu.js";
 import {
-  DEMO_CB, DEMO_INTRO, SAMPLE_COURSE, SAMPLE_DURATION_MS, SAMPLE_PDF_PATH, SAMPLE_REPORT,
-  SAMPLE_TRANSCRIPT_PATH, outroMessage, stepKeyboard,
+  DEMO_CB, DEMO_INTRO, SAMPLE_AUDIO_FILE_ID, SAMPLE_COURSE, SAMPLE_DURATION_MS, SAMPLE_PDF_PATH,
+  SAMPLE_REPORT, SAMPLE_TRANSCRIPT_PATH, outroMessage, stepKeyboard,
 } from "./demo.js";
 import {
   archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption,
@@ -246,9 +246,40 @@ async function advance(ctx: Context): Promise<void> {
   await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
 }
 
+/**
+ * شناسهٔ پیام صوتِ نمونه در چتِ همین کاربر.
+ *
+ * تلگرام زمان‌ها را فقط وقتی لینکِ پخش می‌کند که پیام ریپلایِ یک صوت در
+ * **همان چت** باشد، پس شناسه‌اش تا پایان تور لازم است. در حافظه می‌ماند و
+ * نه در پایگاه‌داده: اگر ربات ری‌استارت شود بدترین اتفاق این است که کاربر
+ * زمان‌های غیرقابل‌کلیک ببیند، و آن ارزش یک ستون تازه را ندارد.
+ */
+const demoAudioMsg = new Map<number, number>();
+
 bot.callbackQuery(DEMO_CB.recap, async (ctx) => {
   await advance(ctx);
   await reply(ctx, DEMO_INTRO);
+
+  /**
+   * اول خودِ صوت.
+   *
+   * بدون این، «۰۷:۲۴» فقط یک عدد است و کاربر نمی‌تواند وعده‌ای را که در
+   * پیام خوش‌آمد داده‌ایم امتحان کند. با `file_id` فرستاده می‌شود پس فایل
+   * ۹۱ مگابایتی دوباره آپلود نمی‌شود.
+   */
+  const sent = await ctx
+    .replyWithAudio(SAMPLE_AUDIO_FILE_ID, {
+      caption:
+        `🎧 <b>صوت همین جلسه</b> — ${escapeHtml(SAMPLE_COURSE)}\n` +
+        "<i>نگهش دار؛ پایین رو زمان‌ها که بزنی، از همون‌جا پخش می‌شه.</i>",
+      parse_mode: "HTML",
+    })
+    .catch((e: unknown) => {
+      logger.warn({ err: String(e) }, "demo audio failed");
+      return null;
+    });
+  if (sent) demoAudioMsg.set(ctx.from.id, sent.message_id);
+
   await reply(
     ctx,
     S.recapMessage({
@@ -263,18 +294,26 @@ bot.callbackQuery(DEMO_CB.recap, async (ctx) => {
   );
 });
 
+/** ریپلای به صوت نمونه، اگر فرستاده شده باشد. */
+function demoReplyTo(ctx: Context): Record<string, unknown> {
+  const id = demoAudioMsg.get(ctx.from!.id);
+  return id ? { reply_parameters: { message_id: id, allow_sending_without_reply: true } } : {};
+}
+
 bot.callbackQuery(DEMO_CB.extracted, async (ctx) => {
   await advance(ctx);
   await reply(ctx, S.extractedMessage(SAMPLE_REPORT), {
+    ...demoReplyTo(ctx),
     reply_markup: stepKeyboard(DEMO_CB.timeline, "بعدی: بخش‌بندی کلاس ←"),
   });
 });
 
 bot.callbackQuery(DEMO_CB.timeline, async (ctx) => {
   await advance(ctx);
-  // نمونه ریپلای هیچ صوتی نیست، پس زمان‌ها اینجا لینک پخش نمی‌شوند و نباید
-  // ادعایش را هم بکنیم — `linkable=false`.
-  await reply(ctx, S.timelineMessage(SAMPLE_REPORT, false), {
+  // زمان‌ها فقط وقتی لینک می‌شوند که صوت نمونه واقعاً فرستاده شده باشد.
+  const linkable = demoAudioMsg.has(ctx.from.id);
+  await reply(ctx, S.timelineMessage(SAMPLE_REPORT, linkable), {
+    ...demoReplyTo(ctx),
     reply_markup: stepKeyboard(DEMO_CB.outro, "بعدی: جزوهٔ این جلسه ←"),
   });
 });
@@ -298,6 +337,7 @@ bot.callbackQuery(DEMO_CB.outro, async (ctx) => {
   await reply(ctx, outroMessage(config.FREE_TRANSCRIPT_MINUTES, config.SUPPORT_USERNAME), {
     reply_markup: supportKeyboard(),
   });
+  demoAudioMsg.delete(ctx.from.id);
 });
 
 bot.command("help", (ctx) => reply(ctx, S.HELP, { reply_markup: mainKeyboard }));
