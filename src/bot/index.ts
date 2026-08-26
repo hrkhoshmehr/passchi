@@ -256,6 +256,23 @@ async function advance(ctx: Context): Promise<void> {
  */
 const demoAudioMsg = new Map<number, number>();
 
+/**
+ * شناسهٔ صوت نمونه را از خودِ دکمه می‌خواند، و اگر نبود از حافظه.
+ *
+ * `callback_data` تا ۶۴ بایت جا دارد و شناسهٔ پیام یک عدد کوچک است، پس
+ * می‌شود آن را در خود دکمه حمل کرد: `demo:timeline:4213`. با این کار
+ * زنجیرهٔ ریپلای به حافظهٔ فرایند وابسته نیست و اگر ربات وسط تور ری‌استارت
+ * شود، زمان‌ها همچنان لینکِ پخش می‌مانند.
+ *
+ * حافظه به‌عنوان مسیر پشتیبان می‌ماند تا دکمه‌های قدیمیِ بدون شناسه — آنهایی
+ * که پیش از این تغییر فرستاده شده‌اند — همچنان کار کنند.
+ */
+function demoAudioIdOf(ctx: Context): number | null {
+  const fromButton = Number((ctx.callbackQuery?.data ?? "").split(":")[2]);
+  if (Number.isFinite(fromButton) && fromButton > 0) return fromButton;
+  return demoAudioMsg.get(ctx.from!.id) ?? null;
+}
+
 bot.callbackQuery(DEMO_CB.recap, async (ctx) => {
   await advance(ctx);
   await reply(ctx, DEMO_INTRO);
@@ -279,6 +296,8 @@ bot.callbackQuery(DEMO_CB.recap, async (ctx) => {
       return null;
     });
   if (sent) demoAudioMsg.set(ctx.from.id, sent.message_id);
+  // شناسهٔ صوت در خودِ دکمه حمل می‌شود تا زنجیرهٔ ریپلای به حافظه وابسته نباشد
+  const audioSuffix = sent ? `:${sent.message_id}` : "";
 
   await reply(
     ctx,
@@ -290,29 +309,34 @@ bot.callbackQuery(DEMO_CB.recap, async (ctx) => {
       savedMs: 0,
       qualityWarnings: [],
     }),
-    { reply_markup: stepKeyboard(DEMO_CB.extracted, "بعدی: چی از کلاس درآوردم ←") },
+    { reply_markup: stepKeyboard(DEMO_CB.extracted + audioSuffix, "بعدی: چی از کلاس درآوردم ←") },
   );
 });
 
 /** ریپلای به صوت نمونه، اگر فرستاده شده باشد. */
 function demoReplyTo(ctx: Context): Record<string, unknown> {
-  const id = demoAudioMsg.get(ctx.from!.id);
+  const id = demoAudioIdOf(ctx);
   return id ? { reply_parameters: { message_id: id, allow_sending_without_reply: true } } : {};
 }
 
-bot.callbackQuery(DEMO_CB.extracted, async (ctx) => {
+// الگو پسوند اختیاریِ شناسهٔ صوت را هم می‌پذیرد: `demo:extracted:4213`
+bot.callbackQuery(new RegExp(String.raw`^${DEMO_CB.extracted}(?::\d+)?$`), async (ctx) => {
   await advance(ctx);
+  const audioId = demoAudioIdOf(ctx);
   await reply(ctx, S.extractedMessage(SAMPLE_REPORT), {
     ...demoReplyTo(ctx),
-    reply_markup: stepKeyboard(DEMO_CB.timeline, "بعدی: بخش‌بندی کلاس ←"),
+    reply_markup: stepKeyboard(
+      DEMO_CB.timeline + (audioId ? `:${audioId}` : ""),
+      "بعدی: بخش‌بندی کلاس ←",
+    ),
   });
 });
 
-bot.callbackQuery(DEMO_CB.timeline, async (ctx) => {
+bot.callbackQuery(new RegExp(String.raw`^${DEMO_CB.timeline}(?::\d+)?$`), async (ctx) => {
   await advance(ctx);
-  // زمان‌ها فقط وقتی لینک می‌شوند که صوت نمونه واقعاً فرستاده شده باشد.
-  const linkable = demoAudioMsg.has(ctx.from.id);
-  await reply(ctx, S.timelineMessage(SAMPLE_REPORT, linkable), {
+  // زمان‌ها فقط وقتی لینک می‌شوند که پیام واقعاً ریپلایِ صوت باشد.
+  const audioId = demoAudioIdOf(ctx);
+  await reply(ctx, S.timelineMessage(SAMPLE_REPORT, audioId !== null), {
     ...demoReplyTo(ctx),
     reply_markup: stepKeyboard(DEMO_CB.outro, "بعدی: جزوهٔ این جلسه ←"),
   });
