@@ -140,13 +140,19 @@ export function recapMessage(i: OverviewInput): string {
     out.push(`▶️ <b>جلسهٔ بعد:</b> ${escapeHtml(r.next_session_hint)}`);
   }
 
-  if (i.qualityWarnings.length || r.droppedCitations > 0) {
-    const notes: string[] = [];
-    if (i.qualityWarnings.length) notes.push(i.qualityWarnings[0]!);
-    if (r.droppedCitations > 0)
-      notes.push(`${toFaDigits(r.droppedCitations)} نکته بدون منبع تأییدشده حذف شد`);
+  /**
+   * فقط هشدار کیفیت ضبط — چون کاربر می‌تواند دفعهٔ بعد کاری برایش بکند.
+   *
+   * شمارِ نکته‌های حذف‌شده (`droppedCitations`) عمداً **نمایش داده نمی‌شود**.
+   * برای ما معیار مهمی است و در لاگ می‌ماند، ولی برای دانشجو فقط یک عدد
+   * نگران‌کننده است دربارهٔ سازوکاری که نمی‌شناسد: «۶ نکته حذف شد» یعنی چه؟
+   * یعنی ربات خراب است؟ یعنی چیزی را از دست داده‌ام؟ هیچ‌کدام — یعنی دروازه
+   * کار خودش را کرده و همان چیزی که می‌ماند قابل اتکاست. حرف‌زدن از آن،
+   * اعتماد را کم می‌کند نه زیاد.
+   */
+  if (i.qualityWarnings.length) {
     out.push("");
-    out.push(`<i>ℹ️ ${escapeHtml(notes.join(" · "))}</i>`);
+    out.push(`<i>ℹ️ ${escapeHtml(i.qualityWarnings[0]!)}</i>`);
   }
 
   return out.join("\n");
