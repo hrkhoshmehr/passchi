@@ -426,12 +426,27 @@ async function serveStatic(res: Res, pathname: string): Promise<void> {
 
   let file = target;
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
-    // مسیرهای اپ (مثل /app/session/xyz) همه به همان صفحه می‌رسند و
-    // مسیریابی سمت کلاینت انجام می‌شود.
+    /**
+     * بازگشت به صفحهٔ اپ فقط برای **مسیر**هاست، نه برای درخواست فایل.
+     *
+     * قاعدهٔ قبلی هر چیزِ پیدانشده را به `index.html` می‌داد تا مسیریابی
+     * سمت کلاینت کار کند (`/app/session/xyz`). ولی همین یعنی
+     * `GET /.env.production` هم پاسخ **۲۰۰** می‌گرفت. محتوایش فقط لندینگ
+     * پیج بود و چیزی لو نمی‌رفت، ولی در لاگ دیدیم که اسکنرها دقیقاً همین
+     * را می‌زنند و «۲۰۰» به آن‌ها می‌گوید اینجا چیزی هست — دعوت‌نامهٔ
+     * تلاش بیشتر.
+     *
+     * پس هر مسیری که پسوند فایل دارد و پیدا نشد، صادقانه ۴۰۴ می‌گیرد.
+     * مسیرهای بی‌پسوند همچنان به صفحهٔ اپ می‌روند.
+     */
+    if (path.extname(rel)) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("not found");
+      return;
+    }
     file = path.join(publicDir, pathname.startsWith("/app") ? "app.html" : "index.html");
   }
   if (!fs.existsSync(file)) {
-    res.writeHead(404).end("not found");
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("not found");
     return;
   }
 

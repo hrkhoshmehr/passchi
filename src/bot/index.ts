@@ -25,11 +25,18 @@ import {
   archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption,
 } from "./archive.js";
 import { beginTopup, cancelTopup, decide, paymentConfigured, receiveReceipt } from "./topup.js";
-import { coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman } from "../billing/coins.js";
+import {
+  DEFAULT_GIFT_COINS, claim as claimGiftCode, claimedMessage, describeUser, giftSummary,
+  mintGift, refusalMessage,
+} from "./gift.js";
+import {
+  coinsAsMinutes, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
+} from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio, freeRunUsed,
   getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, markFreeRunUsed,
-  pendingTopups, purgeSession, sessionReport, sessionTimeMap, updateSession,
+  getGift, listGifts, pendingTopups, purgeSession, revokeGift, sessionReport, sessionTimeMap,
+  updateSession,
   type SessionMode,
 } from "../db/index.js";
 import { findIdentity, resolveIdentity } from "../db/identity.js";
@@ -239,8 +246,33 @@ async function sendPrompt(ctx: Context): Promise<void> {
 handlers.command("start", async (ctx) => {
   const u = touchUser(ctx);
 
-  // لینک دعوت: /start j_<sessionId>
   const payload = (ctx.match as string | undefined)?.trim() ?? "";
+
+  /**
+   * لینک هدیه: /start g_<code>
+   *
+   * پیش از شاخهٔ دعوت و پیش از منوی خوشامد می‌آید، چون گیرنده روی لینکی زده
+   * که به او سکه وعده داده — نشان‌دادن منوی عمومی به‌جای آن، خرابیِ وعده است.
+   *
+   * صفحه‌کلید پایین در هر دو حالت — موفق یا ناموفق — نشانده می‌شود: کسی که
+   * از لینک هدیه آمده ممکن است هرگز `/start` ساده نزند، و بدون این پیام،
+   * رباتی بی‌دکمه تحویل می‌گیرد.
+   */
+  if (payload.startsWith("g_")) {
+    const code = payload.slice(2);
+    const id = uid(ctx);
+    const out = claimGiftCode(code, id);
+    await ctx.reply("سلام 👋", { reply_markup: mainKeyboard });
+    if (!out.ok) {
+      await reply(ctx, refusalMessage(out.reason));
+      return;
+    }
+    await reply(ctx, claimedMessage(out.coins, out.balanceSec));
+    await notifyGiftClaimed(ctx, code, id, out.coins);
+    return;
+  }
+
+  // لینک دعوت: /start j_<sessionId>
   if (payload.startsWith("j_")) {
     const sessionId = payload.slice(2);
     const s = getSession(sessionId);
@@ -446,6 +478,122 @@ handlers.command("grant", async (ctx) => {
   grant(t, sec, "grant");
   await reply(ctx, `${fmtCost(sec)} به ${toFaDigits(t)} اضافه شد.`);
 });
+
+/**
+ * ساخت لینک هدیه.
+ *
+ *   /gift                 →  ${DEFAULT_GIFT_COINS} سکه، یک‌بارمصرف
+ *   /gift 50              →  ۵۰ سکه، یک‌بارمصرف
+ *   /gift 20 x10          →  ۲۰ سکه برای هرکدام از ۱۰ نفر اول
+ *   /gift 20 x10 7d       →  همان، با هفت روز مهلت
+ *   /gift 20 برای رضا     →  یادداشت، تا بعداً معلوم باشد این کد بابت چه بود
+ *
+ * ترتیب آرگومان‌ها آزاد است چون این دستور را ادمین با عجله و از روی موبایل
+ * می‌زند؛ هر چیزی که «xعدد» باشد ظرفیت است، هرچه «عددd» باشد مهلت، اولین
+ * عددِ خالی مقدار سکه، و باقی‌مانده یادداشت.
+ */
+handlers.command("gift", async (ctx) => {
+  if (!isAdmin(ctx.from!.id)) return;
+
+  const parts = ((ctx.match as string | undefined) ?? "").trim().split(/s+/).filter(Boolean);
+  let coins: number | null = null;
+  let maxUses = 1;
+  let days: number | null = null;
+  const words: string[] = [];
+
+  for (const raw of parts) {
+    const tok = raw.replace(/[٬,]/g, "");
+    let m: RegExpMatchArray | null;
+    if ((m = tok.match(/^x(\d+)$/i))) maxUses = Number(m[1]);
+    else if ((m = tok.match(/^(\d+)d$/i))) days = Number(m[1]);
+    else if (coins === null && /^\d+$/.test(tok)) coins = Number(tok);
+    else words.push(raw);
+  }
+
+  coins ??= DEFAULT_GIFT_COINS;
+  if (coins <= 0 || maxUses <= 0) {
+    await reply(ctx, "مقدار سکه و ظرفیت باید بیشتر از صفر باشد.");
+    return;
+  }
+
+  const { gift, link } = await mintGift(ctx.api, {
+    coins,
+    maxUses,
+    note: words.join(" ") || null,
+    createdBy: uid(ctx),
+    days,
+  });
+
+  const lines = [
+    "🎁 <b>لینک هدیه ساخته شد</b>",
+    "",
+    `${fmtCoins(gift.coins)} — ${coinsAsMinutes(gift.coins)}`,
+    gift.max_uses === 1 ? "یک‌بارمصرف" : `برای ${toFaDigits(gift.max_uses)} نفر اول`,
+    days ? `مهلت: ${toFaDigits(days)} روز` : "بدون مهلت",
+    gift.note ? `یادداشت: ${escapeHtml(gift.note)}` : "",
+    "",
+    // لینک داخل <code> است تا با یک لمس کپی شود و تلگرام پیش‌نمایشش را باز نکند.
+    `<code>${link}</code>`,
+    "",
+    `<i>برای باطل‌کردن: </i><code>/ungift ${gift.code}</code>`,
+  ].filter(Boolean);
+
+  await reply(ctx, lines.join("\n"));
+});
+
+/** باطل‌کردن کدی که هنوز خرج نشده — یا خرج شده و جلوی بقیه‌اش باید گرفته شود. */
+handlers.command("ungift", async (ctx) => {
+  if (!isAdmin(ctx.from!.id)) return;
+  const code = ((ctx.match as string | undefined) ?? "").trim().replace(/^g_/, "");
+  if (!code) {
+    await reply(ctx, "استفاده: <code>/ungift &lt;code&gt;</code>");
+    return;
+  }
+  if (!getGift(code)) {
+    await reply(ctx, "چنین کدی نیست.");
+    return;
+  }
+  // سکه‌هایی که برداشته شده‌اند پس گرفته نمی‌شوند: کاربر ممکن است خرجشان کرده
+  // باشد و پس‌گرفتنِ اعتبارِ مصرف‌شده، موجودیِ منفی می‌سازد.
+  await reply(
+    ctx,
+    revokeGift(code)
+      ? `✅ کد <code>${code}</code> باطل شد.\n\n<i>سکه‌هایی که تا الان برداشته شده سر جایش می‌ماند.</i>`
+      : "این کد از قبل باطل بود.",
+  );
+});
+
+/** کدهای اخیر و وضعیتشان. */
+handlers.command("gifts", async (ctx) => {
+  if (!isAdmin(ctx.from!.id)) return;
+  const rows = listGifts(20);
+  if (rows.length === 0) {
+    await reply(ctx, "هنوز کد هدیه‌ای ساخته نشده. با <code>/gift</code> بساز.");
+    return;
+  }
+  await reply(ctx, ["🎁 <b>کدهای هدیه</b>", "", ...rows.map((g) => giftSummary(g))].join("\n"));
+});
+
+/**
+ * خبردادن به ادمین‌ها که هدیه برداشته شد.
+ *
+ * بی‌صدا شکست می‌خورد: گیرنده سکه‌اش را گرفته و هیچ خطایی در مسیر او نباید
+ * از این خبررسانی بیرون بزند.
+ */
+async function notifyGiftClaimed(ctx: Context, code: string, tgId: number, coins: number): Promise<void> {
+  const text = [
+    "🎁 <b>هدیه برداشته شد</b>",
+    "",
+    `کد: <code>${escapeHtml(code)}</code>`,
+    `گیرنده: ${escapeHtml(describeUser(tgId))} — <code>${tgId}</code>`,
+    fmtCoins(coins),
+  ].join("\n");
+  for (const admin of config.ADMIN_IDS) {
+    await ctx.api.sendMessage(admin, text, { parse_mode: "HTML" }).catch((e: unknown) => {
+      logger.warn({ admin, err: String(e) }, "notify gift claim failed");
+    });
+  }
+}
 
 handlers.command("privacy", (ctx) => reply(ctx, S.PRIVACY));
 

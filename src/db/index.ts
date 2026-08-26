@@ -128,6 +128,35 @@ CREATE TABLE IF NOT EXISTS topups (
   decided_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_topups_user ON topups(tg_id, created_at DESC);
+
+-- کد هدیه: ادمین سکه می‌سازد و لینکش را می‌دهد؛ گیرنده با زدن روی لینک
+-- سکه‌ها را برمی‌دارد.
+--
+-- ستون max_uses تفاوت «هدیه به یک نفر» و «کد کلاسی» را می‌سازد و همان یک ستون
+-- هر دو را پوشش می‌دهد: هدیهٔ شخصی یعنی max_uses = 1.
+CREATE TABLE IF NOT EXISTS gifts (
+  code        TEXT PRIMARY KEY,
+  coins       INTEGER NOT NULL,
+  max_uses    INTEGER NOT NULL DEFAULT 1,
+  note        TEXT,
+  created_by  INTEGER NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  -- تاریخ ISO؛ NULL یعنی بی‌انقضا
+  expires_at  TEXT,
+  -- کدی که هنوز خرج نشده را می‌شود باطل کرد
+  revoked     INTEGER NOT NULL DEFAULT 0
+);
+
+-- سطرِ «چه کسی کدام کد را برداشت». کلید مرکب همان چیزی است که جلوی برداشتِ
+-- دوبارهٔ یک کد توسط یک نفر را می‌گیرد — نه یک بررسیِ if در دست‌کد.
+CREATE TABLE IF NOT EXISTS gift_claims (
+  code       TEXT NOT NULL REFERENCES gifts(code) ON DELETE CASCADE,
+  tg_id      INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+  coins      INTEGER NOT NULL,
+  claimed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (code, tg_id)
+);
+CREATE INDEX IF NOT EXISTS idx_claims_user ON gift_claims(tg_id, claimed_at DESC);
 `);
 
 // ─── users ───────────────────────────────────────────────────────────────────
@@ -433,4 +462,109 @@ export function pendingTopups(limit = 20): TopupRow[] {
   return db
     .prepare(`SELECT * FROM topups WHERE status = 'pending' ORDER BY created_at LIMIT ?`)
     .all(limit) as unknown as TopupRow[];
+}
+
+// ─── کدهای هدیه ──────────────────────────────────────────────────────────────
+
+export interface GiftRow {
+  code: string;
+  coins: number;
+  max_uses: number;
+  note: string | null;
+  created_by: number;
+  created_at: string;
+  expires_at: string | null;
+  revoked: number;
+}
+
+export function createGift(opt: {
+  code: string;
+  coins: number;
+  maxUses: number;
+  note?: string | null;
+  createdBy: number;
+  expiresAt?: string | null;
+}): GiftRow {
+  db.prepare(
+    `INSERT INTO gifts (code, coins, max_uses, note, created_by, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(opt.code, opt.coins, opt.maxUses, opt.note ?? null, opt.createdBy, opt.expiresAt ?? null);
+  return getGift(opt.code)!;
+}
+
+export function getGift(code: string): GiftRow | null {
+  return (
+    (db.prepare(`SELECT * FROM gifts WHERE code = ?`).get(code) as unknown as GiftRow | undefined) ??
+    null
+  );
+}
+
+export function giftUses(code: string): number {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM gift_claims WHERE code = ?`)
+    .get(code) as unknown as { n: number };
+  return row.n;
+}
+
+export function giftClaimedBy(code: string, tgId: number): boolean {
+  return Boolean(db.prepare(`SELECT 1 FROM gift_claims WHERE code = ? AND tg_id = ?`).get(code, tgId));
+}
+
+export function revokeGift(code: string): boolean {
+  const g = getGift(code);
+  if (!g || g.revoked) return false;
+  db.prepare(`UPDATE gifts SET revoked = 1 WHERE code = ?`).run(code);
+  return true;
+}
+
+/**
+ * ثبت برداشت — و تنها دروازهٔ واقعیِ «هر کد، هر نفر، یک بار».
+ *
+ * بررسی‌کردن و بعد نوشتن در دو گام، پنجره‌ای باز می‌گذارد که در آن دو کلیکِ
+ * همزمان روی یک لینکِ یک‌بارمصرف هر دو رد می‌شوند. پس شمردن و درج در **یک**
+ * تراکنش انجام می‌شود و کلید مرکبِ جدول، تکرار را غیرممکن می‌کند نه محتمل.
+ *
+ * `false` یعنی این کد برای این کاربر مصرف نشد؛ صدازننده نباید سکه واریز کند.
+ */
+export function claimGift(code: string, tgId: number, coins: number): boolean {
+  db.prepare("BEGIN IMMEDIATE").run();
+  try {
+    const g = db.prepare(`SELECT * FROM gifts WHERE code = ?`).get(code) as unknown as
+      | GiftRow
+      | undefined;
+    if (!g || g.revoked) {
+      db.prepare("ROLLBACK").run();
+      return false;
+    }
+    if (g.expires_at && new Date(g.expires_at).getTime() < Date.now()) {
+      db.prepare("ROLLBACK").run();
+      return false;
+    }
+    const used = (
+      db.prepare(`SELECT COUNT(*) AS n FROM gift_claims WHERE code = ?`).get(code) as unknown as {
+        n: number;
+      }
+    ).n;
+    if (used >= g.max_uses) {
+      db.prepare("ROLLBACK").run();
+      return false;
+    }
+    db.prepare(`INSERT INTO gift_claims (code, tg_id, coins) VALUES (?, ?, ?)`).run(code, tgId, coins);
+    db.prepare("COMMIT").run();
+    return true;
+  } catch {
+    // درجِ تکراری (همین کاربر قبلاً برداشته) هم دقیقاً همین‌جا می‌افتد.
+    db.prepare("ROLLBACK").run();
+    return false;
+  }
+}
+
+/** کدهای ساخته‌شده، تازه‌ترین اول — برای فهرست ادمین. */
+export function listGifts(limit = 20): Array<GiftRow & { used: number }> {
+  return db
+    .prepare(
+      `SELECT g.*, (SELECT COUNT(*) FROM gift_claims c WHERE c.code = g.code) AS used
+       FROM gifts g ORDER BY g.created_at DESC LIMIT ?`,
+    )
+    .all(limit) as unknown as Array<GiftRow & { used: number }>;
 }
