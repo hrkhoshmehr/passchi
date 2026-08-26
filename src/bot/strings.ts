@@ -87,6 +87,8 @@ export const KP_LABEL: Record<string, string> = {
   emphasis: "⚑ تأکید استاد",
   homework: "📝 تکلیف",
   deadline: "⏳ مهلت",
+  grading: "💯 نمره و بارم",
+  logistics: "📣 حواست باشه",
 };
 
 /** نوار ترکیب زمانی با کاراکترهای بلوکی — در تلگرام بدون تصویر خوانا است */
@@ -210,10 +212,27 @@ export function extractedMessage(r: AnalysisReport): string {
       out.push(`⬜️ ${negative}`);
     }
   }
-  // بقیهٔ مواردی که واقعاً اتفاق افتاده‌اند: کلاس جبرانی، نمره، لغو جلسه…
+  /**
+   * بقیهٔ مواردی که واقعاً اتفاق افتاده‌اند: کلاس جبرانی، نمره، لغو جلسه…
+   *
+   * این‌ها فقط وقتی به‌عنوان یک خط چک‌لیست می‌آیند که **در نکته‌ها نیامده
+   * باشند**. از وقتی `grading` و `logistics` به نکته‌ها اضافه شدند، همان
+   * واقعیت می‌تواند دو جا بنشیند: یک بار خشک و بی‌جزئیات اینجا، یک بار با
+   * نقل‌قول و دقیقه آنجا. نسخهٔ پایینی همیشه بهتر است، پس بالایی کنار
+   * می‌رود.
+   */
+  const coveredByPoints = new Set<string>(
+    r.key_points.map((k) => (k.kind === "logistics" || k.kind === "grading" ? k.kind : "")),
+  );
+  const ACTION_TO_KIND: Record<string, string> = {
+    grading: "grading",
+    makeup_class: "logistics",
+    class_cancelled: "logistics",
+  };
   for (const a of r.professor_actions) {
     if (CORE_ACTIONS.includes(a.action as (typeof CORE_ACTIONS)[number])) continue;
     if (!a.happened || a.action === "other") continue;
+    if (coveredByPoints.has(ACTION_TO_KIND[a.action] ?? "")) continue;
     out.push(`✅ <b>${ACTION_LABEL[a.action] ?? a.action}</b>${a.detail ? ` — ${escapeHtml(a.detail)}` : ""}`);
   }
 
@@ -228,9 +247,10 @@ export function extractedMessage(r: AnalysisReport): string {
    */
   if (!points.length) {
     out.push("");
-    out.push("🎯 <b>استاد این جلسه نکتهٔ امتحانی نگفت.</b>");
+    out.push("🎯 <b>این جلسه نکتهٔ خاصی نداشت.</b>");
     out.push(
-      "<i>کل کلاس رو گوش دادم؛ جایی نگفت «تو امتحان میاد» یا رو چیزی تأکید ویژه نکرد.</i>",
+      "<i>کل کلاس رو گوش دادم؛ استاد نه از امتحان و نمره گفت، نه تکلیفی داد، " +
+        "نه تصمیم تازه‌ای اعلام کرد. فقط درس داد.</i>",
     );
   }
   if (points.length) {
@@ -252,8 +272,17 @@ export function extractedMessage(r: AnalysisReport): string {
   return out.join("\n");
 }
 
+/**
+ * ترتیب نمایش، بر اساس «چقدر فوری است».
+ *
+ * اول چیزهایی که مهلت یا اقدام دارند (امتحان، مهلت، تکلیف، کاری که باید
+ * بکند)، بعد اطلاعات نمره، و آخر تأکیدهای درسی که فوریت ندارند و برای
+ * وقت مطالعه‌اند.
+ */
 function sortedKeyPoints(r: AnalysisReport) {
-  const order: Record<string, number> = { exam: 0, deadline: 1, homework: 2, emphasis: 3 };
+  const order: Record<string, number> = {
+    exam: 0, deadline: 1, homework: 2, logistics: 3, grading: 4, emphasis: 5,
+  };
   return [...r.key_points].sort(
     (a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9) || a.evidence.at_ms - b.evidence.at_ms,
   );
