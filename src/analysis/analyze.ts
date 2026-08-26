@@ -212,7 +212,36 @@ function normalizeChapters(
     rows[i]!.end_ms = i + 1 < rows.length ? rows[i + 1]!.start_ms : durationMs;
   }
   // بخشی که پس از پیوسته‌سازی طولش صفر شد، دو بخش با شروع یکسان بوده‌اند
-  return rows.filter((c) => c.end_ms > c.start_ms);
+  const out = rows.filter((c) => c.end_ms > c.start_ms);
+  warnIfCompressed(out, durationMs);
+  return out;
+}
+
+/**
+ * هشدار وقتی مدل زمان‌ها را حدس زده، نه از رونوشت برداشته.
+ *
+ * نشانه‌اش این است که همهٔ نقطه‌های اعلام‌شده در ابتدای صوت جمع شده‌اند و
+ * بخش آخر بی‌قواره دراز است. این حالت را روی یک کلاس ۹۴ دقیقه‌ای دیدیم:
+ * تمام رویدادها زیر ده دقیقه بودند و بخش پایانی ۸۶ دقیقه شد.
+ *
+ * موذی بودنش از این است که `normalizeChapters` بخش آخر را تا ته صوت کش
+ * می‌دهد، پس خروجی *سالم به نظر می‌رسد* — پوشش کامل است و هیچ حفره‌ای
+ * نیست — در حالی که همهٔ زمان‌ها غلط‌اند.
+ *
+ * اینجا فقط لاگ می‌شود و چیزی حذف نمی‌شود: زمان‌های تقریبی هنوز از هیچ
+ * بهترند، ولی باید در لاگ دیده شوند تا اگر مدل یا پرامپت پس رفت بفهمیم.
+ */
+function warnIfCompressed(chapters: ClassAnalysis["chapters"], durationMs: number): void {
+  if (chapters.length < 2 || durationMs <= 0) return;
+  const lastStart = chapters[chapters.length - 1]!.start_ms;
+  const covered = lastStart / durationMs;
+  // شروعِ بخش آخر زیر ۲۵٪ مدت یعنی همهٔ مرزها در ابتدای فایل فشرده شده‌اند
+  if (covered < 0.25) {
+    logger.warn(
+      { chapters: chapters.length, lastStartMs: lastStart, durationMs, coveredPct: Math.round(covered * 100) },
+      "زمان‌بندی بخش‌ها در ابتدای صوت فشرده شده — احتمالاً مدل زمان‌ها را حدس زده",
+    );
+  }
 }
 
 /**
