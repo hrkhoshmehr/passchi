@@ -5,7 +5,7 @@ import { config, requireKey } from "../config.js";
 import { logger } from "../util/logger.js";
 import { chunkMessage, escapeHtml, shortId } from "../util/text.js";
 import { fmtClock, fmtDuration, toFaDigits } from "../util/time.js";
-import { extractClip, TimeMap } from "../audio/ffmpeg.js";
+import { extractClip, probe, TimeMap } from "../audio/ffmpeg.js";
 import { runPipeline } from "../pipeline.js";
 import { cancel as cancelJob, enqueue, isBusy, queueDepth } from "../queue.js";
 import * as S from "./strings.js";
@@ -768,25 +768,45 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
    * انتخاب سهمیه برای کسی که می‌خواهد اول دقت را بسنجد درست است، و تحلیل
    * کامل برای کسی که سکه دارد و کل جلسه را می‌خواهد.
    */
-  const overFreeLimit = freeRun && durationSec * 1000 > freeLimitMs();
+  /**
+   * مدت واقعی — نه فقط آنچه تلگرام گفته.
+   *
+   * تلگرام برای `audio` و `voice` مدت را می‌دهد ولی برای فایلی که به‌صورت
+   * **سند** فرستاده شده اغلب نمی‌دهد و `durationSec` صفر می‌ماند. با صفر،
+   * شرط زیر هیچ‌وقت برقرار نمی‌شود و یک کلاس ۹۰ دقیقه‌ای بی‌سؤال سهمیهٔ
+   * رایگان را می‌خورد — دقیقاً همان اشکالی که قرار است رفع شود.
+   *
+   * فایل همین‌جا روی دیسک هست، پس وقتی تلگرام ساکت است خودمان می‌پرسیم.
+   * شکستِ probe نباید مسیر را بشکند: در آن حالت مثل قبل جلو می‌رویم.
+   */
+  let effectiveSec = durationSec;
+  if (freeRun && effectiveSec === 0) {
+    try {
+      effectiveSec = Math.round((await probe(audioFile)).durationMs / 1000);
+    } catch (e) {
+      logger.warn({ sessionId, err: String(e) }, "probe for free-limit check failed");
+    }
+  }
+
+  const overFreeLimit = freeRun && effectiveSec * 1000 > freeLimitMs();
   if (overFreeLimit) {
-    pendingChoice.set(id, { sessionId, audioFile, courseId, durationSec });
+    pendingChoice.set(id, { sessionId, audioFile, courseId, durationSec: effectiveSec });
     const kb = new InlineKeyboard()
       .text(`📄 رونوشت رایگان ${fmtDuration(freeLimitMs())} اول`, `fc:free:${sessionId}`)
       .row();
-    if (u.credit_sec >= durationSec) {
+    if (u.credit_sec >= effectiveSec) {
       kb.text("✨ تحلیل کامل کل جلسه", `fc:full:${sessionId}`).row();
     } else {
       kb.text("🪙 شارژ برای تحلیل کامل", "topup").row();
     }
     await reply(
       ctx,
-      `🎧 <b>این صوت ${fmtDuration(durationSec * 1000)} است.</b>\n\n` +
+      `🎧 <b>این صوت ${fmtDuration(effectiveSec * 1000)} است.</b>\n\n` +
         `سهمیهٔ رایگانت <b>یک بار</b> است و تا ${fmtDuration(freeLimitMs())} صوت را ` +
         `فقط <b>پیاده</b> می‌کند — یعنی رونوشتِ همان ابتدای کلاس، بدون خلاصه و ` +
         `نکته‌های امتحانی و جزوه.\n\n` +
-        `برای این جلسه <b>${fmtCost(durationSec)}</b> لازم است` +
-        (u.credit_sec >= durationSec
+        `برای این جلسه <b>${fmtCost(effectiveSec)}</b> لازم است` +
+        (u.credit_sec >= effectiveSec
           ? ` و موجودی‌ات کافی است (${fmtBalance(u.credit_sec)}).`
           : ` و موجودی‌ات ${fmtBalance(u.credit_sec)} است.`) +
         `\n\n<i>کدام را می‌خواهی؟ سهمیهٔ رایگان تا وقتی خرجش نکنی سر جایش می‌ماند.</i>`,
@@ -808,7 +828,8 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
     sessionId,
     audioFile,
     courseId,
-    declaredDurationSec: durationSec,
+    // مدت واقعی، نه فقط آنچه تلگرام گفته — مبنای رزرو اعتبار همین است
+    declaredDurationSec: effectiveSec,
     mode: freeRun ? "free_trial" : "full",
   });
 });
