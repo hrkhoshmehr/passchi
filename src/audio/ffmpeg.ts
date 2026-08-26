@@ -536,7 +536,7 @@ export async function encode(
    * `Assertion best_input >= 0 failed at ffmpeg_filter.c` می‌میرد. عاملش
    * `loudnorm` است: یک فیلتر پویا که وقتی به ناپیوستگی مهر زمانی می‌رسد
    * برنامه‌ریز فیلتر را به حالتی می‌برد که هیچ ورودی‌ای «بهترین» نیست.
-   * روی یک کلاس واقعی ۸۵ دقیقه‌ای، همیشه حوالی دقیقهٔ ۴۳ رخ می‌داد.
+   * روی یک کلاس واقعی ۴۴ دقیقه‌ای، درست در ثانیه‌های پایانی رخ می‌داد.
    *
    * نرمال‌سازی بلندی **خوب** است ولی ضروری نیست: بدون آن رونویسی کمی
    * افت می‌کند، در حالی که با شکست، کاربر هیچ چیز نمی‌گیرد. پس اگر پاس
@@ -552,6 +552,19 @@ export async function encode(
       { signal: res.signal, hint: assertionOf(res.stderr) },
       "encode crashed; retrying without loudnorm",
     );
+    /**
+     * بازماندهٔ پاس شکست‌خورده **باید** پاک شود؛ `-y` کافی نیست.
+     *
+     * پروسه‌ای که با SIGABRT مرده، یک فایل Ogg نیمه‌تمام جا می‌گذارد. پاس
+     * دوم با `-y` رویش می‌نویسد ولی نتیجه یک ظرف معیوب می‌شود: ffprobe
+     * «Cannot identify new stream» می‌دهد و **مدت را اصلاً برنمی‌گرداند**.
+     *
+     * و این بی‌سروصداترین حالت ممکن است — فایل با اندازهٔ درست ساخته
+     * می‌شود و رمزگذاری «موفق» گزارش می‌شود، ولی مدتش صفر خوانده می‌شود.
+     * یعنی صورتحساب و مهر زمانی هر دو غلط می‌شوند بی‌آنکه خطایی رخ دهد.
+     * با حذف صریح فایل، همان صوت مدت درست ۴۳:۵۳ را می‌دهد.
+     */
+    await fs.rm(output, { force: true });
     res = await run(FFMPEG, encodeArgs(input, output, fallback, opt));
   }
 
@@ -559,6 +572,23 @@ export async function encode(
 
   const info = await probe(output);
   const stat = await fs.stat(output);
+
+  /**
+   * خروجیِ بی‌مدت، خروجیِ خراب است.
+   *
+   * ظرف Ogg معیوب با اندازهٔ درست ساخته می‌شود و ffmpeg هم کد صفر می‌دهد،
+   * ولی ffprobe مدتی برنمی‌گرداند. اگر همین‌جا نگیریمش، جلوتر به‌عنوان
+   * یک رمزگذاریِ موفق رد می‌شود و صورتحساب و مهر زمانی را خراب می‌کند —
+   * شکستی که هیچ خطایی تولید نمی‌کند و فقط از عددهای غلط معلوم می‌شود.
+   *
+   * پس صریح شکست می‌خورد: خطای بلند بهتر از دادهٔ بی‌صدا غلط است.
+   */
+  if (info.durationMs <= 0) {
+    throw new Error(
+      `ffmpeg encode produced a file with no readable duration (${stat.size} bytes) — ظرف خروجی معیوب است.`,
+    );
+  }
+
   logger.debug({ outDurationMs: info.durationMs, size: stat.size }, "encode done");
 
   return {
