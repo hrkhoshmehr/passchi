@@ -428,7 +428,7 @@ const MIME: Record<string, string> = {
   ".ico": "image/x-icon",
 };
 
-async function serveStatic(res: Res, pathname: string): Promise<void> {
+async function serveStatic(req: http.IncomingMessage, res: Res, pathname: string): Promise<void> {
   const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
 
   /**
@@ -476,11 +476,42 @@ async function serveStatic(res: Res, pathname: string): Promise<void> {
   }
 
   const ext = path.extname(file).toLowerCase();
-  const isHtml = ext === ".html";
+
+  /**
+   * پوستهٔ اپ هرگز کش نمی‌شود — نه فقط HTML.
+   *
+   * پیش‌تر فقط `.html` روی `no-cache` بود و `app.js` یک ساعت کش می‌شد. نتیجه‌اش
+   * ترکیبِ کشندهٔ «HTML تازه + جاوااسکریپت کهنه» بود: صفحه عناصر جدید را داشت
+   * ولی کدِ قدیمی آن‌ها را نمی‌شناخت، و مینی‌اپِ بله روی «یه لحظه…» می‌ماند.
+   * نسخه‌بندی فایل (hash در نام) راه درست‌تری است ولی مرحلهٔ ساخت می‌خواهد؛
+   * این پروژه عمداً بدون آن نوشته شده، پس `no-cache` ارزان‌ترین جواب است.
+   *
+   * `no-cache` یعنی «کش کن ولی هر بار بپرس»، نه «کش نکن» — پس با ۳۰۴ همچنان
+   * ارزان می‌ماند و فقط وقتی بایت می‌فرستد که واقعاً عوض شده باشد.
+   *
+   * دارایی‌های واقعاً ایستا (فونت، تصویر) همان یک ساعت را نگه می‌دارند.
+   */
+  const isShell = ext === ".html" || ext === ".js" || ext === ".css";
+
+  /**
+   * برچسب نسخه از اندازه و زمانِ تغییرِ فایل.
+   *
+   * بدون برچسب، `no-cache` یعنی «هر بار کاملش را بفرست» — درست ولی گران.
+   * با برچسب، مرورگر می‌پرسد و اگر عوض نشده باشد ۳۰۴ می‌گیرد و چیزی دانلود
+   * نمی‌شود. هش‌کردن محتوا دقیق‌تر است ولی برای فایلی که هر بار خوانده
+   * می‌شود گران است؛ `mtime` و اندازه برای این کار کافی‌اند.
+   */
+  const stat = fs.statSync(file);
+  const etag = `W/"${stat.size.toString(16)}-${stat.mtimeMs.toString(36)}"`;
+  if (req.headers["if-none-match"] === etag) {
+    res.writeHead(304, { etag, "cache-control": isShell ? "no-cache" : "public, max-age=3600" }).end();
+    return;
+  }
+
   res.writeHead(200, {
     "content-type": MIME[ext] ?? "application/octet-stream",
-    // HTML هرگز کش نمی‌شود چون نسخهٔ تازهٔ اپ باید فوراً برسد؛ بقیه یک ساعت.
-    "cache-control": isHtml ? "no-cache" : "public, max-age=3600",
+    "cache-control": isShell ? "no-cache" : "public, max-age=3600",
+    etag,
   });
   fs.createReadStream(file).pipe(res);
 }
@@ -516,7 +547,7 @@ export function createWebServer(): http.Server {
       return;
     }
 
-    serveStatic(res, url.pathname).catch((e: unknown) => {
+    serveStatic(req, res, url.pathname).catch((e: unknown) => {
       logger.error({ err: String(e) }, "static serve error");
       if (!res.headersSent) res.writeHead(500).end("error");
     });

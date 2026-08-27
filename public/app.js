@@ -30,6 +30,17 @@ const api = {
       headers["content-type"] = "application/json";
       opt = { ...opt, body: JSON.stringify(opt.body) };
     }
+    /**
+     * مهلت، مگر برای آپلود.
+     *
+     * بدون این، یک درخواستِ بی‌جواب یعنی صفحه تا ابد روی «یه لحظه…» می‌ماند —
+     * که بدترین حالت است، چون کاربر نه خطایی می‌بیند نه راهی جلو. آپلود صوت
+     * استثناست: فایل بزرگ واقعاً طول می‌کشد.
+     */
+    const ms = opt.timeoutMs ?? 15000;
+    if (ms > 0 && !opt.signal) {
+      opt = { ...opt, signal: AbortSignal.timeout(ms) };
+    }
     const res = await fetch(path, { ...opt, headers });
     const text = await res.text();
     const data = text ? JSON.parse(text) : {};
@@ -406,7 +417,13 @@ async function upload(file) {
 
   let out;
   try {
-    out = await api.call(`/api/sessions/upload?${qs}`, { method: "POST", body: file });
+    // آپلود مهلت ندارد: یک کلاس ۹۰ دقیقه‌ای روی اینترنت موبایل می‌تواند
+    // دقایقی طول بکشد و بریدنش یعنی از دست‌رفتن کل فایل.
+    out = await api.call(`/api/sessions/upload?${qs}`, {
+      method: "POST",
+      body: file,
+      timeoutMs: 0,
+    });
   } catch (err) {
     // کمبود اعتبار پیام مخصوص خودش را دارد، با عددها
     if (err.status === 402) {
@@ -830,3 +847,21 @@ boot().catch(async (e) => {
   console.error(e);
   await showAuthScreen().catch(() => go("auth"));
 });
+
+/**
+ * تور نجات: اگر بالاآمدن به هر دلیلی تمام نشد، صفحه نباید روی «یه لحظه…»
+ * بماند.
+ *
+ * `boot` می‌تواند *معلق* بماند نه اینکه پرت کند — یک درخواست بی‌جواب، یک
+ * وعدهٔ حل‌نشده — و در آن حالت `catch` هرگز اجرا نمی‌شود. کاربر آن‌وقت یک
+ * صفحهٔ ساکن می‌بیند بدون خطا و بدون راه جلو، که بدترین شکست ممکن است.
+ *
+ * پس اگر بعد از این مهلت هنوز روی صفحهٔ ورود و روی همان متنِ اولیه‌ایم،
+ * صفحهٔ ورود به‌زور ساخته می‌شود.
+ */
+setTimeout(() => {
+  if (current === "auth" && $("auth-lead").textContent.trim() === "یه لحظه…") {
+    console.warn("boot did not settle in time; forcing auth screen");
+    showAuthScreen().catch(() => go("auth"));
+  }
+}, 6000);
