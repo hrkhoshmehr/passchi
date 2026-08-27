@@ -59,7 +59,12 @@ export const bot = new Bot(
  */
 export const baleBot = config.BALE_BOT_TOKEN
   ? new Bot(config.BALE_BOT_TOKEN, {
-      client: { apiRoot: `${config.BALE_API_ROOT.replace(/\/+$/, "")}/bot` },
+      // `apiRoot` بدون `/bot` است: grammY خودش آدرس را به شکل
+      // `{root}/bot{token}/{method}` می‌سازد. با افزودن `/bot` اینجا، مسیر
+      // `/bot/bot<token>/` می‌شد و بله به آن ۴۰۴ می‌داد — و چون grammY خطای
+      // شبکهٔ polling را بی‌صدا دوباره تلاش می‌کند، لاگ راه‌اندازی «بله: روشن»
+      // می‌گفت در حالی که هیچ آپدیتی نمی‌رسید و هیچ خطایی هم ثبت نمی‌شد.
+      client: { apiRoot: config.BALE_API_ROOT.replace(/\/+$/, "") },
     })
   : null;
 
