@@ -127,16 +127,38 @@ $("balance").addEventListener("click", () => {
 // ─── سکو ────────────────────────────────────────────────────────────────────
 
 /**
+ * `initData` را از قطعهٔ آدرس بخوان — بدون هیچ SDK.
+ *
+ * هر دو سکو مینی‌اپ را با `#tgWebAppData=...` باز می‌کنند و SDK هم دقیقاً
+ * همان را می‌خواند. پس این تنها منبعی است که همیشه هست، حتی وقتی اسکریپت
+ * میزبان بار نشده باشد.
+ */
+function initDataFromUrl() {
+  const frag = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+  const value = new URLSearchParams(frag).get("tgWebAppData");
+  return value || null;
+}
+
+/**
  * مینی‌اپِ میزبان، اگر داخل یکی هستیم.
  *
- * هر دو سکو شیء هم‌شکل می‌سازند. `initData` تهی یعنی اسکریپت بار شده ولی
- * صفحه داخل مینی‌اپ باز نشده — یعنی مرورگر معمولی.
+ * **به SDK تکیه نمی‌شود، چون همیشه بار نمی‌شود.** آدرس اسکریپت بله
+ * (`tapi.bale.ai/miniapp/bale-web-app.js`) ۴۰۴ می‌دهد، پس `globalThis.Bale`
+ * هرگز ساخته نمی‌شد و اپ فکر می‌کرد داخل مرورگر معمولی است — نتیجه‌اش این بود
+ * که کاربر بله به‌جای ورود خودکار، فرم شمارهٔ موبایل می‌دید.
+ *
+ * پس ترتیب این است: اول SDK (اگر بود، امکانات بیشتری مثل تم می‌دهد)، بعد
+ * خودِ آدرس. تشخیص سکو هم وقتی SDK نیست از `tgWebAppPlatform` می‌آید و در
+ * نبودش «بله» فرض می‌شود، چون تلگرام SDKاش را قابل‌اتکا بار می‌کند.
  */
 function host() {
   const tg = globalThis.Telegram?.WebApp;
   if (tg?.initData) return { platform: "telegram", sdk: tg };
   const bale = globalThis.Bale?.WebApp;
   if (bale?.initData) return { platform: "bale", sdk: bale };
+
+  const initData = initDataFromUrl();
+  if (initData) return { platform: null, sdk: { initData } };
   return null;
 }
 
@@ -197,16 +219,26 @@ async function boot() {
   }
 
   if (miniApp) {
-    try {
-      const { token } = await api.call("/api/auth/miniapp", {
-        method: "POST",
-        body: { platform: miniApp.platform, initData: miniApp.sdk.initData },
-      });
-      await afterLogin(token);
-      return;
-    } catch (e) {
-      // ورود مینی‌اپ شکست خورد — صفحهٔ ورود را نشان بده تا کاربر گیر نکند
-      console.warn("mini app login failed:", e.message);
+    /**
+     * وقتی سکو از SDK معلوم نشده، هر دو امتحان می‌شوند.
+     *
+     * `initData` با توکن رباتِ همان سکو امضا شده، پس فقط یکی از این دو
+     * راستی‌آزمایی می‌شود و آن دیگری ۴۰۱ می‌گیرد — یعنی حدس‌زدن سکو لازم
+     * نیست و امضا خودش جواب را می‌دهد. حدس اشتباه، کاربر را روی حساب اشتباه
+     * نمی‌نشاند چون امضا اجازه نمی‌دهد.
+     */
+    const candidates = miniApp.platform ? [miniApp.platform] : ["bale", "telegram"];
+    for (const platform of candidates) {
+      try {
+        const { token } = await api.call("/api/auth/miniapp", {
+          method: "POST",
+          body: { platform, initData: miniApp.sdk.initData },
+        });
+        await afterLogin(token);
+        return;
+      } catch (e) {
+        console.warn(`mini app login failed on ${platform}:`, e.message);
+      }
     }
   }
 
@@ -240,6 +272,9 @@ async function showAuthScreen() {
   }
 
   show($("form-phone"), phoneLogin);
+  // فرم کد همیشه بسته می‌شود: اگر کاربر پیش‌تر تا مرحلهٔ کد رفته و بعد
+  // برگشته باشد، بازماندهٔ آن نباید کنار دکمه‌های ربات بماند.
+  show($("form-code"), false);
   show($("auth-bots"), !phoneLogin);
   $("auth-lead").textContent = phoneLogin
     ? "برای شروع شماره‌ات رو وارد کن"
@@ -783,7 +818,15 @@ async function loadAccount() {
 
 // ─── شروع ───────────────────────────────────────────────────────────────────
 
-boot().catch((e) => {
+/**
+ * اگر `boot` جایی پرت کرد، باز هم باید صفحهٔ ورودِ **پیکربندی‌شده** را دید.
+ *
+ * پیش‌تر اینجا `go("auth")` مستقیم صدا زده می‌شد و همان یک خط، کل تصمیمِ
+ * «کدام در باز است» را دور می‌زد: صفحه نشان داده می‌شد ولی فرم شماره هنوز
+ * همان‌طور که در HTML بود می‌ماند. کاربر بله اولین چیزی که می‌دید فرم شماره
+ * بود، در حالی که سرور آن مسیر را رد می‌کرد.
+ */
+boot().catch(async (e) => {
   console.error(e);
-  go("auth");
+  await showAuthScreen().catch(() => go("auth"));
 });

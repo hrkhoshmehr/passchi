@@ -13,15 +13,21 @@
 <link rel="stylesheet" href="/styles.css">
 
 <!--
-  اسکریپت مینی‌اپ‌ها.
+  اسکریپت مینی‌اپ تلگرام.
 
-  هر دو سکو یک شیء سراسری می‌سازند (`Telegram.WebApp` و `Bale.WebApp`) که
-  `initData` را دارد. با `defer` بارگذاری می‌شوند و اگر بیرون از مینی‌اپ
-  باشیم، درخواست شکست می‌خورد و برنامه مسیر مرورگر را می‌رود — پس نبودشان
-  خطا نیست.
+  `Telegram.WebApp` را می‌سازد که علاوه بر `initData`، تم و دکمهٔ برگشت هم
+  می‌دهد. بیرون از مینی‌اپ فقط بار می‌شود و کاری نمی‌کند — پس بی‌خطر است.
+
+  **اسکریپت بله عمداً اینجا نیست.** آدرسی که مستندات می‌دهد
+  (`tapi.bale.ai/miniapp/bale-web-app.js`) ۴۰۴ برمی‌گرداند و هیچ آدرس دیگری
+  هم جواب نداد. تا وقتی `globalThis.Bale` ساخته نمی‌شد، اپ فکر می‌کرد داخل
+  مرورگر معمولی است و به کاربر بله فرم شمارهٔ موبایل نشان می‌داد.
+
+  به‌جایش `initData` مستقیم از قطعهٔ آدرس (`#tgWebAppData=…`) خوانده می‌شود —
+  همان چیزی که خودِ SDK هم می‌خواند. اگر روزی آدرس درست پیدا شد، افزودنش
+  فقط امکانات اضافه (مثل تم) می‌دهد و چیزی را نمی‌شکند.
 -->
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="https://tapi.bale.ai/miniapp/bale-web-app.js"></script>
 
 <style>
 body { padding-bottom: env(safe-area-inset-bottom); }
@@ -216,7 +222,7 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
   <section class="screen auth" id="s-auth">
     <div class="auth-mark">📓</div>
     <h2>خوش اومدی</h2>
-    <p id="auth-lead">برای شروع شماره‌ات رو وارد کن</p>
+    <p id="auth-lead">یه لحظه…</p>
 
     <!--
       وقتی ورود با شماره خاموش است، این جای فرم را می‌گیرد. کاربر باید بداند
@@ -231,7 +237,7 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
       </a>
     </div>
 
-    <form id="form-phone" class="stack">
+    <form id="form-phone" class="stack hidden">
       <div>
         <label for="phone">شمارهٔ موبایل</label>
         <input id="phone" type="tel" inputmode="numeric" autocomplete="tel"
