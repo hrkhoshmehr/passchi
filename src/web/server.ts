@@ -438,8 +438,13 @@ async function serveStatic(res: Res, pathname: string): Promise<void> {
      *
      * پس هر مسیری که پسوند فایل دارد و پیدا نشد، صادقانه ۴۰۴ می‌گیرد.
      * مسیرهای بی‌پسوند همچنان به صفحهٔ اپ می‌روند.
+     *
+     * فایل‌های نقطه‌دار (`.git-credentials`، `.htaccess`) جداگانه بررسی
+     * می‌شوند: `extname` برای آن‌ها رشتهٔ خالی می‌دهد چون نقطه **پیشوند**
+     * است نه پسوند، پس با شرط بالا از تور در می‌رفتند — و همین‌ها دقیقاً
+     * پرتکرارترین هدف اسکنرها هستند.
      */
-    if (path.extname(rel)) {
+    if (path.extname(rel) || path.basename(rel).startsWith(".")) {
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("not found");
       return;
     }
