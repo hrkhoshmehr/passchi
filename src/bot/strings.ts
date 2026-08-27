@@ -3,8 +3,8 @@ import { config } from "../config.js";
 import { chunkMessage, escapeHtml } from "../util/text.js";
 import { fmtClock, fmtClockLink, fmtDuration, toFaDigits } from "../util/time.js";
 import {
-  COINS_PER_MINUTE, REFUND_CAP_PCT, SHARE_TARGET, balanceCoins, coinsAsMinutes, costCoins,
-  fmtBalance, fmtCoins, fmtCoinsWithToman, fmtCost, shareBack,
+  REFUND_CAP_PCT, SHARE_TARGET, balanceCoins, coinsAsMinutesIfUseful, costCoins,
+  fmtBalance, fmtCoins, fmtCoinsWithToman, fmtCost, RATE_LINE, shareBack,
 } from "../billing/coins.js";
 import { BTN } from "./menu.js";
 
@@ -23,7 +23,7 @@ export const HELP = `<b>چیکار می‌کنم</b>
 هر فایل صوتی یا ویس تلگرام. گوشیو بذار رو میز نه تو کیف — نزدیک‌بودن مهم‌تر از گرون‌بودن گوشیه.
 
 <b>سکه‌ها</b>
-اولین صوتت تا ${toFaDigits(config.FREE_TRANSCRIPT_MINUTES)} دقیقه رایگان <b>پیاده</b> میشه تا دقت کارمو بسنجی. بعدش هر دقیقه صوت ${toFaDigits(COINS_PER_MINUTE)} سکه. از «${BTN.account}» موجودیت رو می‌بینی و شارژ می‌کنی.
+اولین صوتت تا ${toFaDigits(config.FREE_TRANSCRIPT_MINUTES)} دقیقه رایگان <b>پیاده</b> میشه تا دقت کارمو بسنجی. بعدش با سکه کار می‌کنه: <b>هر سکه یه دقیقه صوت</b>. از «${BTN.account}» موجودیت رو می‌بینی و شارژ می‌کنی.
 
 <b>یه ترفند</b>
 رو دقیقه‌ها که بزنی، صوت از همون‌جا پخش میشه. (رو موبایل؛ تو دسکتاپ کار نمی‌کنه.)
@@ -389,20 +389,35 @@ export interface AccountInput {
  * موجودی، خرج، و برگشتی — همه به سکه. معادلِ دقیقه‌ای فقط زیر موجودی می‌آید،
  * چون عددِ سکه به‌تنهایی به کاربر نمی‌گوید چند جلسه می‌تواند بفرستد.
  */
+/**
+ * صفحهٔ حساب.
+ *
+ * خطوط خالی **بین گروه‌ها** گذاشته می‌شوند نه داخلشان، چون هر سه سطر آمار
+ * اختیاری‌اند: کاربر تازه هیچ‌کدام را ندارد و اگر خط خالی از قبل نوشته شده
+ * باشد، دو خط خالی پشت‌سرهم می‌افتد. `join` روی گروه‌های ناخالی، این را
+ * ساختاری حل می‌کند به‌جای اینکه به ترتیب `push`ها بند باشد.
+ *
+ * معادلِ دقیقه‌ایِ موجودی هم با نرخ ۱ حذف می‌شود — عینِ همان عدد است.
+ */
 export function accountMessage(i: AccountInput): string {
   const coins = balanceCoins(i.creditSec);
-  const out = [
-    "🪙 <b>حساب من</b>",
-    "",
-    `موجودی: <b>${fmtCoins(coins)}</b>`,
-    `<i>یعنی حدود ${coinsAsMinutes(coins)}</i>`,
-    "",
+  const asTime = coinsAsMinutesIfUseful(coins);
+
+  const stats: string[] = [];
+  if (i.sessionCount > 0) stats.push(`📚 ${toFaDigits(i.sessionCount)} جلسه فرستاده‌ای`);
+  if (i.usedSec > 0) stats.push(`💸 تا حالا ${fmtCost(i.usedSec)} خرج کرده‌ای`);
+  if (i.refundedSec > 0) stats.push(`💰 ${fmtCost(i.refundedSec)} از اشتراک‌گذاری برگشته بهت`);
+
+  const groups = [
+    ["🪙 <b>حساب من</b>"],
+    [
+      `موجودی: <b>${fmtCoins(coins)}</b>`,
+      ...(asTime ? [`<i>یعنی حدود ${asTime}</i>`] : []),
+    ],
+    ...(stats.length ? [stats] : []),
+    [`<i>${RATE_LINE}.</i>`],
   ];
-  if (i.sessionCount > 0) out.push(`📚 ${toFaDigits(i.sessionCount)} جلسه فرستاده‌ای`);
-  if (i.usedSec > 0) out.push(`💸 تا حالا ${fmtCost(i.usedSec)} خرج کرده‌ای`);
-  if (i.refundedSec > 0) out.push(`💰 ${fmtCost(i.refundedSec)} از اشتراک‌گذاری برگشته بهت`);
-  out.push("", `<i>هر دقیقه صوت ${toFaDigits(COINS_PER_MINUTE)} سکه.</i>`);
-  return out.join("\n");
+  return groups.map((g) => g.join("\n")).join("\n\n");
 }
 
 /** پیام «سکه کم است» — همه‌جا یک شکل، و همیشه با راه خروج. */

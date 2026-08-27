@@ -17,9 +17,12 @@ import { randomBytes } from "node:crypto";
 import type { Api } from "grammy";
 import { logger } from "../util/logger.js";
 import { toFaDigits } from "../util/time.js";
-import { coinsAsMinutes, coinsToSec, fmtBalance, fmtCoins } from "../billing/coins.js";
+import {
+  RATE_LINE, balanceCoins, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtCoins,
+} from "../billing/coins.js";
 import { grant } from "../billing/ledger.js";
 import { claimGift, createGift, getGift, giftClaimedBy, giftUses, type GiftRow } from "../db/index.js";
+import { isBale } from "./identity.js";
 import { getUser } from "../db/index.js";
 
 /**
@@ -30,6 +33,14 @@ import { getUser } from "../db/index.js";
  * دادنش به چند نفر گران تمام شود.
  */
 export const DEFAULT_GIFT_COINS = 20;
+
+/**
+ * سکهٔ لازم برای یک کلاس کامل — مبنای جمله‌ای که انتظار گیرنده را تنظیم می‌کند.
+ *
+ * از `costCoins` درمی‌آید نه از عدد ثابت، تا اگر نرخ عوض شد این جمله هم با آن
+ * برود. نود دقیقه، همان طولی است که بقیهٔ متن‌ها هم «یک کلاس» می‌نامندش.
+ */
+const FULL_CLASS_COINS = costCoins(90 * 60);
 
 /**
  * حروفِ کد.
@@ -46,11 +57,30 @@ function newCode(len = 8): string {
   return out;
 }
 
-let botUsername: string | null = null;
+/**
+ * نام کاربری ربات، به تفکیک سکو.
+ *
+ * کلید، خودِ شیء `Api` است نه یک متغیر ساده: تلگرام و بله دو ربات جدا با دو
+ * نام کاربری‌اند، و یک متغیرِ مشترک یعنی هر کدام که زودتر صدا زده شود نامش
+ * برای دیگری هم به کار می‌رود — لینکی که به چت اشتباه می‌برد.
+ */
+const usernames = new WeakMap<Api, string>();
 
+/**
+ * لینک هدیه روی سکوی همان رباتی که دستور از آن آمده.
+ *
+ * دامنه هم با سکو عوض می‌شود: `t.me` برای تلگرام و `ble.ir` برای بله. لینکِ
+ * `t.me` داخل بله باز نمی‌شود، پس ادمینی که از بله `/gift` می‌زند باید لینکِ
+ * بله بگیرد.
+ */
 export async function giftLink(api: Api, code: string): Promise<string> {
-  botUsername ??= (await api.getMe()).username;
-  return `https://t.me/${botUsername}?start=g_${code}`;
+  let username = usernames.get(api);
+  if (!username) {
+    username = (await api.getMe()).username;
+    usernames.set(api, username);
+  }
+  const host = isBale(api) ? "ble.ir" : "t.me";
+  return `https://${host}/${username}?start=g_${code}`;
 }
 
 export interface NewGift {
@@ -122,18 +152,48 @@ export function claim(code: string, tgId: number): ClaimOutcome {
   return { ok: true, coins: g.coins, balanceSec };
 }
 
-/** پیامی که گیرنده پس از برداشتِ موفق می‌بیند. */
+/**
+ * پیامی که گیرنده پس از برداشتِ موفق می‌بیند.
+ *
+ * «۲۰ سکه» و «۲۰ دقیقه» با نرخ ۱ یک عددند، پس گفتنِ هر دو در یک نفس کاربر را
+ * دنبال تفاوتی می‌فرستد که نیست. یک بار معنیِ سکه گفته می‌شود — و معادل
+ * دقیقه‌ای فقط وقتی می‌آید که به ساعت رسیده باشد و واقعاً ترجمه لازم باشد.
+ *
+ * موجودی هم فقط وقتی نشان داده می‌شود که با خودِ هدیه فرق داشته باشد؛ برای
+ * کاربر تازه این دو عدد یکی‌اند و تکرارِ یک عدد در دو خط، پیام را شلوغ می‌کند.
+ */
 export function claimedMessage(coins: number, balanceSec: number): string {
-  return [
-    `🎁 <b>${fmtCoins(coins)}</b> به حسابت اضافه شد!`,
-    "",
-    `یعنی ${coinsAsMinutes(coins)} — هر سکه یک دقیقه.`,
-    `موجودی‌ات: <b>${fmtBalance(balanceSec)}</b>`,
-    "",
-    "صوت کلاستو بفرست تا خلاصه، نکات امتحانی و جزوه‌اش رو برات دربیارم 🎧",
-  ].join("\n");
-}
+  const asTime = coinsAsMinutesIfUseful(coins);
+  const balance = balanceCoins(balanceSec);
 
+  // خطوط خالی بین گروه‌ها می‌آیند نه داخلشان، وگرنه هر سطرِ اختیاریِ حذف‌شده
+  // یک خط خالیِ اضافه جا می‌گذارد.
+  const groups = [
+    [`🎁 <b>${fmtCoins(coins)}</b> به حسابت اضافه شد!`],
+    [
+      // «۲۰ سکه یعنی ۲۰ دقیقه» عدد را دو بار می‌گوید. جملهٔ نرخ به‌تنهایی همان
+      // را می‌رساند، و برای گیرنده‌ای که تازه با واژهٔ «سکه» روبه‌رو شده کافی
+      // است. معادل ساعتی فقط وقتی می‌آید که خودش خبر تازه باشد.
+      asTime ? `یعنی ${asTime}. <i>${RATE_LINE}.</i>` : `<i>${RATE_LINE}.</i>`,
+      ...(balance !== coins ? [`موجودی‌ات: <b>${fmtCoins(balance)}</b>`] : []),
+    ],
+    // انتظار را همین‌جا تنظیم می‌کند: یک کلاس کامل ۹۰ دقیقه‌ای به اندازهٔ
+    // `FULL_CLASS_COINS` سکه می‌خواهد، پس هدیهٔ کوچک برای *کل* یک کلاس کافی
+    // نیست. اگر اینجا گفته نشود، گیرنده صوت کلاسش را آپلود می‌کند و تازه
+    // آن‌وقت به دیوارِ «سکه‌هات کم میاد» می‌خورد — بدترین لحظهٔ ممکن.
+    //
+    // مبنا **موجودی** است نه خودِ هدیه: کسی که از قبل سکه داشته، آن‌ها را هم
+    // می‌تواند خرج کند و گفتنِ عددِ هدیه به او کمتر از واقعیت نشان می‌دهد.
+    ...(balance < FULL_CLASS_COINS
+      ? [[
+          `<i>یه کلاس کامل ۹۰ دقیقه‌ای ${fmtCoins(FULL_CLASS_COINS)} می‌خواد. با این موجودی ` +
+            `می‌تونی یه جلسهٔ کوتاه‌تر رو کامل تحلیل کنی، یا ${toFaDigits(balance)} دقیقه از یه کلاس رو.</i>`,
+        ]]
+      : []),
+    ["صوت کلاستو بفرست تا خلاصه، نکات امتحانی و جزوه‌اش رو برات دربیارم 🎧"],
+  ];
+  return groups.map((x) => x.join("\n")).join("\n\n");
+}
 const REFUSALS: Record<Exclude<ClaimOutcome, { ok: true }>["reason"], string> = {
   unknown: "این کد هدیه معتبر نیست.",
   revoked: "این کد هدیه باطل شده.",

@@ -26,6 +26,16 @@ export function platformOf(ctx: Context): Platform {
 }
 
 /**
+ * همان تشخیص، ولی از روی خودِ `Api`.
+ *
+ * جایی لازم است که `Context` در دست نیست — مثل ساختن لینک، که فقط `api`
+ * می‌گیرد ولی باید بداند دامنه‌اش `t.me` است یا `ble.ir`.
+ */
+export function isBale(api: Api): boolean {
+  return Boolean(baleApi && api === baleApi);
+}
+
+/**
  * شناسهٔ داخلی کاربرِ این گفت‌وگو — کلیدی که به پایگاه‌داده می‌رود.
  *
  * برای تلگرام همان `ctx.from.id` است (پس داده‌های موجود دست‌نخورده‌اند)، و

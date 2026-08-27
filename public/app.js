@@ -49,6 +49,18 @@ const FA = "۰۱۲۳۴۵۶۷۸۹";
 const fa = (n) => String(n).replace(/[0-9]/g, (d) => FA[+d]);
 const faGroup = (n) => fa(Number(n).toLocaleString("en-US")).replace(/,/g, "٬");
 
+/**
+ * ارزش یک پکیج به زبان کاربر: «۳ کلاس ۹۰ دقیقه‌ای».
+ *
+ * همان قاعدهٔ ربات — عددِ سکه به‌تنهایی نمی‌گوید چند جلسه می‌شود فرستاد، و آن
+ * سؤالی است که کاربر پیش از خرید در ذهن دارد. زیر یک کلاس، به دقیقه می‌افتد.
+ */
+function pkgWorth(coins, coinsPerMinute) {
+  const minutes = Math.floor(coins / (coinsPerMinute || 1));
+  const classes = Math.floor(minutes / 90);
+  return classes >= 1 ? `${fa(classes)} کلاس ۹۰ دقیقه‌ای` : `${fa(minutes)} دقیقه صوت`;
+}
+
 /** میلی‌ثانیه به «۱ ساعت و ۳۴ دقیقه» یا «۴۲ دقیقه» */
 function dur(ms) {
   const min = Math.round(ms / 60000);
@@ -679,7 +691,7 @@ async function loadAccount() {
         </div>
         <p class="muted" style="font-size:14px">سکه</p>
         <p class="dim" style="margin-top:10px">
-          هر دقیقه صوت ${fa(u.coinsPerMinute)} سکه
+          ${u.coinsPerMinute === 1 ? "هر سکه = یک دقیقه صوت" : `هر دقیقه صوت ${fa(u.coinsPerMinute)} سکه`}
         </p>
       </div>
 
@@ -701,6 +713,7 @@ async function loadAccount() {
                     <div class="item-meta">
                       ${p.tag ? `<span class="badge">${esc(p.tag)}</span>` : ""}
                       <span class="num">${faGroup(p.price)} تومان</span>
+                      <span class="dim">· ${pkgWorth(p.coins, u.coinsPerMinute)}</span>
                     </div>
                   </div>
                   <div style="margin-inline-start:auto" class="dim">›</div>

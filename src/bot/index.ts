@@ -30,7 +30,7 @@ import {
   mintGift, refusalMessage,
 } from "./gift.js";
 import {
-  coinsAsMinutes, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
+  coinsAsMinutesIfUseful, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
 } from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio, freeRunUsed,
@@ -41,6 +41,7 @@ import {
 } from "../db/index.js";
 import { findIdentity, resolveIdentity } from "../db/identity.js";
 import { platformOf, setBaleApi, uid } from "./identity.js";
+import { notifyUser } from "./notify.js";
 
 export const bot = new Bot(
   requireKey("BOT_TOKEN"),
@@ -465,18 +466,46 @@ handlers.command("cancel", async (ctx) => {
   await reply(ctx, done ? "لغو شد ✅" : "کاری در جریان نیست.");
 });
 
+/**
+ * شارژ مستقیم حساب کسی که شناسه‌اش را داری.
+ *
+ *   /grant <tg_id> <coins>
+ *
+ * دو چیز اینجا اصلاح شد: واحد از دقیقه به **سکه** رفت — حالا که هر سکه یک
+ * دقیقه است این دو یکی‌اند، ولی نوشتنش به سکه یعنی اگر روزی نرخ عوض شد این
+ * دستور همچنان همان چیزی را می‌دهد که ادمین تایپ کرده. و آرگومان‌ها دیگر با
+ * الگوی سه‌تایی خوانده نمی‌شوند: `ctx.match` خودِ دستور را در بر ندارد، پس
+ * عنصر اول همان شناسه است و انداختنش یعنی شناسه به‌جای مقدار خوانده می‌شد.
+ *
+ * برای کسی که هنوز با ربات حرف نزده شناسه‌ای وجود ندارد — آنجا `/gift` کار
+ * درست است، نه این.
+ */
 handlers.command("grant", async (ctx) => {
   if (!isAdmin(ctx.from!.id)) return;
-  const [, target, minutes] = (ctx.match as string | undefined)?.split(/\s+/) ?? [];
+  const [target, amount] = ((ctx.match as string | undefined) ?? "").trim().split(/\s+/);
   const t = Number(target);
-  const m = Number(minutes);
-  if (!Number.isFinite(t) || !Number.isFinite(m)) {
-    await reply(ctx, "استفاده: <code>/grant &lt;tg_id&gt; &lt;minutes&gt;</code>");
+  const coins = Number(amount);
+  if (!Number.isFinite(t) || !Number.isFinite(coins) || coins <= 0) {
+    await reply(
+      ctx,
+      "استفاده: <code>/grant &lt;tg_id&gt; &lt;coins&gt;</code>\n\n" +
+        `<i>هر سکه یک دقیقه صوت. برای کسی که هنوز شناسه‌ای ندارد از </i><code>/gift</code><i> استفاده کن.</i>`,
+    );
     return;
   }
-  const sec = Math.round(m * 60);
-  grant(t, sec, "grant");
-  await reply(ctx, `${fmtCost(sec)} به ${toFaDigits(t)} اضافه شد.`);
+  if (!getUser(t)) {
+    await reply(ctx, "چنین کاربری در پایگاه‌داده نیست. اگر هنوز با ربات حرف نزده، <code>/gift</code> بساز.");
+    return;
+  }
+  const balance = grant(t, coinsToSec(coins), "grant");
+  await reply(
+    ctx,
+    `✅ ${fmtCoins(coins)} به ${escapeHtml(describeUser(t))} اضافه شد.\n\nموجودی جدیدش: <b>${fmtBalance(balance)}</b>`,
+  );
+  await notifyUser(
+    t,
+    `🎁 <b>${fmtCoins(coins)}</b> به حسابت اضافه شد!\n\nموجودی‌ات: <b>${fmtBalance(balance)}</b>`,
+  ).catch(() => {});
 });
 
 /**
@@ -495,7 +524,7 @@ handlers.command("grant", async (ctx) => {
 handlers.command("gift", async (ctx) => {
   if (!isAdmin(ctx.from!.id)) return;
 
-  const parts = ((ctx.match as string | undefined) ?? "").trim().split(/s+/).filter(Boolean);
+  const parts = ((ctx.match as string | undefined) ?? "").trim().split(/\s+/).filter(Boolean);
   let coins: number | null = null;
   let maxUses = 1;
   let days: number | null = null;
@@ -524,21 +553,32 @@ handlers.command("gift", async (ctx) => {
     days,
   });
 
-  const lines = [
-    "🎁 <b>لینک هدیه ساخته شد</b>",
-    "",
-    `${fmtCoins(gift.coins)} — ${coinsAsMinutes(gift.coins)}`,
+  // معادل دقیقه‌ای فقط وقتی می‌آید که به ساعت رسیده باشد؛ «۲۰ سکه — ۲۰ دقیقه»
+  // یک عدد را دو بار می‌گوید.
+  const asTime = coinsAsMinutesIfUseful(gift.coins);
+
+  // یادداشت با `.filter(Boolean)` حذف نمی‌شود، چون آن خطوطِ خالیِ عمدی را هم
+  // با خودش می‌برد و فاصله‌گذاری پیام را به هم می‌ریزد.
+  const facts = [
+    asTime ? `${fmtCoins(gift.coins)} — ${asTime}` : fmtCoins(gift.coins),
     gift.max_uses === 1 ? "یک‌بارمصرف" : `برای ${toFaDigits(gift.max_uses)} نفر اول`,
     days ? `مهلت: ${toFaDigits(days)} روز` : "بدون مهلت",
-    gift.note ? `یادداشت: ${escapeHtml(gift.note)}` : "",
-    "",
-    // لینک داخل <code> است تا با یک لمس کپی شود و تلگرام پیش‌نمایشش را باز نکند.
-    `<code>${link}</code>`,
-    "",
-    `<i>برای باطل‌کردن: </i><code>/ungift ${gift.code}</code>`,
-  ].filter(Boolean);
+    ...(gift.note ? [`یادداشت: ${escapeHtml(gift.note)}`] : []),
+  ];
 
-  await reply(ctx, lines.join("\n"));
+  await reply(
+    ctx,
+    [
+      "🎁 <b>لینک هدیه ساخته شد</b>",
+      "",
+      ...facts,
+      "",
+      // لینک داخل <code> است تا با یک لمس کپی شود و تلگرام پیش‌نمایشش را باز نکند.
+      `<code>${link}</code>`,
+      "",
+      `<i>برای باطل‌کردن: </i><code>/ungift ${gift.code}</code>`,
+    ].join("\n"),
+  );
 });
 
 /** باطل‌کردن کدی که هنوز خرج نشده — یا خرج شده و جلوی بقیه‌اش باید گرفته شود. */

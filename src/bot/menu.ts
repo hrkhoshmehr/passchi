@@ -13,7 +13,7 @@
 import { InlineKeyboard, Keyboard } from "grammy";
 import { config } from "../config.js";
 import {
-  COINS_PER_MINUTE, PACKAGES, REFUND_CAP_PCT, SHARE_TARGET, classesFor, coinsAsMinutes, fmtCoins,
+  PACKAGES, RATE_LINE, REFUND_CAP_PCT, SHARE_TARGET, classesFor, coinsAsMinutes, fmtCoins,
   fmtToman,
 } from "../billing/coins.js";
 import { toFaDigits } from "../util/time.js";
@@ -171,7 +171,7 @@ export function packagesKeyboard(): InlineKeyboard {
 }
 
 export function packagesMessage(): string {
-  const out = ["<b>🪙 شارژ حساب</b>", "", `هر دقیقه صوت ${toFaDigits(COINS_PER_MINUTE)} سکه خرج دارد.`, ""];
+  const out = ["<b>🪙 شارژ حساب</b>", "", `<b>${RATE_LINE}.</b>`, ""];
   for (const p of PACKAGES) {
     const classes = classesFor(p.coins);
     const worth = classes >= 1 ? `${toFaDigits(classes)} کلاس ۹۰ دقیقه‌ای` : coinsAsMinutes(p.coins);

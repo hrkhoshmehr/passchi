@@ -12,6 +12,8 @@ import {
 import {
   DEMO_INTRO, SAMPLE_COURSE, SAMPLE_DURATION_MS, SAMPLE_REPORT, outroMessage,
 } from "../src/bot/demo.ts";
+import { DEFAULT_GIFT_COINS, claimedMessage, refusalMessage } from "../src/bot/gift.ts";
+import { coinsToSec } from "../src/billing/coins.ts";
 
 const line = (t) => console.log("\n" + "─".repeat(64) + `  ${t}\n`);
 const show = (t) => console.log(t.replace(/<\/?[a-z][^>]*>/g, ""));
@@ -155,14 +157,34 @@ line("تور نمونه — گام ۴: پایان تور");
 show(outroMessage(15, "SUPPORT_ID"));
 
 line("حساب");
-show(accountMessage({ creditSec: 857, usedSec: 0, refundedSec: 0, sessionCount: 1 }));
+show(accountMessage({ creditSec: coinsToSec(20), usedSec: 0, refundedSec: 0, sessionCount: 0 }));
+line("حساب — کاربر فعال");
+show(
+  accountMessage({
+    creditSec: coinsToSec(430),
+    usedSec: 90 * 60,
+    refundedSec: 45 * 60,
+    sessionCount: 4,
+  }),
+);
 line("شارژ");
 show(packagesMessage());
 line("سکهٔ کم");
-show(lowBalanceMessage(5400, 857));
+show(lowBalanceMessage(90 * 60, coinsToSec(20)));
 line("پشتیبانی");
 show(supportMessage());
 line("راهنما");
 show(HELP);
 line("حریم خصوصی");
 show(PRIVACY);
+
+line("هدیه — گیرندهٔ تازه");
+show(claimedMessage(DEFAULT_GIFT_COINS, coinsToSec(DEFAULT_GIFT_COINS)));
+line("هدیه — کسی که از قبل سکه داشت");
+show(claimedMessage(20, coinsToSec(50)));
+line("هدیه — مقدار بزرگ");
+show(claimedMessage(120, coinsToSec(120)));
+line("هدیه — پیام‌های رد");
+for (const r of ["unknown", "revoked", "expired", "already", "exhausted"]) {
+  console.log(`  ${r.padEnd(10)} → ${refusalMessage(r)}`);
+}
