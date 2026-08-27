@@ -126,7 +126,6 @@ function go(name) {
 for (const t of document.querySelectorAll(".tab")) {
   t.addEventListener("click", () => {
     go(t.dataset.go);
-    if (t.dataset.go === "list") loadList();
     if (t.dataset.go === "acct") loadAccount();
   });
 }
@@ -410,6 +409,9 @@ async function upload(file) {
   const courseId = $("course").value;
 
   go("prog");
+  // بازماندهٔ آپلود قبلی نباید بالای نوار پیشرفتِ تازه بماند.
+  show($("prog-done"), false);
+  fail($("prog-err"), "");
   renderProgress({ stage: "upload" });
 
   const qs = new URLSearchParams({ duration: String(seconds), ext });
@@ -488,7 +490,7 @@ function watch(sessionId) {
       if (progress.stage === "done" || status === "done") {
         clearInterval(poll);
         await loadMe().catch(() => {});
-        openSession(sessionId);
+        await showDone();
       }
     } catch (e) {
       clearInterval(poll);
@@ -497,8 +499,38 @@ function watch(sessionId) {
   }, 2000);
 }
 
-// ─── فهرست جلسه‌ها ──────────────────────────────────────────────────────────
+/**
+ * پایان کار: کاربر را به ربات برگردان.
+ *
+ * نتیجه عمداً اینجا نشان داده نمی‌شود. در ربات می‌شود جزوه را برای گروه درس
+ * فوروارد کرد و زمان‌های گزارش لینکِ پخش می‌شوند؛ هیچ‌کدام در مینی‌اپ ممکن
+ * نیست. پس مینی‌اپ کارِ خودش را می‌کند — آپلودی که ربات نمی‌تواند — و
+ * تحویل را به ربات می‌سپارد.
+ */
+async function showDone() {
+  let url = null;
+  try {
+    const { bots = {} } = await api.call("/api/config");
+    // همان سکویی که کاربر از آن آمده؛ اگر معلوم نبود، تلگرام.
+    url = (miniApp?.platform && bots[miniApp.platform]) || bots.telegram || bots.bale || null;
+  } catch {
+    /* بی‌آدرس هم کارت پیام خودش را می‌دهد */
+  }
+  const link = $("go-bot");
+  if (url) link.href = url;
+  show(link, Boolean(url));
+  show($("prog-done"), true);
+}
 
+/**
+ * برچسب فارسی وضعیت — برای نوار پیشرفت.
+ *
+ * بقیهٔ این بخش (فهرست جلسه‌ها و نمایش گزارش) از مینی‌اپ برداشته شد: نتیجه
+ * در **ربات** تحویل داده می‌شود، چون آنجا می‌شود جزوه را برای گروه درس
+ * فوروارد کرد و زمان‌ها لینکِ پخش می‌شوند. مینی‌اپ فقط برای آپلود است، که
+ * کاری است که ربات نمی‌تواند بکند — بله بالای بیست مگابایت را نمی‌پذیرد و
+ * آپلود در تلگرام از پشت فیلترشکن کند است.
+ */
 const STATUS_FA = {
   queued: "در صف",
   preprocess: "آماده‌سازی",
@@ -509,257 +541,6 @@ const STATUS_FA = {
   error: "ناموفق",
   cancelled: "لغو شد",
 };
-
-async function loadList() {
-  const box = $("list");
-  box.innerHTML = '<div class="empty"><span class="spinner"></span></div>';
-  try {
-    const { sessions } = await api.call("/api/sessions");
-    if (!sessions.length) {
-      box.innerHTML = `<div class="empty">
-        <div class="empty-ico">📭</div>
-        <p style="margin-top:10px">هنوز جلسه‌ای نفرستادی</p>
-        <p class="dim">یه صوت بفرست تا شروع کنیم</p>
-      </div>`;
-      return;
-    }
-    box.innerHTML = sessions
-      .map((s) => {
-        const cls = s.status === "done" ? "ok" : s.status === "error" ? "err" : "run";
-        const meta = [
-          s.createdAt?.slice(0, 10),
-          s.durationMs ? dur(s.durationMs) : null,
-          s.transcriptOnly ? "فقط رونوشت" : null,
-        ].filter(Boolean);
-        return `<div class="item" data-id="${s.id}">
-          <div class="item-title">${esc(s.title || "بدون عنوان")}</div>
-          <div class="item-meta">
-            <span class="badge ${cls}">${STATUS_FA[s.status] || s.status}</span>
-            ${meta.map((m) => `<span>${esc(m)}</span>`).join("")}
-          </div>
-        </div>`;
-      })
-      .join("");
-    for (const el of box.querySelectorAll(".item")) {
-      el.addEventListener("click", () => openSession(el.dataset.id));
-    }
-  } catch (e) {
-    box.innerHTML = `<div class="err">${esc(e.message)}</div>`;
-  }
-}
-
-$("back-list").addEventListener("click", () => {
-  go("list");
-  loadList();
-});
-
-// ─── یک جلسه ────────────────────────────────────────────────────────────────
-
-/*
- * برچسب‌ها، هم‌نام با `src/bot/strings.ts`.
- *
- * تکرار شده‌اند چون کلاینت به کد سرور دسترسی ندارد و ساختن یک مسیر API فقط
- * برای چند رشتهٔ ثابت نمی‌ارزید. اگر آنجا عوض شد، اینجا هم باید عوض شود.
- */
-const KP_FA = {
-  exam: "🎯 در امتحان می‌آید",
-  emphasis: "⚑ تأکید استاد",
-  homework: "📝 تکلیف",
-  deadline: "⏳ مهلت",
-  grading: "💯 نمره و بارم",
-  logistics: "📌 تصمیم کلاس",
-};
-
-const ACTION_FA = {
-  attendance: "حضور و غیاب",
-  quiz: "کوییز",
-  homework: "تکلیف",
-  deadline: "مهلت",
-  exam_info: "اطلاعات امتحان",
-  grading: "نمره و بارم",
-  makeup_class: "کلاس جبرانی",
-  class_cancelled: "لغو جلسه",
-  other: "سایر",
-};
-
-/** جملهٔ منفیِ قطعی — «کوییز نگرفت»، نه فهرست خالی. */
-const ACTION_NO = {
-  attendance: "حضور و غیاب نکرد",
-  quiz: "کوییز نگرفت",
-  exam_info: "دربارهٔ امتحان چیزی نگفت",
-  homework: "تکلیفی نداد",
-  deadline: "مهلتی تعیین نکرد",
-  grading: "دربارهٔ نمره و بارم صحبتی نکرد",
-  makeup_class: "کلاس جبرانی اعلام نکرد",
-  class_cancelled: "جلسه‌ای را لغو نکرد",
-};
-
-const KIND_FA = {
-  teaching: "تدریس",
-  qa: "پرسش و پاسخ",
-  admin: "امور کلاس",
-  offtopic: "حاشیه",
-  technical: "مشکل فنی",
-  break: "سکوت و وقفه",
-};
-
-async function openSession(id) {
-  go("one");
-  const box = $("one");
-  box.innerHTML = '<div class="empty"><span class="spinner"></span></div>';
-  try {
-    const { session, report } = await api.call(`/api/sessions/${id}`);
-    box.innerHTML = renderSession(session, report, id);
-  } catch (e) {
-    box.innerHTML = `<div class="err">${esc(e.message)}</div>`;
-  }
-}
-
-function renderSession(s, report, id) {
-  const parts = [];
-
-  parts.push(`<h2 style="font-size:21px;margin-top:14px">${esc(s.title || "جلسهٔ کلاس")}</h2>
-    <p class="dim" style="margin-top:6px">
-      ${[s.date, s.durationMs ? dur(s.durationMs) : null].filter(Boolean).map(esc).join(" · ")}
-    </p>`);
-
-  if (s.status === "error") {
-    parts.push(`<div class="err" style="margin-top:16px">${esc(s.error || "پردازش ناموفق بود.")}</div>`);
-  }
-
-  if (report?.class_recap || report?.headline) {
-    parts.push(`<div class="rep-section">
-      <h3>📋 کلاس چه خبر بود</h3>
-      <div class="note">${esc(report.class_recap || report.headline)}</div>
-    </div>`);
-  }
-
-  /**
-   * چک‌لیست کارهای استاد — با پاسخ منفیِ صریح.
-   *
-   * «کوییز نگرفت» نوشته می‌شود، نه اینکه ردیفش حذف شود. دانشجویی که کلاس
-   * نبوده دقیقاً همین را می‌پرسد، و سکوت را نمی‌شود «یعنی نگرفت» تفسیر کرد.
-   * پشتوانه‌اش واقعی است: کل رونوشت خوانده شده و هر ادعا از دروازهٔ
-   * راستی‌آزمایی رد شده.
-   */
-  if (report?.professor_actions?.length) {
-    parts.push(`<div class="rep-section">
-      <h3>✅ کارهای استاد</h3>
-      ${report.professor_actions
-        .map((a) => {
-          const label = ACTION_FA[a.action] ?? a.action;
-          if (!a.happened) {
-            return `<div class="note"><span class="dim">${esc(ACTION_NO[a.action] ?? `${label} نداشت`)}</span></div>`;
-          }
-          return `<div class="note">
-            <b>${esc(label)}</b>${a.detail ? ` — ${esc(a.detail)}` : ""}
-            ${a.evidence?.quote ? `<div class="note-q">«${esc(a.evidence.quote)}»</div>` : ""}
-          </div>`;
-        })
-        .join("")}
-    </div>`);
-  }
-
-  /**
-   * نکته‌ها — قلبِ محصول.
-   *
-   * هر نکته نقل‌قول تأییدشده و زمانش را همراه دارد. زمان نمایش داده می‌شود
-   * چون کاربر باید بتواند خودش برود و گوش بدهد؛ همان چیزی که «ذکر منبع» را
-   * از یک ادعا به یک ارجاع تبدیل می‌کند.
-   */
-  if (report?.key_points?.length) {
-    parts.push(`<div class="rep-section">
-      <h3>⭐ چی از کلاس درآوردم</h3>
-      ${report.key_points
-        .map(
-          (k) => `<div class="note star">
-            <div class="dim" style="font-size:13px">${esc(KP_FA[k.kind] ?? k.kind)}</div>
-            <div style="margin-top:6px"><b>${esc(k.title)}</b></div>
-            ${k.detail ? `<div class="muted" style="font-size:14.3px;margin-top:6px">${esc(k.detail)}</div>` : ""}
-            ${k.due ? `<div class="dim" style="margin-top:6px">⏳ مهلت: ${esc(k.due)}</div>` : ""}
-            ${
-              k.evidence?.quote
-                ? `<div class="note-q">
-                     ${k.evidence.at_ms != null ? `<span class="ts">${clock(k.evidence.at_ms)}</span> ` : ""}
-                     «${esc(k.evidence.quote)}»
-                   </div>`
-                : ""
-            }
-          </div>`,
-        )
-        .join("")}
-    </div>`);
-  }
-
-  if (report?.chapters?.length) {
-    parts.push(`<div class="rep-section">
-      <h3>🕐 بخش‌بندی کلاس</h3>
-      ${report.chapters
-        .map(
-          (c) => `<div class="note">
-            <span class="ts">${clock(c.start_ms)}</span>
-            <div style="margin-top:9px">
-              <b>${esc(c.title || KIND_FA[c.kind] || c.kind)}</b>
-              <span class="dim"> · ${esc(KIND_FA[c.kind] ?? c.kind)}</span>
-            </div>
-          </div>`,
-        )
-        .join("")}
-    </div>`);
-  }
-
-  if (report?.glossary?.length) {
-    parts.push(`<div class="rep-section">
-      <h3>📖 واژه‌نامه</h3>
-      ${report.glossary
-        .map(
-          (g) => `<div class="note">
-            <b>${esc(g.term)}</b>${g.english ? ` <span class="dim">(${esc(g.english)})</span>` : ""}
-            <div class="muted" style="font-size:14.3px;margin-top:5px">${esc(g.definition)}</div>
-          </div>`,
-        )
-        .join("")}
-    </div>`);
-  }
-
-  // دانلودها با توکن نیاز دارند، پس با جاوااسکریپت گرفته می‌شوند نه لینک ساده
-  const acts = [];
-  if (s.hasPdf) acts.push(`<button class="btn btn-primary" data-dl="pdf">📕 دانلود جزوه</button>`);
-  acts.push(`<button class="btn btn-ghost" data-dl="transcript">📄 رونوشت</button>`);
-  parts.push(`<div class="actions">${acts.join("")}</div>`);
-
-  queueMicrotask(() => {
-    for (const b of $("one").querySelectorAll("[data-dl]")) {
-      b.addEventListener("click", () => download(id, b.dataset.dl));
-    }
-  });
-
-  return parts.join("");
-}
-
-/**
- * دانلود فایلی که پشت احراز هویت است.
- *
- * لینک ساده کار نمی‌کند چون توکن در هدر می‌رود نه در URL. پس فایل با
- * `fetch` گرفته می‌شود و از روی `blob` یک لینک موقت ساخته می‌شود.
- */
-async function download(id, kind) {
-  try {
-    const res = await fetch(`/api/sessions/${id}/${kind}`, {
-      headers: { authorization: `Bearer ${api.token}` },
-    });
-    if (!res.ok) throw new Error("فایل در دسترس نیست.");
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = kind === "pdf" ? "جزوه.pdf" : "رونوشت.txt";
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-  } catch (e) {
-    alert(e.message);
-  }
-}
 
 // ─── حساب ───────────────────────────────────────────────────────────────────
 

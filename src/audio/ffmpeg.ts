@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import path from "node:path";
 import ffmpegStatic from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
 import { logger } from "../util/logger.js";
@@ -642,5 +643,62 @@ export async function extractClip(
     180_000,
   );
   if (code !== 0) throw new Error(`ffmpeg clip failed: ${stderr.slice(-400)}`);
+  return output;
+}
+
+/**
+ * نسخهٔ سبکِ صوت، برای اینکه از ربات قابل‌ارسال باشد.
+ *
+ * سقف ارسال تلگرام پنجاه مگابایت است و صوت یک کلاسِ بلند از آن رد می‌شود.
+ * فشرده‌سازی برای صرفه‌جویی نیست — **بدون صوت در همان چت، زمان‌های گزارش
+ * لینکِ پخش نمی‌شوند** و مهم‌ترین قابلیت خروجی از کار می‌افتد.
+ *
+ * نرخ بیت از روی مدت حساب می‌شود نه ثابت گذاشته می‌شود، چون کلاس دو ساعته و
+ * کلاس چهل‌دقیقه‌ای دو مسئلهٔ متفاوت‌اند. ضریب ۰٫۹ حاشیه است برای سرآیندها،
+ * و کف ۱۶ کیلوبیت مونو جایی است که گفتار هنوز قابل‌فهم می‌ماند.
+ *
+ * `null` یعنی حتی با کمترین نرخ هم جا نمی‌شود — که برای صوتِ چند ده ساعته
+ * ممکن است. صدازننده باید بدون صوت جلو برود، نه اینکه شکست بخورد.
+ */
+export async function transcodeForTelegram(
+  input: string,
+  workDir: string,
+  maxBytes: number,
+): Promise<string | null> {
+  const { durationMs } = await probe(input);
+  const seconds = durationMs / 1000;
+  if (seconds <= 0) return null;
+
+  const kbps = Math.floor(((maxBytes * 8) / seconds / 1000) * 0.9);
+  if (kbps < 16) return null;
+  // بالاتر از ۶۴ نرفتن عمدی است: کیفیتِ بیشتر برای گفتار چیزی اضافه نمی‌کند
+  // و فقط حجم را به سقف نزدیک می‌کند.
+  const rate = Math.min(64, kbps);
+
+  const output = path.join(workDir, `${path.parse(input).name}-tg.mp3`);
+  const { code, stderr } = await run(
+    FFMPEG,
+    [
+      "-hide_banner", "-nostdin", "-vn", "-y",
+      "-i", input,
+      "-ac", "1",
+      "-ar", "24000",
+      "-c:a", "libmp3lame", "-b:a", `${rate}k`,
+      "-map_metadata", "-1",
+      output,
+    ],
+    30 * 60_000,
+  );
+  if (code !== 0) {
+    throw new Error(`ffmpeg telegram transcode failed: ${stderr.slice(-400)}`);
+  }
+
+  // اگر باز هم بزرگ بود، خروجی به درد نمی‌خورد و نباید جا بماند.
+  const stat = await fs.stat(output).catch(() => null);
+  if (!stat) return null;
+  if (stat.size > maxBytes) {
+    await fs.unlink(output).catch(() => {});
+    return null;
+  }
   return output;
 }

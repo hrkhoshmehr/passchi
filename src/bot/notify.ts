@@ -13,7 +13,7 @@
 
 import type { Api } from "grammy";
 import { logger } from "../util/logger.js";
-import { identitiesOf } from "../db/identity.js";
+import { identitiesOf, type Platform } from "../db/identity.js";
 
 interface Channel {
   api: Api;
@@ -27,6 +27,29 @@ let baleApi: Api | null = null;
 export function setNotifyApis(telegram: Api | null, bale: Api | null): void {
   telegramApi = telegram;
   baleApi = bale;
+}
+
+/**
+ * بهترین کانالِ **تحویل نتیجه** برای این کاربر.
+ *
+ * با `notifyUser` فرق دارد: آن به *همهٔ* سکوها می‌فرستد چون یک خبر کوتاه است
+ * و تکرارش بی‌ضرر. تحویل جلسه اما صوت و جزوه و سه پیام است؛ فرستادنش به دو
+ * جا یعنی دو برابر آپلود و یک چت شلوغ.
+ *
+ * تلگرام مقدم است چون فقط آنجا زمان‌های گزارش لینکِ پخش می‌شوند.
+ */
+export function deliveryChannel(
+  userId: number,
+): { api: Api; chatId: number; platform: Platform } | null {
+  for (const platform of ["telegram", "bale"] as const) {
+    const row = identitiesOf(userId).find((i) => i.platform === platform);
+    if (!row) continue;
+    const api = platform === "telegram" ? telegramApi : baleApi;
+    if (!api) continue;
+    const chatId = Number(row.platform_user_id);
+    if (Number.isFinite(chatId)) return { api, chatId, platform };
+  }
+  return null;
 }
 
 /** همهٔ راه‌هایی که می‌شود به این کاربر پیام داد. */

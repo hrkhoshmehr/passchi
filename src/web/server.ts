@@ -24,6 +24,7 @@ import {
   requestOtp, revokeToken, userIdFromToken, verifyOtp,
 } from "./auth.js";
 import { botLinks } from "../bot/links.js";
+import { deliverToBot } from "../bot/deliver.js";
 import { getProgress, setProgress } from "./progress.js";
 import { startJob } from "../jobs/service.js";
 import { InsufficientCredit } from "../billing/ledger.js";
@@ -395,7 +396,27 @@ async function uploadAudio(
       mode: free ? "free_trial" : "full",
       ...(free ? { limitMs: Math.round(config.FREE_TRANSCRIPT_MINUTES * 60_000) } : {}),
       onProgress: (s) => setProgress(sessionId, { stage: s.stage, ...(s.detail ? { detail: s.detail } : {}) }),
-      onDone: () => setProgress(sessionId, { stage: "done" }),
+      /**
+       * کار در مینی‌اپ شروع شده ولی نتیجه در **ربات** تحویل داده می‌شود.
+       *
+       * دلیلش تجربهٔ کاربر است نه فنی: جزوه را در ربات می‌شود برای گروه درس
+       * فوروارد کرد، زمان‌های گزارش آنجا لینکِ پخش می‌شوند، و جلسه در همان
+       * تاریخچه‌ای می‌نشیند که کاربر می‌شناسد. مینی‌اپ فقط برای آپلود است،
+       * چون بله بالای بیست مگابایت را نمی‌پذیرد و آپلود در تلگرام برای
+       * کاربر ایرانی از پشت فیلترشکن کند است.
+       *
+       * شکستش بی‌صداست: کاربر جلسه‌اش را در تاریخچه دارد و یک خطای شبکه
+       * نباید نتیجه را از بین ببرد.
+       */
+      onDone: () => {
+        setProgress(sessionId, { stage: "done" });
+        const s = getSession(sessionId);
+        if (s) {
+          void deliverToBot(userId, s).catch((e: unknown) => {
+            logger.warn({ sessionId, err: String(e) }, "deliver to bot failed");
+          });
+        }
+      },
       onError: (message) => setProgress(sessionId, { stage: "error", message }),
     });
   } catch (e) {

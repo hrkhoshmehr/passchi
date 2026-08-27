@@ -297,19 +297,24 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
       <div class="prog-steps" id="prog-steps"></div>
     </div>
     <div class="err hidden" id="prog-err" style="margin-top:15px"></div>
+
+    <!--
+      پایان کار. نتیجه در ربات تحویل داده می‌شود نه اینجا، پس این کارت تنها
+      چیزی است که کاربر در مینی‌اپ می‌بیند و باید او را به ربات برگرداند.
+    -->
+    <div class="card hidden" id="prog-done" style="margin-top:15px;text-align:center">
+      <div style="font-size:38px">✅</div>
+      <h2 style="font-size:19px;margin-top:8px">تحلیلت آماده شد</h2>
+      <p class="muted" style="font-size:14.5px;margin-top:8px">
+        خلاصه، نکته‌های امتحانی، جزوهٔ PDF و رونوشت — همه رو تو ربات برات فرستادم.
+      </p>
+      <a class="btn btn-primary btn-block hidden" id="go-bot" style="margin-top:16px" target="_blank" rel="noopener">
+        برگرد به ربات
+      </a>
+    </div>
   </section>
 
   <!-- ─── جلسه‌ها ──────────────────────────────────────────────────────── -->
-  <section class="screen" id="s-list">
-    <div class="stack" id="list"></div>
-  </section>
-
-  <!-- ─── یک جلسه ──────────────────────────────────────────────────────── -->
-  <section class="screen" id="s-one">
-    <button class="btn btn-ghost btn-sm" id="back-list" type="button">‹ برگرد</button>
-    <div id="one"></div>
-  </section>
-
   <!-- ─── حساب ─────────────────────────────────────────────────────────── -->
   <section class="screen" id="s-acct">
     <div class="stack" id="acct"></div>
@@ -318,8 +323,7 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
 
 <nav class="tabs hidden" id="tabs">
   <div class="tabs-in">
-    <button class="tab on" data-go="send" type="button"><span>🎧</span>بفرست</button>
-    <button class="tab" data-go="list" type="button"><span>📚</span>جلسه‌ها</button>
+    <button class="tab on" data-go="send" type="button"><span>🎧</span>آپلود صوت</button>
     <button class="tab" data-go="acct" type="button"><span>🪙</span>حساب</button>
   </div>
 </nav>

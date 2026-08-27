@@ -320,10 +320,20 @@ export function getSession(id: string): SessionRow | null {
   return (db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as unknown as SessionRow | undefined) ?? null;
 }
 
-export function listSessions(tgId: number, limit = 10): SessionRow[] {
+export function listSessions(tgId: number, limit = 10, offset = 0): SessionRow[] {
   return db
-    .prepare(`SELECT * FROM sessions WHERE tg_id = ? ORDER BY created_at DESC LIMIT ?`)
-    .all(tgId, limit) as unknown as SessionRow[];
+    .prepare(
+      `SELECT * FROM sessions WHERE tg_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+    )
+    .all(tgId, limit, offset) as unknown as SessionRow[];
+}
+
+/** شمار کل جلسه‌های کاربر — برای صفحه‌بندی. */
+export function countSessions(tgId: number): number {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM sessions WHERE tg_id = ?`)
+    .get(tgId) as unknown as { n: number };
+  return row.n;
 }
 
 type Updatable = Partial<

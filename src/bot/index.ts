@@ -35,9 +35,10 @@ import {
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio, freeRunUsed,
   getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, markFreeRunUsed,
-  getGift, listGifts, pendingTopups, purgeSession, revokeGift, sessionReport, sessionTimeMap,
-  updateSession,
+  countSessions, getGift, listGifts, pendingTopups, purgeSession, revokeGift, sessionReport,
+  sessionTimeMap, updateSession,
   type SessionMode,
+  type SessionRow,
 } from "../db/index.js";
 import { findIdentity, resolveIdentity } from "../db/identity.js";
 import { platformOf, setBaleApi, uid } from "./identity.js";
@@ -199,43 +200,109 @@ async function topupScreen(ctx: Context): Promise<void> {
  * هر جلسه یک پیام با دکمه‌های خودش: جزوه، تحلیل، رونوشت، اشتراک‌گذاری. چیزی
  * که کاربر برایش برمی‌گردد دقیقاً همین است — «اون جزوهٔ هفتهٔ پیش کجا بود».
  */
-async function historyScreen(ctx: Context): Promise<void> {
+/** چند جلسه در هر صفحه. هشت‌تا در یک پیام جا می‌شود بدون اسکرول زیاد. */
+const HISTORY_PAGE = 8;
+
+/**
+ * عنوان کوتاه برای دکمه.
+ *
+ * تلگرام متن دکمه را در یک خط نشان می‌دهد و بلندش را می‌برد، پس خودمان
+ * می‌بریم تا وسط کلمه قطع نشود.
+ */
+function sessionLabel(s: SessionRow): string {
+  const icon =
+    s.status === "done" ? (isTranscriptOnly(s.mode) ? "📄" : "📋") : s.status === "error" ? "❌" : "⏳";
+  const title = (s.title ?? "بدون عنوان").trim();
+  const short = title.length > 32 ? title.slice(0, 31).trimEnd() + "…" : title;
+  const when = s.created_at.slice(5, 10).replace("-", "/");
+  return `${icon} ${short} · ${toFaDigits(when)}`;
+}
+
+/**
+ * فهرست جلسه‌ها — **یک پیام، دکمه‌ای، با صفحه‌بندی**.
+ *
+ * پیش‌تر برای هر جلسه یک پیام جدا فرستاده می‌شد؛ ده جلسه یعنی ده پیام پشت
+ * سر هم که کل چت را پر می‌کرد و پیدا‌کردن جلسهٔ دیروز را سخت می‌کرد. حالا
+ * یک پیام با فهرست دکمه‌هاست و محتوای هر جلسه فقط وقتی می‌آید که رویش زده
+ * شود.
+ *
+ * `edit` یعنی همان پیام به‌روز شود نه اینکه پیام تازه‌ای بیاید — چون
+ * صفحه‌بندی که هر بار یک پیام تازه بسازد، همان شلوغی را از راه دیگری
+ * برمی‌گرداند.
+ */
+async function historyScreen(ctx: Context, page = 0, edit = false): Promise<void> {
   touchUser(ctx);
-  const rows = listSessions(uid(ctx), 10);
-  if (rows.length === 0) {
+  const id = uid(ctx);
+  const total = countSessions(id);
+
+  if (total === 0) {
     await reply(ctx, "هنوز جلسه‌ای نفرستادی 📭\n\nیه فایل صوتی یا ویس بفرست تا شروع کنیم 🎧");
     return;
   }
 
-  await reply(ctx, `<b>📚 ${toFaDigits(rows.length)} جلسهٔ آخرت</b>`);
-  for (const s of rows) {
-    const kb = new InlineKeyboard();
-    if (s.pdf_path) kb.text("📕 جزوه", `pdf:${s.id}`);
-    if (s.report_json) kb.text("📋 تحلیل", `rep:${s.id}`);
-    if (s.transcript_txt) kb.text("📄 رونوشت", `txt:${s.id}`);
-    // جلسهٔ رایگان فقط رونوشت دارد، پس دکمهٔ ارتقا به تحلیل کامل می‌گیرد.
-    if (isTranscriptOnly(s.mode) && s.status === "done") {
-      kb.row().text("✨ تحلیل کامل این جلسه", `full:${s.id}`);
-    }
-    if (s.mode === "full" && s.status === "done") {
-      kb.row().text(
-        s.share_enabled ? "🔗 لینک دعوت" : "👥 تقسیم با هم‌کلاسیا",
-        s.share_enabled ? `slink:${s.id}` : `son:${s.id}`,
-      );
-    }
+  const pages = Math.max(1, Math.ceil(total / HISTORY_PAGE));
+  const safe = Math.min(Math.max(0, page), pages - 1);
+  const rows = listSessions(id, HISTORY_PAGE, safe * HISTORY_PAGE);
 
-    const course = s.course_id ? getCourse(s.course_id) : null;
-    const meta = [s.created_at.slice(0, 10), s.original_ms ? fmtDuration(s.original_ms) : null, course?.name]
-      .filter(Boolean)
-      .join(" · ");
-    const status =
-      s.status === "done" ? "" : s.status === "error" ? " ❌ <i>ناموفق</i>" : ` ⏳ <i>${s.status}</i>`;
+  const kb = new InlineKeyboard();
+  for (const s of rows) kb.text(sessionLabel(s), `sess:${s.id}`).row();
 
-    await ctx.reply(`<b>${escapeHtml(s.title ?? "بدون عنوان")}</b>${status}\n<i>${escapeHtml(meta)}</i>`, {
-      parse_mode: "HTML",
-      reply_markup: kb.inline_keyboard.length ? kb : undefined,
-    });
+  // نوار صفحه‌بندی فقط وقتی که واقعاً بیش از یک صفحه باشد.
+  if (pages > 1) {
+    if (safe > 0) kb.text("▶️ قبلی", `hpage:${safe - 1}`);
+    kb.text(`${toFaDigits(safe + 1)} از ${toFaDigits(pages)}`, "noop");
+    if (safe < pages - 1) kb.text("بعدی ◀️", `hpage:${safe + 1}`);
   }
+
+  const text = `<b>📚 جلسه‌های تو</b> — ${toFaDigits(total)} جلسه\n\n<i>روی هرکدوم بزنی، بازش می‌کنم.</i>`;
+
+  if (edit) {
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
+    return;
+  }
+  await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+}
+
+/**
+ * یک جلسه، با همان دکمه‌هایی که قبلاً کنار هر سطر بود.
+ *
+ * جدا شدنش از فهرست عمدی است: کاربر اول انتخاب می‌کند و بعد گزینه‌ها را
+ * می‌بیند، نه اینکه هشت مجموعه دکمه هم‌زمان جلویش باشد.
+ */
+async function sessionCard(ctx: Context, sessionId: string): Promise<void> {
+  const s = getSession(sessionId);
+  if (!s || s.tg_id !== uid(ctx)) {
+    await ctx.answerCallbackQuery({ text: "این جلسه پیدا نشد." });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+
+  const kb = new InlineKeyboard();
+  if (s.pdf_path) kb.text("📕 جزوه", `pdf:${s.id}`);
+  if (s.report_json) kb.text("📋 تحلیل", `rep:${s.id}`);
+  if (s.transcript_txt) kb.text("📄 رونوشت", `txt:${s.id}`);
+  if (isTranscriptOnly(s.mode) && s.status === "done") {
+    kb.row().text("✨ تحلیل کامل این جلسه", `full:${s.id}`);
+  }
+  if (s.mode === "full" && s.status === "done") {
+    kb.row().text(
+      s.share_enabled ? "🔗 لینک دعوت" : "👥 تقسیم با هم‌کلاسیا",
+      s.share_enabled ? `slink:${s.id}` : `son:${s.id}`,
+    );
+  }
+  kb.row().text("↩️ برگشت به فهرست", "hpage:0");
+
+  const course = s.course_id ? getCourse(s.course_id) : null;
+  const meta = [s.created_at.slice(0, 10), s.original_ms ? fmtDuration(s.original_ms) : null, course?.name]
+    .filter(Boolean)
+    .join(" · ");
+  const status =
+    s.status === "done" ? "" : s.status === "error" ? " ❌ <i>ناموفق</i>" : ` ⏳ <i>${s.status}</i>`;
+
+  await ctx.reply(`<b>${escapeHtml(s.title ?? "بدون عنوان")}</b>${status}\n<i>${escapeHtml(meta)}</i>`, {
+    parse_mode: "HTML",
+    reply_markup: kb.inline_keyboard.length ? kb : undefined,
+  });
 }
 
 async function coursesScreen(ctx: Context): Promise<void> {
@@ -263,15 +330,47 @@ async function coursesScreen(ctx: Context): Promise<void> {
   await reply(ctx, lines.join("\n"), { reply_markup: kb });
 }
 
+/**
+ * راهنمای فرستادن صوت — دو راه، و کدام برای چه کسی.
+ *
+ * محدودیت‌ها واقعی‌اند و کاربر باید پیش از تلاش بداندشان:
+ *
+ *   • **بله** فایل بالای ۲۰ مگابایت را در خودِ ربات نمی‌پذیرد.
+ *   • **تلگرام** برای کاربر ایرانی یعنی فیلترشکن، و آپلود صوت یک کلاس با
+ *     آن سرعت دردناک است.
+ *
+ * پس دو مسیر پیشنهاد می‌شود: **فوروارد** (اگر صوت از قبل در همان پیام‌رسان
+ * هست — سریع‌ترین راه، چون هیچ بایتی از گوشی بالا نمی‌رود) و **مینی‌اپ** (که
+ * روی اینترنت ملی باز می‌شود و آپلود مستقیم است).
+ *
+ * دکمهٔ مینی‌اپ فقط با `PUBLIC_URL` https ساخته می‌شود؛ همان قاعده‌ای که
+ * `mainKeyboard` دارد.
+ */
 async function sendPrompt(ctx: Context): Promise<void> {
-  await reply(
-    ctx,
-    "🎧 <b>صوتو بفرست</b>\n\n" +
-      "همین‌جا یه <b>ویس</b> یا <b>فایل صوتی</b> بفرست — هر فرمتی باشه مشکلی نیست.\n\n" +
-      "<b>دو نکته که کیفیتو بالا می‌بره:</b>\n" +
-      "• گوشی رو بذار رو میز، نه تو کیف\n" +
-      "• هرچی به استاد نزدیک‌تر، بهتر\n\n" +
-      "<i>بعد از فرستادن می‌تونی تلگرامو ببندی؛ نتیجه همین‌جا میاد.</i>",
+  const kb = new InlineKeyboard();
+  if (config.PUBLIC_URL.startsWith("https://")) {
+    kb.webApp("📤 آپلود از راه مینی‌اپ", `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
+  }
+
+  await ctx.reply(
+    [
+      "🎧 <b>صوتو بفرست</b>",
+      "",
+      "همین‌جا یه <b>ویس</b> یا <b>فایل صوتی</b> بفرست — هر فرمتی باشه مشکلی نیست.",
+      "",
+      "<b>اگه صوت از قبل تو گوشیته:</b>",
+      "ساده‌ترین راه اینه که همین‌جا <b>فوروارد</b>ش کنی یا مستقیم بفرستی.",
+      "",
+      "<b>اگه فایل بزرگه یا آپلود کند پیش می‌ره:</b>",
+      "از دکمهٔ پایین مینی‌اپ رو باز کن و اونجا آپلود کن — با اینترنت ملی و بدون محدودیت حجم.",
+      "",
+      "<b>دو نکته که کیفیتو بالا می‌بره:</b>",
+      "• گوشی رو بذار رو میز، نه تو کیف",
+      "• هرچی به استاد نزدیک‌تر، بهتر",
+      "",
+      "<i>هر جوری بفرستی، نتیجه همین‌جا تو ربات میاد.</i>",
+    ].join("\n"),
+    { parse_mode: "HTML", reply_markup: kb.inline_keyboard.length ? kb : undefined },
   );
 }
 
@@ -1107,6 +1206,18 @@ handlers.callbackQuery(/^fc:(free|full):([a-f0-9]+)$/, async (ctx) => {
 });
 
 // ─── کلیک‌ها ────────────────────────────────────────────────────────────────
+
+/** رفتن بین صفحه‌های فهرست جلسه‌ها — همان پیام ویرایش می‌شود. */
+handlers.callbackQuery(/^hpage:(d+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await historyScreen(ctx, Number(ctx.match![1]), true);
+});
+
+/** بازکردن یک جلسه از فهرست. */
+handlers.callbackQuery(/^sess:([a-f0-9]+)$/, (ctx) => sessionCard(ctx, ctx.match![1]!));
+
+/** شمارندهٔ وسط نوار صفحه‌بندی؛ فقط برچسب است. */
+handlers.callbackQuery("noop", (ctx) => ctx.answerCallbackQuery());
 
 handlers.callbackQuery("topup", async (ctx) => {
   await ctx.answerCallbackQuery();
