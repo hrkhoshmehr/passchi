@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Bot, Composer, InlineKeyboard, InputFile, type Context } from "grammy";
+import { Bot, Composer, InlineKeyboard, InputFile, type Api, type Context } from "grammy";
 import { config, requireKey } from "../config.js";
 import { logger } from "../util/logger.js";
-import { chunkMessage, escapeHtml, shortId } from "../util/text.js";
+import { chunkMessage, escapeHtml, htmlToPlain, shortId } from "../util/text.js";
 import { fmtClock, fmtDuration, toFaDigits } from "../util/time.js";
 import { extractClip, probe, TimeMap } from "../audio/ffmpeg.js";
 import { runPipeline } from "../pipeline.js";
@@ -67,6 +67,34 @@ export const baleBot = config.BALE_BOT_TOKEN
       client: { apiRoot: config.BALE_API_ROOT.replace(/\/+$/, "") },
     })
   : null;
+
+/**
+ * بله قالب‌بندی ندارد — پس تگ‌ها پیش از ارسال برداشته می‌شوند.
+ *
+ * آزمون روی خودِ سرور بله: `sendMessage` با `parse_mode: "HTML"` موفق
+ * برمی‌گردد ولی متنِ پاسخ **تگ‌ها را دست‌نخورده** دارد. `Markdown` و
+ * `MarkdownV2` هم همان‌طور، و `entities` هم بی‌صدا دور ریخته می‌شود. یعنی
+ * کاربر بله عیناً `<b>` را در پیام می‌دید.
+ *
+ * چرا اینجا و نه در سی‌ودو جای صدازننده: دست‌کدها عمداً یک‌بار نوشته شده‌اند
+ * تا دو سکو نتوانند از هم عقب بمانند. اگر هر `reply` خودش این را می‌فهمید،
+ * اولین پیامِ تازه‌ای که کسی اضافه می‌کرد دوباره تگ‌دار می‌رفت. یک ترنسفورمر
+ * روی `api` تنها جایی است که *همهٔ* مسیرها — پاسخ‌ها، اعلان‌ها، بایگانی،
+ * و کپشن‌ها — از آن رد می‌شوند.
+ */
+function stripFormattingForBale(api: Api): void {
+  api.config.use(async (prev, method, payload, signal) => {
+    const p = payload as Record<string, unknown>;
+    if (typeof p.text === "string") p.text = htmlToPlain(p.text);
+    if (typeof p.caption === "string") p.caption = htmlToPlain(p.caption);
+    // `parse_mode` برداشته می‌شود چون دیگر چیزی برای پارس‌کردن نمانده و
+    // نگه‌داشتنش فقط این توهم را می‌سازد که بله قالب‌بندی می‌فهمد.
+    delete p.parse_mode;
+    return prev(method, payload as typeof payload, signal);
+  });
+}
+
+if (baleBot) stripFormattingForBale(baleBot.api);
 
 setBaleApi(baleBot?.api ?? null);
 
