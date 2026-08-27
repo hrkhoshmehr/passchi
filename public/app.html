@@ -216,7 +216,20 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
   <section class="screen auth" id="s-auth">
     <div class="auth-mark">📓</div>
     <h2>خوش اومدی</h2>
-    <p>برای شروع شماره‌ات رو وارد کن</p>
+    <p id="auth-lead">برای شروع شماره‌ات رو وارد کن</p>
+
+    <!--
+      وقتی ورود با شماره خاموش است، این جای فرم را می‌گیرد. کاربر باید بداند
+      کجا برود، نه اینکه با فرمی روبه‌رو شود که سرور جوابش را رد می‌کند.
+    -->
+    <div id="auth-bots" class="stack hidden">
+      <a class="btn btn-primary btn-block hidden" id="open-tg" target="_blank" rel="noopener">
+        باز کردن در تلگرام
+      </a>
+      <a class="btn btn-ghost btn-block hidden" id="open-bale" target="_blank" rel="noopener">
+        باز کردن در بله
+      </a>
+    </div>
 
     <form id="form-phone" class="stack">
       <div>
@@ -234,7 +247,6 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
         <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code"
                maxlength="6" placeholder="۱۲۳۴۵۶" required>
       </div>
-      <div class="ok-note hidden" id="dev-code"></div>
       <div class="err hidden" id="code-err"></div>
       <button class="btn btn-primary btn-block" type="submit" id="code-btn">ورود</button>
       <button class="btn btn-ghost btn-block" type="button" id="back-phone">تغییر شماره</button>

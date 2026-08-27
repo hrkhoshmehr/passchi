@@ -7,6 +7,7 @@ import { startWebServer } from "./web/server.js";
 import { closeBrowser } from "./pdf/render.js";
 import { disconnect as mtprotoDisconnect } from "./bot/mtproto.js";
 import { publishProfile } from "./bot/profile.js";
+import { resolveBotLinks } from "./bot/links.js";
 import { APP_NAME } from "./bot/menu.js";
 import { archiveStatus } from "./bot/archive.js";
 
@@ -35,6 +36,10 @@ process.once("SIGTERM", () => void shutdown("SIGTERM"));
 setNotifyApis(bot.api, baleBot?.api ?? null);
 
 await publishProfile(bot.api);
+
+// آدرس ربات‌ها یک بار پرسیده می‌شود؛ سایت و مینی‌اپ از همین می‌خوانند تا
+// دکمهٔ «باز کردن در تلگرام / بله» هرگز به چت اشتباه نبرد.
+await resolveBotLinks(bot.api, baleBot?.api ?? null);
 
 void cleanupOldAudio();
 
@@ -76,9 +81,12 @@ logger.info(
     archive: archiveStatus(),
     bale: await baleStatus(),
     web: config.WEB_ENABLED ? `پورت ${config.WEB_PORT}` : "خاموش",
-    // ورودِ وب بدون سرویس پیامک یعنی کد تأیید در پاسخ برمی‌گردد — در تولید
-    // فاجعه است، پس نباید بی‌صدا بماند.
-    sms: config.SMS_ENDPOINT ? config.SMS_PROVIDER || "روشن" : "⚠️ تنظیم‌نشده (کد در پاسخ برمی‌گردد)",
+    // بدون سرویس پیامک، ورود با شماره **بسته** است نه ناامن: پیش‌تر کد تأیید
+    // در پاسخ HTTP برمی‌گشت و هرکسی با دانستن یک شماره وارد حساب صاحبش می‌شد.
+    // حالا هویت فقط از شناسهٔ سکو می‌آید و این خط می‌گوید کدام حالت برقرار است.
+    sms: config.SMS_ENDPOINT
+      ? config.SMS_PROVIDER || "روشن"
+      : "خاموش — ورود با شماره بسته است، هویت از شناسهٔ سکو",
   },
   `${APP_NAME} در حال اجراست`,
 );

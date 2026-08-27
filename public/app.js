@@ -5,7 +5,11 @@
  *
  *   • داخل مینی‌اپ تلگرام یا بله، `initData` آماده است و ورود بی‌صدا و
  *     خودکار انجام می‌شود — کاربر هیچ فرمی نمی‌بیند.
- *   • در مرورگر، شماره و کد پیامکی.
+ *   • در مرورگر، شماره و کد پیامکی — که **فعلاً خاموش است**.
+ *
+ * تا وقتی سرویس پیامک راه نیفتاده، `GET /api/config` مقدار `phoneLogin:false`
+ * می‌دهد و به‌جای فرم، دو دکمهٔ «باز کردن در تلگرام / بله» نشان داده می‌شود.
+ * فرمی که سرور جوابش را رد کند، بدتر از نبودنش است.
  *
  * بعد از آن، همه‌چیز یکی است: همان توکن، همان API، همان صفحه‌ها.
  *
@@ -201,10 +205,45 @@ async function boot() {
       await afterLogin(token);
       return;
     } catch (e) {
-      // ورود مینی‌اپ شکست خورد — فرم شماره را نشان بده تا کاربر گیر نکند
+      // ورود مینی‌اپ شکست خورد — صفحهٔ ورود را نشان بده تا کاربر گیر نکند
       console.warn("mini app login failed:", e.message);
     }
   }
+
+  await showAuthScreen();
+}
+
+/**
+ * صفحهٔ ورود، متناسب با درهایی که سرور باز گذاشته.
+ *
+ * فرم شماره فقط وقتی ساخته می‌شود که سرور بگوید کار می‌کند؛ وگرنه کاربر
+ * شماره‌اش را وارد می‌کند و «فعال نیست» می‌گیرد و فکر می‌کند خراب است.
+ *
+ * اگر خواندن پیکربندی شکست بخورد، **بسته** فرض می‌شود: پیش‌فرضِ امن آن است
+ * که کاربر را به ربات بفرستیم، نه به فرمی که احتمالاً جواب نمی‌دهد.
+ */
+async function showAuthScreen() {
+  let phoneLogin = false;
+  let bots = {};
+  try {
+    ({ phoneLogin, bots = {} } = await api.call("/api/config"));
+  } catch (e) {
+    console.warn("config fetch failed, assuming phone login is off:", e.message);
+  }
+
+  // هر دکمه فقط وقتی نشان داده می‌شود که آدرسش را داشته باشیم؛ دکمه‌ای که
+  // به هیچ‌جا نبرد، بدتر از نبودنش است.
+  for (const [id, url] of [["open-tg", bots.telegram], ["open-bale", bots.bale]]) {
+    const el = $(id);
+    if (url) el.href = url;
+    show(el, Boolean(url));
+  }
+
+  show($("form-phone"), phoneLogin);
+  show($("auth-bots"), !phoneLogin);
+  $("auth-lead").textContent = phoneLogin
+    ? "برای شروع شماره‌ات رو وارد کن"
+    : "از داخل تلگرام یا بله وارد شو — همون‌جا صوت کلاستو هم می‌فرستی.";
 
   go("auth");
 }
@@ -216,17 +255,14 @@ $("form-phone").addEventListener("submit", async (e) => {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>';
   try {
-    const out = await api.call("/api/auth/otp/request", {
+    await api.call("/api/auth/otp/request", {
       method: "POST",
       body: { phone: $("phone").value },
     });
     show($("form-phone"), false);
     show($("form-code"), true);
-    // فقط وقتی سرویس پیامک تنظیم نشده باشد؛ در تولید هرگز نمی‌آید
-    if (out.devCode) {
-      $("dev-code").textContent = `سرویس پیامک تنظیم نشده — کد: ${fa(out.devCode)}`;
-      show($("dev-code"), true);
-    }
+    // `devCode` حذف شد: ورود با شماره فقط وقتی باز است که سرویس پیامک واقعاً
+    // تنظیم باشد، پس دیگر حالتی نیست که کد در پاسخ برگردد.
     $("code").focus();
   } catch (err) {
     fail($("phone-err"), err.message);

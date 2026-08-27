@@ -7,7 +7,16 @@
  *
  *   • مینی‌اپ تلگرام — `initData` که با HMAC توکن ربات امضا شده
  *   • مینی‌اپ بله — همان ساختار، ولی امضا با کلید خودش
- *   • مرورگر — شمارهٔ موبایل و کد پیامکی
+ *   • مرورگر — شمارهٔ موبایل و کد پیامکی · **فعلاً بسته**
+ *
+ * درِ سوم تا وقتی `SMS_ENDPOINT` خالی باشد باز نمی‌شود (`phoneLoginEnabled`).
+ * پس امروز هویت یعنی **شناسهٔ سکو**: شناسهٔ تلگرام و شناسهٔ بله هرکدام یک
+ * حساب جدا می‌سازند، و همان‌طور که هستند یکتا فرض می‌شوند. کسی که از هر دو
+ * سکو بیاید فعلاً دو حساب دارد — که پذیرفته است، چون جایگزینش تا پیش از
+ * راه‌افتادن پیامک، اعتماد به شماره‌ای بود که هیچ‌چیز تأییدش نمی‌کرد.
+ *
+ * `identities` از همان اول چند-هویتی طراحی شده، پس «اتصال دو حساب» بعداً یک
+ * سطر تازه برای همان `user_id` است و نه مهاجرت.
  *
  * دربارهٔ initData: تلگرام رشته‌ای می‌دهد که خودِ کلاینت می‌فرستد، پس **باید**
  * راستی‌آزمایی شود وگرنه هرکسی می‌تواند `user.id` دلخواه بنویسد و به حساب
@@ -169,7 +178,14 @@ const OTP_RESEND_SEC = 60;
 export class OtpError extends Error {
   constructor(
     message: string,
-    readonly code: "invalid_phone" | "too_soon" | "expired" | "wrong" | "too_many",
+    readonly code:
+      | "invalid_phone"
+      | "too_soon"
+      | "expired"
+      | "wrong"
+      | "too_many"
+      | "disabled"
+      | "send_failed",
   ) {
     super(message);
   }
@@ -180,12 +196,35 @@ function hashCode(phone: string, code: string): string {
 }
 
 /**
+ * آیا در ورود با شماره باز است؟
+ *
+ * تا وقتی `SMS_ENDPOINT` خالی باشد **بسته است** — و این عمدی است، نه یک
+ * محدودیت موقتِ فراموش‌شده. بدون سرویس پیامک، کد تأیید در پاسخ HTTP
+ * برمی‌گشت، یعنی هرکسی با دانستن یک شماره وارد حساب صاحبش می‌شد. آن رفتار
+ * فقط برای توسعهٔ محلی بی‌خطر بود و روی سرورِ عمومی یک در باز بود.
+ *
+ * پس هویت فعلاً از **شناسهٔ سکو** می‌آید: کاربر بله و تلگرام با `initData`
+ * امضاشده شناخته می‌شوند که خودِ سکو تضمینش می‌کند. شماره روزی برمی‌گردد که
+ * سرویس پیامک تنظیم شود، و آن روز فقط با پرکردن همین متغیر باز می‌شود —
+ * جدول `otp_codes` و کل این مسیر دست‌نخورده سر جایش می‌ماند.
+ *
+ * `identities` هم از قبل چند-هویتی است، پس «اتصال حساب» بعداً فقط یک سطر
+ * تازه برای همان `user_id` است و مهاجرتی لازم ندارد.
+ */
+export function phoneLoginEnabled(): boolean {
+  return Boolean(config.SMS_ENDPOINT);
+}
+
+/**
  * کد را بساز، بفرست، و **هشِ** آن را ذخیره کن.
  *
  * ذخیرهٔ خودِ کد لازم نیست: تنها کاری که با آن می‌کنیم مقایسه است. اگر
  * پایگاه‌داده جایی درز کند، کدهای فعال هم لو نمی‌روند.
  */
-export async function requestOtp(rawPhone: string): Promise<{ phone: string; devCode?: string }> {
+export async function requestOtp(rawPhone: string): Promise<{ phone: string }> {
+  if (!phoneLoginEnabled()) {
+    throw new OtpError("ورود با شماره فعلاً فعال نیست. از داخل تلگرام یا بله وارد شو.", "disabled");
+  }
   const phone = normalizePhone(rawPhone);
   if (!phone) throw new OtpError("شمارهٔ موبایل معتبر نیست.", "invalid_phone");
 
@@ -214,11 +253,26 @@ export async function requestOtp(rawPhone: string): Promise<{ phone: string; dev
    * آزمایش ممکن باشد. این مسیر در تولید **باید** بسته باشد، وگرنه هرکسی با
    * دانستن یک شماره واردِ حساب صاحبش می‌شود؛ پس به `SMS_PROVIDER` گره خورده
    * و در لاگ راه‌اندازی هم هشدارش چاپ می‌شود.
+   *
+   * **حالا این مسیر عملاً مرده است** و عمداً نگه داشته شده: از وقتی
+   * `phoneLoginEnabled()` ورود را به `SMS_ENDPOINT` گره زده، رسیدن به اینجا
+   * یعنی سرویس پیامک تنظیم *هست* ولی همین درخواست شکست خورده — یک قطعیِ
+   * موقت، نه حالت توسعه. در آن حالت برگرداندن کد یعنی تبدیل یک خرابیِ گذرا
+   * به یک رخنه، پس به‌جای `devCode` خطا داده می‌شود.
    */
-  return sent ? { phone } : { phone, devCode: code };
+  if (!sent) {
+    logger.error({ phone }, "otp sms failed to send");
+    throw new OtpError("فرستادن کد ناموفق بود. کمی بعد دوباره تلاش کن.", "send_failed");
+  }
+  return { phone };
 }
 
 export function verifyOtp(rawPhone: string, code: string): UserRow {
+  // اینجا هم بسته می‌شود نه فقط در `requestOtp`: اگر پیش از خاموش‌شدن کدی
+  // صادر شده باشد، تا انقضایش هنوز یک در باز است.
+  if (!phoneLoginEnabled()) {
+    throw new OtpError("ورود با شماره فعلاً فعال نیست. از داخل تلگرام یا بله وارد شو.", "disabled");
+  }
   const phone = normalizePhone(rawPhone);
   if (!phone) throw new OtpError("شمارهٔ موبایل معتبر نیست.", "invalid_phone");
 

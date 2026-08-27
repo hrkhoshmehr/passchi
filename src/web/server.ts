@@ -20,9 +20,10 @@ import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { shortId } from "../util/text.js";
 import {
-  createSessionToken, loginFromMiniApp, OtpError, purgeExpiredSessions,
+  createSessionToken, loginFromMiniApp, OtpError, phoneLoginEnabled, purgeExpiredSessions,
   requestOtp, revokeToken, userIdFromToken, verifyOtp,
 } from "./auth.js";
+import { botLinks } from "../bot/links.js";
 import { getProgress, setProgress } from "./progress.js";
 import { startJob } from "../jobs/service.js";
 import { InsufficientCredit } from "../billing/ledger.js";
@@ -210,6 +211,24 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
 
     case "GET /api/packages":
       return json(res, 200, { packages: PACKAGES, coinsPerMinute: COINS_PER_MINUTE });
+
+    /**
+     * چه چیزهایی در این نصب روشن است.
+     *
+     * کلاینت نباید فرمی را نشان دهد که سرور جوابش را رد می‌کند: کاربری که
+     * شماره‌اش را وارد می‌کند و «فعال نیست» می‌گیرد، فکر می‌کند خراب است.
+     * پیش از هر چیز این خوانده می‌شود و فرم شماره فقط وقتی ساخته می‌شود که
+     * واقعاً کار کند.
+     */
+    case "GET /api/config":
+      return json(res, 200, {
+        phoneLogin: phoneLoginEnabled(),
+        coinsPerMinute: COINS_PER_MINUTE,
+        // آدرس‌ها از خودِ `getMe` می‌آیند نه از HTML سفت‌شده یا متغیر محیطی:
+        // هر دو با عوض‌شدن توکن ربات بی‌صدا کهنه می‌شوند و کاربر را به چت
+        // اشتباه می‌برند.
+        bots: botLinks(),
+      });
 
     // ── درس‌ها ──────────────────────────────────────────────────────────────
 
