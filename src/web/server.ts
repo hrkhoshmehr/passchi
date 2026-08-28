@@ -436,13 +436,22 @@ async function uploadAudio(
   const dest = path.join(config.audioDir, `${sessionId}.${ext}`);
   await fsp.mkdir(config.audioDir, { recursive: true });
 
+  /**
+   * چند بایت **واقعاً** انتظار داریم.
+   *
+   * برای تشخیص «قطع‌شدن وسط راه» لازم است: بدون آن، یک آپلودِ نصفه‌کاره
+   * فایلی سالم‌به‌نظر روی دیسک می‌گذارد و بعدتر با خطای مبهمِ ffmpeg رد
+   * می‌شود. با آن می‌شود صریح گفت که ارتباط قطع شده و کاربر دوباره بفرستد.
+   */
+  const expected = Number(req.headers["content-length"] ?? 0);
+
+  let received = 0;
   try {
     await new Promise<void>((resolve, reject) => {
       const out = fs.createWriteStream(dest);
-      let size = 0;
       req.on("data", (c: Buffer) => {
-        size += c.length;
-        if (size > MAX_UPLOAD_BYTES) {
+        received += c.length;
+        if (received > MAX_UPLOAD_BYTES) {
           reject(new Error("فایل خیلی بزرگ است."));
           req.destroy();
           out.destroy();
@@ -451,11 +460,41 @@ async function uploadAudio(
       req.pipe(out);
       out.on("finish", () => resolve());
       out.on("error", reject);
-      req.on("error", reject);
+      /**
+       * قطع‌شدن ارتباط، خطای کاربر نیست و باید **لاگ** شود.
+       *
+       * پیش‌تر این مسیر بی‌صدا به «آپلود ناموفق بود» تبدیل می‌شد؛ همان پیامی
+       * که کاربر گزارش کرد و هیچ ردی در لاگ نداشت، پس تشخیصش ممکن نبود.
+       */
+      req.on("error", (err: Error) => {
+        logger.warn(
+          { sessionId, received, expected, err: err.message },
+          "آپلود وسط راه قطع شد",
+        );
+        reject(new Error("ارتباط وسط آپلود قطع شد. دوباره بفرست."));
+      });
+      req.on("aborted", () => {
+        logger.warn({ sessionId, received, expected }, "کلاینت آپلود را رها کرد");
+        reject(new Error("ارتباط وسط آپلود قطع شد. دوباره بفرست."));
+      });
     });
   } catch (e) {
     await fsp.unlink(dest).catch(() => {});
     return json(res, 400, { error: e instanceof Error ? e.message : "آپلود ناموفق بود." });
+  }
+
+  /**
+   * فایلِ ناقص را همین‌جا بگیر، نه چند ثانیه بعد با خطای ffmpeg.
+   *
+   * `finish` روی جریانِ نوشتن یعنی «هرچه رسید نوشته شد»، نه «همه‌اش رسید».
+   * اگر ارتباط تمیز بسته شود ولی ناقص، اینجا تنها جایی است که می‌شود فهمید.
+   */
+  if (expected > 0 && received < expected) {
+    await fsp.unlink(dest).catch(() => {});
+    logger.warn({ sessionId, received, expected }, "آپلود ناقص رسید");
+    return json(res, 400, {
+      error: "فایل ناقص رسید. احتمالاً ارتباط قطع شده — دوباره بفرست.",
+    });
   }
 
   const stat = await fsp.stat(dest);
