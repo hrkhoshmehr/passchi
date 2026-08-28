@@ -1,0 +1,96 @@
+/**
+ * آپلود دیگر خودش کار را شروع نمی‌کند — اول قیمت، بعد تأیید.
+ *
+ * ## باگی که این آزمون نگه می‌دارد
+ *
+ * `POST /api/sessions/upload` بلافاصله `startJob` می‌زد. یعنی کاربر فایلش را
+ * می‌گذاشت و بی‌آنکه بداند چقدر خرج برمی‌دارد، سکه‌هایش کم می‌شد. بدتر:
+ * مبنای کسر، `duration`ی بود که **مرورگر** می‌گفت و برای بعضی قالب‌ها صفر
+ * یا غلط است.
+ *
+ * حالا آپلود فقط فایل را نگه می‌دارد و مدتِ اندازه‌گیری‌شده با ffmpeg را
+ * برمی‌گرداند؛ کسر سکه فقط در `POST /api/sessions/:id/confirm` اتفاق می‌افتد.
+ *
+ * و وضعیت در **ربات** دنبال می‌شود نه در مینی‌اپ: کاربر صفحه را می‌بندد.
+ *
+ * اجرا: npx tsx scripts/test-confirm-flow.mjs
+ */
+import fs from "node:fs";
+
+const readLf = (p) => fs.readFileSync(p, "utf8").split("\r\n").join("\n");
+const server = readLf("src/web/server.ts");
+const js = readLf("public/app.js");
+const html = readLf("public/app.html");
+const notify = readLf("src/bot/notify.ts");
+
+let bad = 0;
+const check = (label, ok, extra = "") => {
+  if (!ok) bad++;
+  console.log(`${ok ? "✅" : "❌"} ${label}${extra ? ` — ${extra}` : ""}`);
+};
+
+// ─── سرور: آپلود کاری شروع نمی‌کند ──────────────────────────────────────────
+
+const uploadFn = server.slice(
+  server.indexOf("async function uploadAudio"),
+  server.indexOf("async function confirmSession"),
+);
+check("تابع confirmSession وجود دارد", server.includes("async function confirmSession"));
+check("آپلود دیگر startJob نمی‌زند", !uploadFn.includes("startJob("));
+check("آپلود مدت را خودش اندازه می‌گیرد", /await probe\(dest\)/.test(uploadFn));
+check("آپلود قیمت را برمی‌گرداند", /costCoins: costCoins\(sec\)/.test(uploadFn));
+check("فایلِ بی‌مدت رد می‌شود", /if \(sec <= 0\)/.test(uploadFn));
+
+const confirmFn = server.slice(
+  server.indexOf("async function confirmSession"),
+  server.indexOf("// ─── فایل‌های ایستا") >= 0
+    ? server.indexOf("// ─── فایل‌های ایستا")
+    : server.length,
+);
+check("تأیید کار را شروع می‌کند", confirmFn.includes("startJob("));
+check("مالکیت جلسه بررسی می‌شود", /s\.tg_id !== userId/.test(confirmFn));
+check(
+  "تأیید دوباره رد می‌شود (جلوی کسر دوبارهٔ سکه)",
+  /s\.status !== "queued"/.test(confirmFn),
+);
+check("مسیر تأیید ثبت شده", /sessionMatch\[2\] === "\/confirm"/.test(server));
+
+// ─── وضعیت در ربات ─────────────────────────────────────────────────────────
+
+check("پیام زندهٔ ربات ساخته می‌شود", confirmFn.includes("liveMessage(userId)"));
+check("هر مرحله به ربات می‌رود", /live\.update\(progressMessage\(p\.stage/.test(confirmFn));
+check("اولین وضعیت بی‌درنگ فرستاده می‌شود", /live\.update\(progressMessage\("queue"\)\)/.test(confirmFn));
+check("پیام وضعیت پیش از تحویل پاک می‌شود", /live\.finish\(\)[\s\S]{0,200}deliverToBot/.test(confirmFn));
+check("خطا هم به کاربر گفته می‌شود", /notifyUser\(userId, `⚠️/.test(confirmFn));
+
+check("liveMessage صادر شده", /export function liveMessage/.test(notify));
+check("ویرایش‌ها صف دارند", /chain = chain\.then/.test(notify));
+check("پیام تکراری دوباره فرستاده نمی‌شود", /text === last/.test(notify));
+
+// ─── مینی‌اپ ────────────────────────────────────────────────────────────────
+
+check("صفحهٔ تأیید هست", html.includes('id="s-confirm"'));
+for (const id of ["confirm-dur", "confirm-cost", "confirm-have", "confirm-go", "confirm-cancel"]) {
+  check(`عنصر ${id} هست`, html.includes(`id="${id}"`));
+}
+check("اپ پس از آپلود قیمت را نشان می‌دهد", /askConfirm\(out, file\.name\)/.test(js));
+check("تأیید به سرور POST می‌شود", /\/confirm`, \{ method: "POST" \}/.test(js));
+check(
+  "موجودی کم، دکمهٔ تأیید را می‌بندد",
+  /\$\("confirm-go"\)\.disabled = !out\.enough/.test(js),
+);
+
+// نظرسنجی وضعیت باید کاملاً رفته باشد
+check("نظرسنجی دوثانیه‌ای حذف شده", !js.includes("setInterval"));
+check("renderProgress حذف شده", !js.includes("renderProgress"));
+check("اپ می‌گوید صفحه را ببند", /این صفحه رو ببند/.test(html));
+
+// ─── ورود از سایت روی گوشی ─────────────────────────────────────────────────
+check(
+  "کاربر موبایل به دکمه‌های ربات ارجاع داده می‌شود",
+  /یکی از دکمه‌های زیر رو بزن/.test(js),
+);
+check("دکمه‌های ربات فقط روی دسکتاپ پنهان می‌شوند", /if \(strandedOnDesktop\) \{/.test(js));
+
+console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
+process.exit(bad === 0 ? 0 : 1);

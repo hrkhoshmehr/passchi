@@ -347,7 +347,9 @@ async function showAuthScreen() {
       ? "فعلاً آپلود صوت فقط با گوشی کار می‌کنه. ربات رو روی موبایلت باز کن و همون‌جا دکمهٔ «📤 آپلود فایل» رو بزن. نسخهٔ کامپیوتر بعداً اضافه می‌شه."
       : miniApp
         ? "ورود خودکار انجام نشد. مینی‌اپ رو ببند و از داخل ربات دوباره بازش کن."
-        : "از داخل تلگرام یا بله وارد شو — همون‌جا صوت کلاستو هم می‌فرستی.";
+        // روی گوشی، دکمه‌های زیر واقعاً کار می‌کنند — پس متن باید به همان‌ها
+        // اشاره کند، نه به یک «از داخل تلگرام وارد شو»ِ مبهم.
+        : "یکی از دکمه‌های زیر رو بزن تا وارد ربات بشی — صوت کلاستو همون‌جا می‌فرستی.";
 
   go("auth");
 }
@@ -523,11 +525,18 @@ async function upload(file) {
   const picked = $("course").value;
   const courseId = picked === "new" ? "" : picked;
 
-  go("prog");
-  // بازماندهٔ آپلود قبلی نباید بالای نوار پیشرفتِ تازه بماند.
-  show($("prog-done"), false);
-  fail($("prog-err"), "");
-  renderProgress({ stage: "upload" });
+  /**
+   * آپلود روی همین صفحه می‌ماند تا رسیدنِ قیمت.
+   *
+   * پیش‌تر اینجا به صفحهٔ پیشرفت می‌پرید، ولی حالا قدم بعدی «تأیید هزینه»
+   * است نه پردازش — و پریدن به صفحه‌ای که هنوز چیزی در آن نیست، فقط این
+   * توهم را می‌سازد که کار شروع شده.
+   */
+  drop.classList.add("busy");
+  drop.innerHTML =
+    '<div class="drop-ico"><span class="spinner"></span></div>' +
+    "<h3>در حال فرستادن…</h3>" +
+    '<p class="dim">صفحه رو نبند تا آپلود تمام شود.</p>';
 
   const qs = new URLSearchParams({ duration: String(seconds), ext });
   if (courseId) qs.set("courseId", courseId);
@@ -542,87 +551,118 @@ async function upload(file) {
       timeoutMs: 0,
     });
   } catch (err) {
+    resetDrop();
     // کمبود اعتبار پیام مخصوص خودش را دارد، با عددها
     if (err.status === 402) {
       const d = err.data || {};
       fail(
-        $("prog-err"),
+        $("send-err"),
         `اعتبارت کم است — این جلسه ${faGroup(d.needCoins ?? 0)} سکه می‌خواهد و ${faGroup(d.haveCoins ?? 0)} سکه داری.`,
       );
     } else {
-      fail($("prog-err"), err.message);
+      fail($("send-err"), err.message);
     }
     return;
   }
 
-  watch(out.sessionId);
+  resetDrop();
+  // آپلود دیگر کار را شروع نمی‌کند؛ اول قیمت را نشان بده.
+  askConfirm(out, file.name);
 }
 
-// ─── پیشرفت ─────────────────────────────────────────────────────────────────
-
-const STEPS = [
-  { key: "upload", label: "دریافت فایل" },
-  { key: "preprocess", label: "آماده‌سازی صوت" },
-  { key: "stt", label: "پیاده‌سازی متن" },
-  { key: "analyze", label: "تحلیل جلسه" },
-  { key: "pdf", label: "ساخت جزوه" },
-];
-
-function renderProgress(p) {
-  const at = STEPS.findIndex((s) => s.key === p.stage);
-  $("prog-steps").innerHTML = STEPS.map((s, i) => {
-    const state = p.stage === "done" || i < at ? "done" : i === at ? "now" : "";
-    const detail = state === "now" && p.detail ? `<div class="pstep-detail">${esc(p.detail)}</div>` : "";
-    return `<div class="pstep ${state}">
-      <div class="bullet">${state === "done" ? "✓" : ""}</div>
-      <div><div>${s.label}</div>${detail}</div>
-    </div>`;
-  }).join("");
+/** ناحیهٔ رهاکردن فایل را به حالت اولش برگردان. */
+function resetDrop() {
+  drop.classList.remove("busy");
+  drop.innerHTML =
+    '<div class="drop-ico">🎧</div>' +
+    "<h3>صوت کلاست رو بذار اینجا</h3>" +
+    "<p>یا بزن تا از دستگاهت انتخاب کنی</p>" +
+    '<p class="dim" style="margin-top:9px">mp3 · m4a · ogg · wav — تا ۵۰۰ مگابایت</p>';
 }
 
-let poll = null;
+// ─── تأیید هزینه ────────────────────────────────────────────────────────────
+//
+// بین آپلود و شروعِ کار. مدت از سرور می‌آید (با ffmpeg اندازه‌گیری شده)، نه
+// از `<audio>` مرورگر که برای بعضی قالب‌ها صفر یا غلط می‌دهد — و عددی که
+// کاربر تأیید می‌کند باید همان باشد که از او کم می‌شود.
 
-/**
- * وضعیت کار را تا پایان دنبال کن.
- *
- * نظرسنجی ساده به‌جای وب‌سوکت: کار چند دقیقه طول می‌کشد و هر دو ثانیه یک
- * درخواست کوچک، در برابر پیچیدگی نگه‌داشتن اتصال زنده در مینی‌اپی که ممکن
- * است به پس‌زمینه برود، معاملهٔ بهتری است.
- */
-function watch(sessionId) {
-  clearInterval(poll);
-  poll = setInterval(async () => {
-    try {
-      const { progress, status } = await api.call(`/api/sessions/${sessionId}/progress`);
-      renderProgress(progress);
+/** ثانیه به «۱ ساعت و ۳۳ دقیقه». */
+function faDuration(sec) {
+  const m = Math.max(1, Math.round(sec / 60));
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  if (!h) return `${fa(m)} دقیقه`;
+  return rest ? `${fa(h)} ساعت و ${fa(rest)} دقیقه` : `${fa(h)} ساعت`;
+}
 
-      if (progress.stage === "error" || status === "error") {
-        clearInterval(poll);
-        fail($("prog-err"), progress.message || "پردازش ناموفق بود. سکه‌های رزروشده برگشت.");
-        loadMe().catch(() => {});
-        return;
-      }
-      if (progress.stage === "done" || status === "done") {
-        clearInterval(poll);
-        await loadMe().catch(() => {});
-        await showDone();
-      }
-    } catch (e) {
-      clearInterval(poll);
-      fail($("prog-err"), e.message);
+let pendingSession = null;
+
+function askConfirm(out, filename) {
+  pendingSession = out.sessionId;
+  $("confirm-file").textContent = filename || "";
+  $("confirm-dur").textContent = faDuration(out.durationSec);
+  $("confirm-cost").textContent = `${faGroup(out.costCoins)} 🪙`;
+  $("confirm-have").textContent = `${faGroup(out.haveCoins)} 🪙`;
+  fail($("confirm-err"), "");
+
+  // موجودی کم؟ دکمه را نبند — بگو چقدر کم دارد و بگذار برود شارژ کند.
+  const short = Math.max(0, out.costCoins - out.haveCoins);
+  $("confirm-go").disabled = !out.enough;
+  if (!out.enough) {
+    fail($("confirm-err"), `${faGroup(short)} سکه کم داری. از تب «حساب» شارژ کن و دوباره بفرست.`);
+  }
+  go("confirm");
+}
+
+$("confirm-cancel").addEventListener("click", () => {
+  pendingSession = null;
+  go("send");
+});
+
+$("confirm-go").addEventListener("click", async () => {
+  if (!pendingSession) return;
+  const btn = $("confirm-go");
+  btn.disabled = true;
+  fail($("confirm-err"), "");
+  try {
+    await api.call(`/api/sessions/${pendingSession}/confirm`, { method: "POST" });
+  } catch (err) {
+    btn.disabled = false;
+    if (err.status === 402) {
+      const d = err.data || {};
+      fail(
+        $("confirm-err"),
+        `اعتبارت کم است — ${faGroup(d.needCoins ?? 0)} سکه لازم است و ${faGroup(d.haveCoins ?? 0)} سکه داری.`,
+      );
+    } else {
+      fail($("confirm-err"), err.message);
     }
-  }, 2000);
-}
+    return;
+  }
+  const id = pendingSession;
+  pendingSession = null;
+  btn.disabled = false;
+  handedOff(id);
+});
+
+// ─── تحویل به ربات ──────────────────────────────────────────────────────────
+//
+// مینی‌اپ دیگر وضعیت را دنبال نمی‌کند و نظرسنجیِ دوثانیه‌ای حذف شد.
+//
+// پیش‌تر کاربر باید صفحه را باز نگه می‌داشت تا نوار پیشرفت را ببیند — روی
+// اینترنت موبایل، برای کاری که دقایقی طول می‌کشد. حالا همان گام‌ها در ربات
+// به‌روز می‌شوند: جایی که کاربر به‌هرحال منتظر نتیجه است، و پیام‌هایش با
+// بستن صفحه از بین نمی‌روند.
 
 /**
- * پایان کار: کاربر را به ربات برگردان.
+ * کار شروع شد و از اینجا به بعد در ربات دنبال می‌شود.
  *
- * نتیجه عمداً اینجا نشان داده نمی‌شود. در ربات می‌شود جزوه را برای گروه درس
- * فوروارد کرد و زمان‌های گزارش لینکِ پخش می‌شوند؛ هیچ‌کدام در مینی‌اپ ممکن
- * نیست. پس مینی‌اپ کارِ خودش را می‌کند — آپلودی که ربات نمی‌تواند — و
- * تحویل را به ربات می‌سپارد.
+ * تنها کاری که می‌ماند این است که راه برگشت به ربات را نشان بدهیم — همان
+ * سکویی که کاربر از آن آمده.
  */
-async function showDone() {
+async function handedOff() {
+  await loadMe().catch(() => {});
+
   let url = null;
   try {
     const { bots = {} } = await api.call("/api/config");
@@ -634,8 +674,10 @@ async function showDone() {
   const link = $("go-bot");
   if (url) link.href = url;
   show(link, Boolean(url));
-  show($("prog-done"), true);
+  go("prog");
 }
+
+$("send-another").addEventListener("click", () => go("send"));
 
 /**
  * برچسب فارسی وضعیت — برای نوار پیشرفت.

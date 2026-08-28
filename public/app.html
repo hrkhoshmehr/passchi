@@ -130,6 +130,8 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
   background: var(--surface); transition: border-color .18s, background .18s;
 }
 .drop:hover, .drop.over { border-color: var(--brand); background: var(--brand-soft); }
+/* حین آپلود کلیک‌پذیر نیست — وگرنه کاربر وسط کار فایل دوم را انتخاب می‌کند. */
+.drop.busy { pointer-events: none; opacity: .75; cursor: default; }
 .drop-ico { font-size: 38px; }
 .drop h3 { font-size: 17px; margin: 12px 0 6px; }
 .drop p { color: var(--text-soft); font-size: 14px; }
@@ -337,29 +339,73 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
   </section>
 
   <!-- ─── پیشرفت ───────────────────────────────────────────────────────── -->
-  <section class="screen" id="s-prog">
-    <div class="card">
-      <h2 style="font-size:19px">در حال پردازش</h2>
-      <p class="muted" style="font-size:14.5px;margin-top:6px">
-        می‌تونی این صفحه رو ببندی — کار ادامه پیدا می‌کنه.
-      </p>
-      <div class="prog-steps" id="prog-steps"></div>
-    </div>
-    <div class="err hidden" id="prog-err" style="margin-top:15px"></div>
+  <!--
+    ─── تأیید هزینه ────────────────────────────────────────────────────────
 
-    <!--
-      پایان کار. نتیجه در ربات تحویل داده می‌شود نه اینجا، پس این کارت تنها
-      چیزی است که کاربر در مینی‌اپ می‌بیند و باید او را به ربات برگرداند.
-    -->
-    <div class="card hidden" id="prog-done" style="margin-top:15px;text-align:center">
-      <div style="font-size:38px">✅</div>
-      <h2 style="font-size:19px;margin-top:8px">تحلیلت آماده شد</h2>
+    پیش‌تر آپلود مستقیم تحلیل را راه می‌انداخت و کاربر بی‌آنکه بداند چقدر
+    خرج برمی‌دارد، سکه‌هایش کم می‌شد. حالا مدت **اندازه‌گیری‌شده** (نه آنچه
+    مرورگر حدس زده) و هزینه‌اش را می‌بیند و خودش تصمیم می‌گیرد.
+  -->
+  <section class="screen" id="s-confirm">
+    <div class="card" style="text-align:center">
+      <div style="font-size:40px">🎧</div>
+      <h2 style="font-size:19px;margin-top:8px">صوتت رسید</h2>
+      <p class="dim" id="confirm-file" style="margin-top:6px;font-size:13.5px"></p>
+
+      <div style="display:flex;justify-content:center;gap:26px;margin:20px 0 4px">
+        <div>
+          <div class="dim" style="font-size:12.5px">مدت</div>
+          <div id="confirm-dur" style="font-size:19px;font-weight:800;margin-top:3px">—</div>
+        </div>
+        <div>
+          <div class="dim" style="font-size:12.5px">هزینه</div>
+          <div id="confirm-cost" style="font-size:19px;font-weight:800;margin-top:3px">—</div>
+        </div>
+        <div>
+          <div class="dim" style="font-size:12.5px">موجودی تو</div>
+          <div id="confirm-have" style="font-size:19px;font-weight:800;margin-top:3px">—</div>
+        </div>
+      </div>
+
+      <div class="err hidden" id="confirm-err" style="margin-top:14px"></div>
+
+      <button class="btn btn-primary btn-block" type="button" id="confirm-go" style="margin-top:18px">
+        تحلیلش کن
+      </button>
+      <button class="btn btn-ghost btn-block" type="button" id="confirm-cancel" style="margin-top:9px">
+        بی‌خیال
+      </button>
+
+      <p class="dim" style="margin-top:14px;font-size:13px">
+        بعد از تأیید می‌تونی این صفحه رو ببندی — وضعیت و نتیجه رو توی ربات برات می‌فرستم.
+      </p>
+    </div>
+  </section>
+
+  <!--
+    ─── تحویل به ربات ──────────────────────────────────────────────────────
+
+    مینی‌اپ دیگر وضعیت را دنبال نمی‌کند.
+
+    پیش‌تر اینجا یک نوار پیشرفت بود که کاربر باید صفحه را باز نگه می‌داشت تا
+    ببیندش — روی اینترنت موبایل، برای کاری که دقایقی طول می‌کشد. حالا همان
+    گام‌ها در **ربات** به‌روز می‌شوند: جایی که کاربر به‌هرحال منتظر نتیجه
+    است، و پیام‌هایش با بستن صفحه از بین نمی‌روند.
+  -->
+  <section class="screen" id="s-prog">
+    <div class="card" style="text-align:center">
+      <div style="font-size:40px">✅</div>
+      <h2 style="font-size:19px;margin-top:8px">رفت توی صف</h2>
       <p class="muted" style="font-size:14.5px;margin-top:8px">
-        خلاصه، نکته‌های امتحانی، جزوهٔ PDF و رونوشت — همه رو تو ربات برات فرستادم.
+        این صفحه رو ببند. وضعیت پردازش و بعدش خلاصه، نکته‌های امتحانی،
+        جزوهٔ PDF و رونوشت — همه رو توی ربات برات می‌فرستم.
       </p>
       <a class="btn btn-primary btn-block hidden" id="go-bot" style="margin-top:16px" target="_blank" rel="noopener">
         برگرد به ربات
       </a>
+      <button class="btn btn-ghost btn-block" type="button" id="send-another" style="margin-top:9px">
+        یه صوت دیگه بفرستم
+      </button>
     </div>
   </section>
 

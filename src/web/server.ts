@@ -25,6 +25,9 @@ import {
 } from "./auth.js";
 import { botLinks } from "../bot/links.js";
 import { deliverToBot } from "../bot/deliver.js";
+import { liveMessage, notifyUser } from "../bot/notify.js";
+import { progressMessage } from "../bot/strings.js";
+import { probe } from "../audio/ffmpeg.js";
 import { getProgress, setProgress } from "./progress.js";
 import { startJob } from "../jobs/service.js";
 import { InsufficientCredit } from "../billing/ledger.js";
@@ -271,6 +274,14 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
 
   // مسیرهای پارامتردار
   const sessionMatch = url.pathname.match(/^\/api\/sessions\/([A-Za-z0-9_-]+)(\/[a-z]+)?$/);
+
+  // تأیید شروعِ کار — تنها جایی که سکه کم می‌شود.
+  if (sessionMatch && req.method === "POST" && sessionMatch[2] === "/confirm") {
+    const uid = requireUser(req, res);
+    if (uid === null) return;
+    return confirmSession(res, uid, sessionMatch[1]!);
+  }
+
   if (sessionMatch && req.method === "GET") {
     const uid = requireUser(req, res);
     if (uid === null) return;
@@ -376,23 +387,92 @@ async function uploadAudio(
     return json(res, 400, { error: "فایل خالی است." });
   }
 
+  /**
+   * مدت واقعی را **خودمان** اندازه می‌گیریم، نه از مرورگر.
+   *
+   * `duration` که اپ می‌فرستد از `<audio>` مرورگر می‌آید و برای بعضی قالب‌ها
+   * (به‌ویژه فایلی که کامل بافر نشده) صفر یا غلط است. رزرو اعتبار روی همین
+   * عدد انجام می‌شود، پس غلط‌بودنش یعنی جلسه‌ای که هزینه‌اش درست کسر نمی‌شود
+   * — و مهم‌تر، عددی که به کاربر برای تأیید نشان می‌دهیم باید همانی باشد که
+   * واقعاً از او کم می‌شود.
+   */
+  let sec = declaredSec;
+  try {
+    sec = Math.round((await probe(dest)).durationMs / 1000);
+  } catch (e) {
+    logger.warn({ sessionId, err: String(e) }, "probe for duration failed");
+  }
+  if (sec <= 0) {
+    await fsp.unlink(dest).catch(() => {});
+    return json(res, 400, { error: "مدت این فایل خوانده نشد. فایل صوتی سالم بفرست." });
+  }
+
   createSession(sessionId, userId, courseId);
-  updateSession(sessionId, {
-    mode: "full",
-    download_route: "web",
+  updateSession(sessionId, { mode: "full", download_route: "web", original_file: dest });
+
+  /**
+   * اینجا **هیچ کاری شروع نمی‌شود.**
+   *
+   * پیش‌تر آپلود مستقیم تحلیل را راه می‌انداخت: کاربر فایلش را می‌گذاشت و
+   * بی‌آنکه بداند چقدر خرج برمی‌دارد، سکه‌هایش کم می‌شد. حالا قیمت بر اساس
+   * مدتِ **اندازه‌گیری‌شده** برمی‌گردد و شروعِ کار منتظر تأیید صریح در
+   * `POST /api/sessions/:id/confirm` می‌ماند.
+   */
+  json(res, 200, {
+    sessionId,
+    durationSec: sec,
+    costCoins: costCoins(sec),
+    haveCoins: balanceCoins(u.credit_sec),
+    enough: u.credit_sec >= sec,
   });
+}
+
+/**
+ * تأیید کاربر: از اینجا به بعد سکه کم می‌شود و کار شروع می‌شود.
+ *
+ * وضعیت در **ربات** دنبال می‌شود نه در مینی‌اپ — کاربر می‌تواند صفحه را
+ * ببندد و برود. به همین دلیل بلافاصله پس از شروع، یک پیام «گرفتم» در ربات
+ * فرستاده می‌شود تا کاربر بداند کجا منتظر بماند.
+ */
+async function confirmSession(res: Res, userId: number, sessionId: string): Promise<void> {
+  const s = getSession(sessionId);
+  if (!s || s.tg_id !== userId) return json(res, 404, { error: "این جلسه پیدا نشد." });
+  // فقط جلسه‌ای که هنوز شروع نشده تأیید می‌شود؛ وگرنه دو بار زدن دکمه یعنی
+  // دو بار کسر سکه.
+  if (s.status !== "queued") return json(res, 409, { error: "این جلسه از قبل شروع شده." });
+  if (!s.original_file) return json(res, 400, { error: "فایل این جلسه موجود نیست." });
+
+  const dest = s.original_file;
+  let sec = 0;
+  try {
+    sec = Math.round((await probe(dest)).durationMs / 1000);
+  } catch {
+    return json(res, 400, { error: "مدت این فایل خوانده نشد." });
+  }
 
   setProgress(sessionId, { stage: "preprocess" });
+
+  /**
+   * وضعیت در **ربات** دنبال می‌شود، نه در مینی‌اپ.
+   *
+   * یک پیام که جای خودش ویرایش می‌شود — همان کاری که مسیر ربات می‌کند. کاربر
+   * صفحهٔ مینی‌اپ را می‌بندد و می‌رود، پس نوار پیشرفتی که فقط آنجا دیده
+   * می‌شود عملاً به چشم هیچ‌کس نمی‌رسد.
+   */
+  const live = liveMessage(userId);
 
   try {
     startJob({
       sessionId,
       userId,
       audioFile: dest,
-      courseId,
-      declaredDurationSec: declaredSec,
+      courseId: s.course_id ?? null,
+      declaredDurationSec: sec,
       mode: "full",
-      onProgress: (s) => setProgress(sessionId, { stage: s.stage, ...(s.detail ? { detail: s.detail } : {}) }),
+      onProgress: (p) => {
+        setProgress(sessionId, { stage: p.stage, ...(p.detail ? { detail: p.detail } : {}) });
+        void live.update(progressMessage(p.stage, p.detail));
+      },
       /**
        * کار در مینی‌اپ شروع شده ولی نتیجه در **ربات** تحویل داده می‌شود.
        *
@@ -407,18 +487,27 @@ async function uploadAudio(
        */
       onDone: () => {
         setProgress(sessionId, { stage: "done" });
-        const s = getSession(sessionId);
-        if (s) {
-          void deliverToBot(userId, s).catch((e: unknown) => {
-            logger.warn({ sessionId, err: String(e) }, "deliver to bot failed");
-          });
-        }
+        const done = getSession(sessionId);
+        // پیام وضعیت پیش از تحویل برداشته می‌شود، وگرنه «دارم جزوه رو
+        // می‌نویسم…» بالای نتیجهٔ آماده می‌ماند.
+        void live.finish().then(() => {
+          if (done) {
+            return deliverToBot(userId, done).catch((e: unknown) => {
+              logger.warn({ sessionId, err: String(e) }, "deliver to bot failed");
+            });
+          }
+        });
       },
-      onError: (message) => setProgress(sessionId, { stage: "error", message }),
+      onError: (message) => {
+        setProgress(sessionId, { stage: "error", message });
+        void live
+          .finish()
+          .then(() => notifyUser(userId, `⚠️ تحلیل این صوت به مشکل خورد.\n${message}`))
+          .catch(() => {});
+      },
     });
   } catch (e) {
     if (e instanceof InsufficientCredit) {
-      await fsp.unlink(dest).catch(() => {});
       return json(res, 402, {
         error: "اعتبارت کم است.",
         needCoins: costCoins(e.needed),
@@ -427,6 +516,15 @@ async function uploadAudio(
     }
     throw e;
   }
+
+  /**
+   * اولین پیام وضعیت را همین حالا بگذار، نه با اولین `onProgress`.
+   *
+   * کاربر مینی‌اپ را می‌بندد و می‌رود سراغ ربات؛ اگر چت خالی باشد فکر می‌کند
+   * صوتش گم شده. همین پیام بعداً جای خودش ویرایش می‌شود، پس چیزی هم اضافه
+   * نمی‌ماند.
+   */
+  void live.update(progressMessage("queue"));
 
   json(res, 202, { sessionId });
 }

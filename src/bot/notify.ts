@@ -65,6 +65,71 @@ function channelsFor(userId: number): Channel[] {
 }
 
 /**
+ * یک پیامِ **زنده** در ربات: فرستاده می‌شود و بعد جای خودش ویرایش می‌شود.
+ *
+ * برای کاری که از مینی‌اپ شروع شده لازم است. کاربر صفحه را می‌بندد و
+ * می‌رود، پس تنها جایی که می‌تواند وضعیت را ببیند همان چتِ ربات است — و
+ * چهار پیام پشت‌سرهم برای چهار مرحله، چت را خراب می‌کند.
+ *
+ * تحویل روی **یک** سکو انجام می‌شود (همان که `deliveryChannel` انتخاب
+ * می‌کند)، تا وضعیت جایی برود که نتیجه هم می‌رود.
+ *
+ * هر شکستی بلعیده می‌شود: ناتوانی در نشان‌دادن وضعیت نباید کار را متوقف کند.
+ */
+export function liveMessage(userId: number): {
+  update: (text: string) => Promise<void>;
+  finish: () => Promise<void>;
+} {
+  const ch = deliveryChannel(userId);
+  let messageId: number | null = null;
+  let last = "";
+  // ویرایش‌ها ترتیب دارند؛ بدون این صف، دو مرحله‌ای که سریع پشت هم بیایند
+  // می‌توانند وارونه بنشینند و کاربر مرحلهٔ عقب‌تر را آخر ببیند.
+  let chain: Promise<void> = Promise.resolve();
+
+  const run = (fn: () => Promise<void>) => {
+    chain = chain.then(fn, fn).catch(() => {});
+    return chain;
+  };
+
+  return {
+    update: (text) =>
+      run(async () => {
+        if (!ch || text === last) return;
+        last = text;
+        try {
+          if (messageId === null) {
+            const m = await ch.api.sendMessage(ch.chatId, text, { parse_mode: "HTML" });
+            messageId = m.message_id;
+          } else {
+            await ch.api.editMessageText(ch.chatId, messageId, text, { parse_mode: "HTML" });
+          }
+        } catch (e) {
+          // «message is not modified» و پیامِ پاک‌شده هر دو بی‌ضررند.
+          logger.debug({ userId, err: String(e) }, "live message update failed");
+        }
+      }),
+
+    /**
+     * پیام وضعیت را بردار.
+     *
+     * نتیجهٔ کامل بلافاصله بعدش می‌آید، و ماندنِ «دارم تحلیل می‌کنم…» بالای
+     * آن فقط گیج‌کننده است.
+     */
+    finish: () =>
+      run(async () => {
+        if (!ch || messageId === null) return;
+        try {
+          await ch.api.deleteMessage(ch.chatId, messageId);
+        } catch {
+          /* پاک‌نشدن پیام وضعیت، مسئلهٔ کاربر نیست */
+        }
+        messageId = null;
+      }),
+  };
+}
+
+/**
  * پیام را به هر سکویی که کاربر آنجا هست بفرست.
  *
  * `true` یعنی دست‌کم یک جا رسید. شکست‌ها بلعیده می‌شوند — کاربری که ربات را

@@ -23,6 +23,7 @@ const tests = [
   "history-page",
   "app-send",
   "no-external",
+  "confirm-flow",
   "gift",
   "identity",
 ];
