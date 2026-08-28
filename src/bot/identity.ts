@@ -17,12 +17,30 @@ import { findIdentity, resolveIdentity, type Platform } from "../db/identity.js"
  */
 let baleApi: Api | null = null;
 
+/**
+ * توکن ربات بله — ملاکِ واقعیِ تشخیص.
+ *
+ * **چرا توکن و نه خودِ شیء:** grammY برای *هر آپدیت* یک `Api` تازه می‌سازد
+ * (`bot.js`: `const api = new Api(this.token, …)` پیش از ساختن `Context`).
+ * پس `ctx.api` هرگز همان شیئی نیست که `setBaleApi` گرفته، و مقایسهٔ
+ * `ctx.api === baleApi` **همیشه** نادرست بود؛ یعنی هر کاربر بله «تلگرام»
+ * تشخیص داده می‌شد.
+ *
+ * این باگ بی‌صدا بود چون هر دو سکو یک مجموعه دست‌کد دارند و متن‌ها درست
+ * می‌رفتند (پاک‌سازی HTML روی خودِ `api` نشسته، نه روی `platformOf`). فقط
+ * جاهایی می‌شکست که رفتار باید فرق می‌کرد — و آنجا هم خطا بلعیده می‌شد.
+ *
+ * توکن روی نمونه‌های تازه دست‌نخورده می‌ماند، پس مقایسه‌اش پایدار است.
+ */
+let baleToken: string | null = null;
+
 export function setBaleApi(api: Api | null): void {
   baleApi = api;
+  baleToken = api?.token ?? null;
 }
 
 export function platformOf(ctx: Context): Platform {
-  return baleApi && ctx.api === baleApi ? "bale" : "telegram";
+  return isBale(ctx.api) ? "bale" : "telegram";
 }
 
 /**
@@ -32,7 +50,9 @@ export function platformOf(ctx: Context): Platform {
  * می‌گیرد ولی باید بداند دامنه‌اش `t.me` است یا `ble.ir`.
  */
 export function isBale(api: Api): boolean {
-  return Boolean(baleApi && api === baleApi);
+  if (!baleToken) return false;
+  // مقایسهٔ شیء اول می‌آید چون ارزان است و برای خودِ `baleBot.api` درست است.
+  return api === baleApi || api.token === baleToken;
 }
 
 /**

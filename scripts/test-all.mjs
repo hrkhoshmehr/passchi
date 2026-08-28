@@ -17,6 +17,7 @@ const NEEDS_DB = new Set(["gift", "identity"]);
 
 const tests = [
   "keyboards",
+  "platform-detect",
   "miniapp-detect",
   "bale-plain",
   "history-page",
