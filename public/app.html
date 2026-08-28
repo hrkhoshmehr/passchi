@@ -131,7 +131,22 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
 }
 .drop:hover, .drop.over { border-color: var(--brand); background: var(--brand-soft); }
 /* حین آپلود کلیک‌پذیر نیست — وگرنه کاربر وسط کار فایل دوم را انتخاب می‌کند. */
-.drop.busy { pointer-events: none; opacity: .75; cursor: default; }
+.drop.busy { pointer-events: none; cursor: default; border-style: solid; border-color: var(--brand); }
+
+/*
+  نوار درصد آپلود.
+
+  عرضش با جاوااسکریپت ست می‌شود. `transition` کوتاه است تا پرش‌های شبکه نرم
+  دیده شوند ولی عدد از واقعیت عقب نیفتد.
+*/
+.bar {
+  height: 8px; border-radius: 999px; overflow: hidden;
+  background: var(--border); margin: 16px 0 10px;
+}
+.bar-fill {
+  height: 100%; width: 0; border-radius: 999px;
+  background: var(--brand); transition: width .25s ease;
+}
 .drop-ico { font-size: 38px; }
 .drop h3 { font-size: 17px; margin: 12px 0 6px; }
 .drop p { color: var(--text-soft); font-size: 14px; }

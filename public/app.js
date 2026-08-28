@@ -64,6 +64,9 @@ const FA = "۰۱۲۳۴۵۶۷۸۹";
 const fa = (n) => String(n).replace(/[0-9]/g, (d) => FA[+d]);
 const faGroup = (n) => fa(Number(n).toLocaleString("en-US")).replace(/,/g, "٬");
 
+/** بایت به مگابایت، با یک رقم اعشار — واحدی که کاربر روی نوار آپلود می‌فهمد. */
+const mb = (bytes) => (bytes / (1024 * 1024)).toFixed(1);
+
 /**
  * ارزش یک پکیج به زبان کاربر: «۳ کلاس ۹۰ دقیقه‌ای».
  *
@@ -542,6 +545,54 @@ function durationOf(file) {
   });
 }
 
+/**
+ * آپلود با گزارش درصد.
+ *
+ * **چرا `XMLHttpRequest` و نه `fetch`:** `fetch` هیچ راهی برای دنبال‌کردن
+ * پیشرفتِ *فرستادن* ندارد — `ReadableStream` به‌عنوان بدنه در مرورگرهای
+ * موبایل عملاً کار نمی‌کند و `Content-Length` هم که لازم است از بین می‌رود.
+ * `xhr.upload.onprogress` تنها راهی است که همه‌جا جواب می‌دهد.
+ *
+ * کاربر یک فایل ۹۰ دقیقه‌ای را روی اینترنت موبایل می‌فرستد؛ چرخاندنِ یک
+ * اسپینر بی‌عدد برای چند دقیقه، بدترین قسمت این مسیر بود.
+ *
+ * شکل خطا عمداً همان چیزی است که `api.call` می‌دهد (`status` و `data`)، تا
+ * صدازننده لازم نباشد دو حالت را جدا کند.
+ */
+function uploadWithProgress(path, file, onPercent) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    if (api.token) xhr.setRequestHeader("authorization", `Bearer ${api.token}`);
+
+    xhr.upload.onprogress = (e) => {
+      // `lengthComputable` روی بعضی پراکسی‌ها نادرست است؛ آنجا درصدی نشان
+      // نمی‌دهیم به‌جای اینکه عدد ساختگی بسازیم.
+      if (e.lengthComputable && e.total > 0) onPercent(e.loaded / e.total);
+    };
+
+    xhr.onload = () => {
+      let data = {};
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+      } catch {
+        /* پاسخ غیرJSON یعنی خطای سرور یا پراکسی */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+      reject(
+        Object.assign(new Error(data.error || "آپلود ناموفق بود."), { data, status: xhr.status }),
+      );
+    };
+    xhr.onerror = () => reject(new Error("ارتباط قطع شد. اینترنتت را بررسی کن."));
+    xhr.onabort = () => reject(new Error("آپلود لغو شد."));
+
+    // بدون مهلت: یک کلاس ۹۰ دقیقه‌ای روی اینترنت موبایل می‌تواند دقایقی
+    // طول بکشد و بریدنش یعنی از دست‌رفتن کل فایل.
+    xhr.timeout = 0;
+    xhr.send(file);
+  });
+}
+
 async function upload(file) {
   fail($("send-err"), "");
   const seconds = await durationOf(file);
@@ -560,22 +611,33 @@ async function upload(file) {
    */
   drop.classList.add("busy");
   drop.innerHTML =
-    '<div class="drop-ico"><span class="spinner"></span></div>' +
-    "<h3>در حال فرستادن…</h3>" +
-    '<p class="dim">صفحه رو نبند تا آپلود تمام شود.</p>';
+    '<h3 id="up-title">در حال فرستادن…</h3>' +
+    '<div class="bar"><div class="bar-fill" id="up-fill"></div></div>' +
+    '<p class="dim" id="up-note">صفحه رو نبند تا آپلود تمام شود.</p>';
 
   const qs = new URLSearchParams({ duration: String(seconds), ext });
   if (courseId) qs.set("courseId", courseId);
 
+  const total = mb(file.size);
   let out;
   try {
-    // آپلود مهلت ندارد: یک کلاس ۹۰ دقیقه‌ای روی اینترنت موبایل می‌تواند
-    // دقایقی طول بکشد و بریدنش یعنی از دست‌رفتن کل فایل.
-    out = await api.call(`/api/sessions/upload?${qs}`, {
-      method: "POST",
-      body: file,
-      timeoutMs: 0,
+    out = await uploadWithProgress(`/api/sessions/upload?${qs}`, file, (ratio) => {
+      const pct = Math.min(99, Math.round(ratio * 100));
+      $("up-fill").style.width = `${pct}%`;
+      $("up-title").textContent = `${fa(pct)}٪ فرستاده شد`;
+      $("up-note").textContent = `${fa(mb(file.size * ratio))} از ${fa(total)} مگابایت`;
     });
+
+    /**
+     * رسیدنِ آخرین بایت پایانِ کار نیست.
+     *
+     * سرور بعدش فایل را با ffmpeg می‌سنجد تا مدت واقعی را دربیاورد، و آن
+     * چند ثانیه‌ای طول می‌کشد. اگر روی «۹۹٪» می‌ماند، کاربر فکر می‌کرد
+     * آپلود گیر کرده — پس اینجا صریح گفته می‌شود چه خبر است.
+     */
+    $("up-fill").style.width = "100%";
+    $("up-title").textContent = "دارم فایل رو بررسی می‌کنم…";
+    $("up-note").textContent = "چند ثانیه طول می‌کشه";
   } catch (err) {
     resetDrop();
     // کمبود اعتبار پیام مخصوص خودش را دارد، با عددها
