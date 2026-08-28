@@ -26,7 +26,9 @@ try {
     sessionDate: new Date().toLocaleDateString("fa-IR"),
     makePdf: makePdf && !free,
     mode: free ? "free_trial" : "full",
-    ...(free ? { limitMs: config.FREE_TRANSCRIPT_MINUTES * 60_000 } : {}),
+    // `--free` فقط برای آزمون دستیِ مسیرِ سقف‌دار است؛ محصول دیگر اجرای
+    // رایگان ندارد، پس عدد اینجا ثابت است نه از پیکربندی.
+    ...(free ? { limitMs: 15 * 60_000 } : {}),
     onProgress: (s) => console.log(`  [${s.stage}] ${s.detail ?? ""}`),
   });
 

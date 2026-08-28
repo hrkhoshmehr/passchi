@@ -31,7 +31,7 @@ import { InsufficientCredit } from "../billing/ledger.js";
 import { balanceCoins, costCoins, fmtCoins, PACKAGES, COINS_PER_MINUTE } from "../billing/coins.js";
 import { history } from "../billing/ledger.js";
 import {
-  createCourse, createSession, freeRunUsed, getSession, getUser, listCourses, listSessions,
+  createCourse, createSession, getSession, getUser, listCourses, listSessions,
   sessionReport, updateSession, isTranscriptOnly,
 } from "../db/index.js";
 import { identitiesOf } from "../db/identity.js";
@@ -189,7 +189,6 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
         coins: balanceCoins(u.credit_sec),
         creditSec: u.credit_sec,
         totalUsedSec: u.total_used_sec,
-        freeRunAvailable: !freeRunUsed(uid),
         coinsPerMinute: COINS_PER_MINUTE,
         platforms: identitiesOf(uid).map((i) => i.platform),
       });
@@ -335,9 +334,8 @@ async function uploadAudio(
   const u = getUser(userId)!;
   const declaredSec = Math.max(0, Number(url.searchParams.get("duration") ?? 0));
   const courseId = Number(url.searchParams.get("courseId") ?? 0) || null;
-  const free = !freeRunUsed(userId);
 
-  if (!free && declaredSec > 0 && u.credit_sec < declaredSec) {
+  if (declaredSec > 0 && u.credit_sec < declaredSec) {
     return json(res, 402, {
       error: "اعتبارت کم است.",
       needCoins: costCoins(declaredSec),
@@ -380,7 +378,7 @@ async function uploadAudio(
 
   createSession(sessionId, userId, courseId);
   updateSession(sessionId, {
-    mode: free ? "free_trial" : "full",
+    mode: "full",
     download_route: "web",
   });
 
@@ -393,8 +391,7 @@ async function uploadAudio(
       audioFile: dest,
       courseId,
       declaredDurationSec: declaredSec,
-      mode: free ? "free_trial" : "full",
-      ...(free ? { limitMs: Math.round(config.FREE_TRANSCRIPT_MINUTES * 60_000) } : {}),
+      mode: "full",
       onProgress: (s) => setProgress(sessionId, { stage: s.stage, ...(s.detail ? { detail: s.detail } : {}) }),
       /**
        * کار در مینی‌اپ شروع شده ولی نتیجه در **ربات** تحویل داده می‌شود.
@@ -431,7 +428,7 @@ async function uploadAudio(
     throw e;
   }
 
-  json(res, 202, { sessionId, free });
+  json(res, 202, { sessionId });
 }
 
 // ─── فایل‌های ایستا ─────────────────────────────────────────────────────────

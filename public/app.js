@@ -197,7 +197,6 @@ let me = null;
 async function loadMe() {
   me = await api.call("/api/me");
   $("coins").textContent = faGroup(me.coins);
-  show($("free-banner"), me.freeRunAvailable);
   return me;
 }
 
@@ -563,12 +562,6 @@ async function loadAccount() {
           ${u.coinsPerMinute === 1 ? "هر سکه = یک دقیقه صوت" : `هر دقیقه صوت ${fa(u.coinsPerMinute)} سکه`}
         </p>
       </div>
-
-      ${
-        u.freeRunAvailable
-          ? `<div class="free-banner">🎁 <div>اولین صوتت هنوز رایگان است — تا ۱۵ دقیقه.</div></div>`
-          : ""
-      }
 
       <div>
         <h3 style="font-size:16px;margin-bottom:12px">🪙 شارژ حساب</h3>

@@ -84,7 +84,6 @@ const Schema = z.object({
   // اشتراکی» کافی است و به‌اندازهٔ پردازش یک کلاس کامل نیست.
   FREE_TRIAL_COINS: num(100),
   // اولین جلسهٔ هر کاربر رایگان است ولی فقط رونوشت، و فقط تا این مدت.
-  FREE_TRANSCRIPT_MINUTES: num(15),
   MAX_CONCURRENT_JOBS: num(2),
   DATA_DIR: z.string().optional().default("./data"),
   KEEP_AUDIO_DAYS: num(7),
@@ -95,6 +94,17 @@ const Schema = z.object({
   CARD_HOLDER: z.string().optional().default(""),
   /** بدون @ — دکمهٔ «پشتیبانی» به این آیدی لینک می‌شود */
   SUPPORT_USERNAME: z.string().optional().default(""),
+
+  /**
+   * شناسهٔ صوت نمونه در هر سکو — تور بدون آن صوت ندارد.
+   *
+   * خودِ فایل ۱۶ مگابایت است و جایش در مخزن نیست، پس یک بار دستی فرستاده
+   * می‌شود و شناسه‌اش اینجا می‌نشیند. شناسه به توکن ربات گره خورده و با
+   * عوض‌شدن آن باید دوباره گرفته شود؛ خالی‌بودنش تور را ناقص می‌کند نه
+   * خراب. `scripts/upload-sample.mjs` هر دو را می‌گیرد.
+   */
+  SAMPLE_AUDIO_FILE_ID: z.string().optional().default(""),
+  SAMPLE_AUDIO_FILE_ID_BALE: z.string().optional().default(""),
 
   /**
    * کانال بایگانی ادمین — هر صوتی که کاربر می‌فرستد اینجا هم می‌رود.

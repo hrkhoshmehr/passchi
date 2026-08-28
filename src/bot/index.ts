@@ -18,7 +18,7 @@ import {
   packagesMessage, supportKeyboard, supportMessage,
 } from "./menu.js";
 import {
-  DEMO_CB, DEMO_INTRO, SAMPLE_AUDIO_FILE_ID, SAMPLE_COURSE, SAMPLE_DURATION_MS, SAMPLE_PDF_PATH,
+  DEMO_CB, DEMO_INTRO, SAMPLE_COURSE, SAMPLE_DURATION_MS, SAMPLE_PDF_PATH, sampleAudioFileId,
   SAMPLE_REPORT, SAMPLE_TRANSCRIPT_PATH, outroMessage, stepKeyboard,
 } from "./demo.js";
 import {
@@ -33,8 +33,8 @@ import {
   coinsAsMinutesIfUseful, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
 } from "../billing/coins.js";
 import {
-  clearAudioPath, courseTerms, createCourse, createSession, expiredAudio, freeRunUsed,
-  getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, markFreeRunUsed,
+  clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
+  getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions,
   countSessions, getGift, listGifts, pendingTopups, purgeSession, revokeGift, sessionReport,
   sessionTimeMap, updateSession,
   type SessionMode,
@@ -187,7 +187,7 @@ async function topupScreen(ctx: Context): Promise<void> {
         (config.SUPPORT_USERNAME
           ? `برای شارژ حساب به @${config.SUPPORT_USERNAME} پیام بده.`
           : "کمی بعد دوباره سر بزن."),
-      { reply_markup: supportKeyboard() },
+      { reply_markup: supportKeyboard(platformOf(ctx)) },
     );
     return;
   }
@@ -331,44 +331,41 @@ async function coursesScreen(ctx: Context): Promise<void> {
 }
 
 /**
- * راهنمای فرستادن صوت — دو راه، و کدام برای چه کسی.
+ * راهنمای فرستادن صوت — دو راه، و صریح دربارهٔ اینکه کدام برای چه کسی.
  *
- * محدودیت‌ها واقعی‌اند و کاربر باید پیش از تلاش بداندشان:
+ * محدودیت‌ها واقعی‌اند و کاربر باید **پیش از تلاش** بداندشان، نه بعد از یک
+ * آپلود شکست‌خورده:
  *
- *   • **بله** فایل بالای ۲۰ مگابایت را در خودِ ربات نمی‌پذیرد.
+ *   • **بله** فایل بالای بیست مگابایت را در خودِ ربات نمی‌پذیرد.
  *   • **تلگرام** برای کاربر ایرانی یعنی فیلترشکن، و آپلود صوت یک کلاس با
  *     آن سرعت دردناک است.
  *
- * پس دو مسیر پیشنهاد می‌شود: **فوروارد** (اگر صوت از قبل در همان پیام‌رسان
- * هست — سریع‌ترین راه، چون هیچ بایتی از گوشی بالا نمی‌رود) و **مینی‌اپ** (که
- * روی اینترنت ملی باز می‌شود و آپلود مستقیم است).
- *
- * دکمهٔ مینی‌اپ فقط با `PUBLIC_URL` https ساخته می‌شود؛ همان قاعده‌ای که
- * `mainKeyboard` دارد.
+ * پس ترتیب از ارزان‌ترین کار به گران‌ترین است: **فوروارد** (اگر صوت از قبل
+ * در همان پیام‌رسان هست، هیچ بایتی از گوشی بالا نمی‌رود)، بعد **مینی‌اپ**
+ * (آپلود روی اینترنت ملی، بدون سقف حجم).
  */
 async function sendPrompt(ctx: Context): Promise<void> {
   const kb = new InlineKeyboard();
   if (config.PUBLIC_URL.startsWith("https://")) {
-    kb.webApp("📤 آپلود از راه مینی‌اپ", `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
+    kb.webApp("📤 ارسال صوت", `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
   }
 
   await ctx.reply(
     [
-      "🎧 <b>صوتو بفرست</b>",
+      "🎧 <b>صوت کلاستو برسون</b>",
       "",
-      "همین‌جا یه <b>ویس</b> یا <b>فایل صوتی</b> بفرست — هر فرمتی باشه مشکلی نیست.",
+      "<b>۱. اگه صوت تو همین پیام‌رسانه</b>",
+      "فورواردش کن همین‌جا — سریع‌ترین راه، چون فایل اصلاً از گوشیت آپلود نمی‌شه.",
       "",
-      "<b>اگه صوت از قبل تو گوشیته:</b>",
-      "ساده‌ترین راه اینه که همین‌جا <b>فوروارد</b>ش کنی یا مستقیم بفرستی.",
+      "<b>۲. اگه صوت تو گوشیته</b>",
+      "دکمهٔ <b>📤 ارسال صوت</b> پایین رو بزن. یه صفحه باز می‌شه که همون‌جا فایلو انتخاب" +
+        " می‌کنی و آپلود می‌شه — با اینترنت ملی و بدون محدودیت حجم.",
       "",
-      "<b>اگه فایل بزرگه یا آپلود کند پیش می‌ره:</b>",
-      "از دکمهٔ پایین مینی‌اپ رو باز کن و اونجا آپلود کن — با اینترنت ملی و بدون محدودیت حجم.",
+      "<i>چه فوروارد کنی چه آپلود، نتیجه همین‌جا تو ربات برات میاد.</i>",
       "",
       "<b>دو نکته که کیفیتو بالا می‌بره:</b>",
       "• گوشی رو بذار رو میز، نه تو کیف",
       "• هرچی به استاد نزدیک‌تر، بهتر",
-      "",
-      "<i>هر جوری بفرستی، نتیجه همین‌جا تو ربات میاد.</i>",
     ].join("\n"),
     { parse_mode: "HTML", reply_markup: kb.inline_keyboard.length ? kb : undefined },
   );
@@ -429,18 +426,39 @@ handlers.command("start", async (ctx) => {
   void u;
 
   /**
-   * گام یکِ تور نمونه.
-   *
    * دو پیام لازم است چون تلگرام اجازه نمی‌دهد صفحه‌کلید ثابتِ پایین چت و
    * دکمهٔ شیشه‌ایِ زیر پیام در یک پیام باشند. پیام اول منو را می‌نشاند و
-   * پیام دوم — همان توضیح محصول — دکمهٔ «نمونه رو ببین» را دارد.
+   * پیام دوم — همان توضیح محصول — دکمه‌ها را دارد.
+   *
+   * **دو دکمه، نه یکی.** کاربری که تازه رسیده دو حالت دارد و پیش‌فرض‌گرفتنِ
+   * یکی، دیگری را می‌راند: آن که می‌خواهد اول بفهمد ماجرا چیست، و آن که
+   * همین حالا صوتش را دارد و می‌خواهد شروع کند. پیش‌تر فقط «نمونه رو ببین»
+   * بود و کسی که آماده بود، مجبور بود از تور رد شود تا به کار برسد.
+   *
+   * ترتیب عمدی است: «نمونه» اول می‌آید چون بیشترِ کاربران تازه هنوز چیزی
+   * ندیده‌اند و اثباتِ کار، قوی‌ترین دلیل ماندن است.
    */
   await ctx.reply("سلام 👋", { reply_markup: mainKeyboard });
   await ctx.reply(WELCOME, {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
-    reply_markup: new InlineKeyboard().text("👀 نمونه رو نشونم بده", WELCOME_CB),
+    reply_markup: new InlineKeyboard()
+      .text("👀 نمونهٔ یه کلاس واقعی", WELCOME_CB)
+      .row()
+      .text("🎧 شروع می‌کنم، صوت دارم", "startnow"),
   });
+});
+
+/**
+ * «شروع می‌کنم» — همان راهنمای فرستادن صوت.
+ *
+ * کاربری که این را می‌زند تصمیمش را گرفته؛ نباید دوباره متن فروش ببیند،
+ * فقط باید بداند صوت را چطور برساند.
+ */
+handlers.callbackQuery("startnow", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+  await sendPrompt(ctx);
 });
 
 // ─── تور نمونه ──────────────────────────────────────────────────────────────
@@ -492,17 +510,29 @@ handlers.callbackQuery(DEMO_CB.recap, async (ctx) => {
    * پیام خوش‌آمد داده‌ایم امتحان کند. با `file_id` فرستاده می‌شود پس فایل
    * ۹۱ مگابایتی دوباره آپلود نمی‌شود.
    */
-  const sent = await ctx
-    .replyWithAudio(SAMPLE_AUDIO_FILE_ID, {
+  /**
+   * بار اول فایل آپلود می‌شود و `file_id`اش برای همان سکو نگه داشته می‌شود؛
+   * دفعه‌های بعد فقط همان ارجاع می‌رود. شناسه به تفکیک سکوست چون شناسهٔ
+   * تلگرام روی بله کار نمی‌کند.
+   */
+  const platform = platformOf(ctx);
+  const fileId = sampleAudioFileId(platform);
+  const sent = !fileId
+    ? null
+    : await ctx
+    .replyWithAudio(fileId, {
       caption:
         `🎧 <b>صوت همین جلسه</b> — ${escapeHtml(SAMPLE_COURSE)}\n` +
         "<i>نگهش دار؛ پایین رو زمان‌ها که بزنی، از همون‌جا پخش می‌شه.</i>",
       parse_mode: "HTML",
     })
     .catch((e: unknown) => {
-      logger.warn({ err: String(e) }, "demo audio failed");
+      logger.warn({ platform, err: String(e) }, "demo audio failed");
       return null;
     });
+  if (!fileId) {
+    logger.warn({ platform }, "sample audio file id not configured; tour has no audio");
+  }
   if (sent) demoAudioMsg.set(ctx.from.id, sent.message_id);
   // شناسهٔ صوت در خودِ دکمه حمل می‌شود تا زنجیرهٔ ریپلای به حافظه وابسته نباشد
   const audioSuffix = sent ? `:${sent.message_id}` : "";
@@ -566,8 +596,8 @@ handlers.callbackQuery(DEMO_CB.outro, async (ctx) => {
     })
     .catch(() => {});
 
-  await reply(ctx, outroMessage(config.FREE_TRANSCRIPT_MINUTES, config.SUPPORT_USERNAME), {
-    reply_markup: supportKeyboard(),
+  await reply(ctx, outroMessage(config.FREE_TRIAL_COINS, config.SUPPORT_USERNAME), {
+    reply_markup: supportKeyboard(platformOf(ctx)),
   });
   demoAudioMsg.delete(ctx.from.id);
 });
@@ -884,7 +914,7 @@ handlers.on("message:text", async (ctx) => {
           : "فعلاً نسخهٔ تحت وب فعال نیست. همین‌جا صوتت را بفرست 🎧",
       ));
     }
-    return void (await reply(ctx, supportMessage(), { reply_markup: supportKeyboard() }));
+    return void (await reply(ctx, supportMessage(), { reply_markup: supportKeyboard(platformOf(ctx)) }));
   }
 
   const state = convo.get(id);
@@ -957,26 +987,7 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
     return;
   }
 
-  /**
-   * اولین جلسهٔ هر کاربر رایگان است — **کامل**، ولی با سقف مدت.
-   *
-   * مرزِ رایگان روی *مدت* است نه روی *قابلیت*. نسخهٔ قبلی فقط رونویسی می‌داد
-   * تا هزینهٔ مدل صفر بماند، ولی نتیجه‌اش این بود که کاربر تازه هیچ‌وقت آن
-   * چیزی را که می‌فروشیم نمی‌دید و باید بابت توصیف پول می‌داد. تحلیل ۱۵ دقیقه
-   * حدود نیم سنت است — ارزان‌تر از کاربری که می‌رود.
-   *
-   * هدیهٔ سکه‌ای جداست و عمداً کم: به درد «برداشتن جزوهٔ اشتراکیِ یک
-   * هم‌کلاسی» می‌خورد، که مسیر ورود کسی است که خودش صوت ندارد.
-   */
-  const freeRun = !freeRunUsed(id);
   const durationSec = "duration" in media && media.duration ? media.duration : 0;
-
-  if (!freeRun && durationSec > 0 && u.credit_sec < durationSec) {
-    await reply(ctx, S.lowBalanceMessage(durationSec, u.credit_sec), {
-      reply_markup: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
-    });
-    return;
-  }
 
   const sessionId = shortId();
   const sizeMb = Math.round((media.file_size ?? 0) / 1024 / 1024);
@@ -1053,7 +1064,7 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
     courses.length === 1 ? courses[0]!.id : (recent && courses.some((c) => c.id === recent) ? recent : null);
   if (courseId) updateSession(sessionId, { course_id: courseId });
 
-  updateSession(sessionId, { mode: freeRun ? "free_trial" : "full" });
+  updateSession(sessionId, { mode: "full" });
   await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
 
   /**
@@ -1068,7 +1079,7 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
     media.file_id,
     audioCaption({
       sender: { tgId: id, name: u.name, username: u.username },
-      mode: freeRun ? "free_trial" : "full",
+      mode: "full",
       durationMs: durationSec * 1000,
       sessionId,
       courseName: courseId ? (getCourse(courseId)?.name ?? null) : null,
@@ -1076,72 +1087,36 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
   );
 
   /**
-   * صوتِ بلندترِ از سقف رایگان: انتخاب را **پیش از** مصرف سهمیه بپرس.
-   *
-   * سهمیهٔ رایگان یک بار در عمر هر کاربر است. اگر کسی اولین کارش یک کلاس
-   * ۹۰ دقیقه‌ای باشد و بی‌سؤال جلو برویم، سهمیه‌اش را خرج می‌کند و در عوض
-   * رونوشتِ ۱۵ دقیقهٔ اولش را می‌گیرد — چیزی که نه کل کلاس است نه آن
-   * تحلیلی که در تور نمونه دیده. کاربر این را «رایگانِ ناقص» می‌فهمد، و
-   * حق دارد.
-   *
-   * پس دو راه جلویش گذاشته می‌شود و خودش می‌گزیند. هیچ‌کدام پیش‌فرض نیست:
-   * انتخاب سهمیه برای کسی که می‌خواهد اول دقت را بسنجد درست است، و تحلیل
-   * کامل برای کسی که سکه دارد و کل جلسه را می‌خواهد.
-   */
-  /**
    * مدت واقعی — نه فقط آنچه تلگرام گفته.
    *
    * تلگرام برای `audio` و `voice` مدت را می‌دهد ولی برای فایلی که به‌صورت
-   * **سند** فرستاده شده اغلب نمی‌دهد و `durationSec` صفر می‌ماند. با صفر،
-   * شرط زیر هیچ‌وقت برقرار نمی‌شود و یک کلاس ۹۰ دقیقه‌ای بی‌سؤال سهمیهٔ
-   * رایگان را می‌خورد — دقیقاً همان اشکالی که قرار است رفع شود.
+   * **سند** فرستاده شده اغلب نمی‌دهد و `durationSec` صفر می‌ماند. رزرو اعتبار
+   * روی همین عدد انجام می‌شود، پس صفر یعنی جلسه‌ای که هزینه‌اش کسر نمی‌شود.
    *
    * فایل همین‌جا روی دیسک هست، پس وقتی تلگرام ساکت است خودمان می‌پرسیم.
    * شکستِ probe نباید مسیر را بشکند: در آن حالت مثل قبل جلو می‌رویم.
    */
   let effectiveSec = durationSec;
-  if (freeRun && effectiveSec === 0) {
+  if (effectiveSec === 0) {
     try {
       effectiveSec = Math.round((await probe(audioFile)).durationMs / 1000);
     } catch (e) {
-      logger.warn({ sessionId, err: String(e) }, "probe for free-limit check failed");
+      logger.warn({ sessionId, err: String(e) }, "probe for duration failed");
     }
   }
 
-  const overFreeLimit = freeRun && effectiveSec * 1000 > freeLimitMs();
-  if (overFreeLimit) {
-    pendingChoice.set(id, { sessionId, audioFile, courseId, durationSec: effectiveSec });
-    const kb = new InlineKeyboard()
-      .text(`📄 رونوشت رایگان ${fmtDuration(freeLimitMs())} اول`, `fc:free:${sessionId}`)
-      .row();
-    if (u.credit_sec >= effectiveSec) {
-      kb.text("✨ تحلیل کامل کل جلسه", `fc:full:${sessionId}`).row();
-    } else {
-      kb.text("🪙 شارژ برای تحلیل کامل", "topup").row();
-    }
-    await reply(
-      ctx,
-      `🎧 <b>این صوت ${fmtDuration(effectiveSec * 1000)} است.</b>\n\n` +
-        `سهمیهٔ رایگانت <b>یک بار</b> است و تا ${fmtDuration(freeLimitMs())} صوت را ` +
-        `فقط <b>پیاده</b> می‌کند — یعنی رونوشتِ همان ابتدای کلاس، بدون خلاصه و ` +
-        `نکته‌های امتحانی و جزوه.\n\n` +
-        `برای این جلسه <b>${fmtCost(effectiveSec)}</b> لازم است` +
-        (u.credit_sec >= effectiveSec
-          ? ` و موجودی‌ات کافی است (${fmtBalance(u.credit_sec)}).`
-          : ` و موجودی‌ات ${fmtBalance(u.credit_sec)} است.`) +
-        `\n\n<i>کدام را می‌خواهی؟ سهمیهٔ رایگان تا وقتی خرجش نکنی سر جایش می‌ماند.</i>`,
-      { reply_markup: kb },
-    );
+  /**
+   * اعتبار کم؟ **پیش از** پردازش بگو، نه بعدش.
+   *
+   * رزرو در `startJob` هم این را می‌گیرد، ولی آنجا کاربر فایلش را فرستاده و
+   * منتظر مانده است. اینجا هنوز چیزی شروع نشده و پیام «شارژ کن» با دکمه‌اش
+   * بی‌اصطکاک‌ترین جایی است که می‌شود گفت.
+   */
+  if (effectiveSec > 0 && u.credit_sec < effectiveSec) {
+    await reply(ctx, S.lowBalanceMessage(effectiveSec, u.credit_sec), {
+      reply_markup: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
+    });
     return;
-  }
-
-  if (freeRun) {
-    await reply(
-      ctx,
-      `🎁 <b>این یکی مهمون منی</b>\n\n` +
-        `این صوتو رایگان <b>پیاده</b> می‌کنم تا ببینی چقدر دقیق می‌شنوم.\n` +
-        `<i>خلاصه و نکته‌های امتحانی و جزوه — همونایی که نمونه‌شو دیدی — سکه می‌خواد.</i>`,
-    );
   }
 
   await startJob(ctx, {
@@ -1150,65 +1125,14 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
     courseId,
     // مدت واقعی، نه فقط آنچه تلگرام گفته — مبنای رزرو اعتبار همین است
     declaredDurationSec: effectiveSec,
-    mode: freeRun ? "free_trial" : "full",
-  });
-});
-
-/**
- * جلسه‌هایی که منتظر انتخاب کاربرند (رایگان یا کامل).
- *
- * در حافظه می‌ماند نه در پایگاه‌داده: عمرش چند ثانیه است و اگر ربات
- * ری‌استارت شود، فایل صوتی هنوز روی دیسک است و کاربر می‌تواند دوباره
- * بفرستد. سطر `sessions` هم ساخته شده و در حالت `queued` می‌ماند.
- */
-const pendingChoice = new Map<
-  number,
-  { sessionId: string; audioFile: string; courseId: number | null; durationSec: number }
->();
-
-handlers.callbackQuery(/^fc:(free|full):([a-f0-9]+)$/, async (ctx) => {
-  const [, kind, sessionId] = ctx.match!;
-  const u = touchUser(ctx);
-  const id = uid(ctx);
-  const job = pendingChoice.get(ctx.from.id);
-
-  if (!u || !job || job.sessionId !== sessionId) {
-    await ctx.answerCallbackQuery({ text: "این انتخاب منقضی شده. صوت را دوباره بفرست." });
-    return;
-  }
-
-  // اگر بین نمایش دکمه و زدنش سهمیه مصرف شده باشد (مثلاً از سکوی دیگر)
-  if (kind === "free" && freeRunUsed(id)) {
-    await ctx.answerCallbackQuery({ text: "سهمیهٔ رایگانت قبلاً استفاده شده." });
-    return;
-  }
-  if (kind === "full" && u.credit_sec < job.durationSec) {
-    await ctx.answerCallbackQuery();
-    await reply(ctx, S.lowBalanceMessage(job.durationSec, u.credit_sec), {
-      reply_markup: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
-    });
-    return;
-  }
-
-  pendingChoice.delete(ctx.from.id);
-  await ctx.answerCallbackQuery({ text: "شروع کردم…" });
-  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
-
-  const mode: SessionMode = kind === "free" ? "free_trial" : "full";
-  updateSession(sessionId, { mode });
-  await startJob(ctx, {
-    sessionId,
-    audioFile: job.audioFile,
-    courseId: job.courseId,
-    declaredDurationSec: job.durationSec,
-    mode,
+    mode: "full",
   });
 });
 
 // ─── کلیک‌ها ────────────────────────────────────────────────────────────────
 
 /** رفتن بین صفحه‌های فهرست جلسه‌ها — همان پیام ویرایش می‌شود. */
-handlers.callbackQuery(/^hpage:(d+)$/, async (ctx) => {
+handlers.callbackQuery(/^hpage:(\d+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   await historyScreen(ctx, Number(ctx.match![1]), true);
 });
@@ -1392,11 +1316,6 @@ handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
 
 // ─── اجرای کار ──────────────────────────────────────────────────────────────
 
-/** سقف مدت اجرای رایگان، به میلی‌ثانیه. */
-function freeLimitMs(): number {
-  return Math.round(config.FREE_TRANSCRIPT_MINUTES * 60_000);
-}
-
 interface JobRequest {
   sessionId: string;
   audioFile: string;
@@ -1409,7 +1328,6 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
   const { sessionId, mode } = job;
   const chatId = ctx.chat!.id;
   const userId = ctx.from!.id;
-  const free = mode === "free_trial";
   const progress = await ctx.api.sendMessage(chatId, S.progressMessage("preprocess"), {
     parse_mode: "HTML",
   });
@@ -1423,20 +1341,18 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
 
   /**
    * اعتبار *پیش* از اجرا کنار گذاشته می‌شود، نه بعدش: وگرنه کاربر می‌تواند
-   * چند کار پشت‌سرهم صف کند که مجموعشان از اعتبارش بیشتر است. اجرای رایگان
-   * از این حساب بیرون است — رزروی ندارد و تسویه‌ای هم لازم ندارد.
+   * چند کار پشت‌سرهم صف کند که مجموعشان از اعتبارش بیشتر است. تسویهٔ نهایی
+   * پس از پردازش انجام می‌شود، وقتی مدت واقعی معلوم شد.
    */
-  const reservedSec = free ? 0 : Math.max(60, job.declaredDurationSec);
-  if (!free) {
-    try {
-      reserve(userId, reservedSec, sessionId);
-    } catch (e) {
-      if (e instanceof InsufficientCredit) {
-        await edit(S.lowBalanceMessage(e.needed, e.balance));
-        return;
-      }
-      throw e;
+  const reservedSec = Math.max(60, job.declaredDurationSec);
+  try {
+    reserve(userId, reservedSec, sessionId);
+  } catch (e) {
+    if (e instanceof InsufficientCredit) {
+      await edit(S.lowBalanceMessage(e.needed, e.balance));
+      return;
     }
+    throw e;
   }
 
   enqueue(String(userId), async (signal) => {
@@ -1447,20 +1363,13 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
         audioFile: job.audioFile,
         course,
         sessionDate: new Date().toLocaleDateString("fa-IR"),
-        makePdf: !free,
+        makePdf: true,
         mode,
-        ...(free ? { limitMs: freeLimitMs() } : {}),
         signal,
         onProgress: (s) => void edit(S.progressMessage(s.stage, s.detail)),
       });
 
       await ctx.api.deleteMessage(chatId, progress.message_id).catch(() => {});
-
-      if (free) {
-        markFreeRunUsed(userId);
-        await sendFreeResult(ctx, sessionId, out);
-        return;
-      }
 
       // تسویه: فقط تفاوت مدت واقعی و مدتی که رزرو شده بود جابه‌جا می‌شود
       const actualSec = Math.round(out.originalDurationMs / 1000);
@@ -1477,41 +1386,15 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
       const message = e instanceof Error ? e.message : String(e);
       logger.error({ sessionId, err: message }, "pipeline failed");
       updateSession(sessionId, { status: "error", error: message.slice(0, 500) });
-      if (!free) refund(userId, reservedSec, sessionId, "کار ناموفق بود");
+      refund(userId, reservedSec, sessionId, "کار ناموفق بود");
       const failed = getSession(sessionId);
       if (failed) await archiveFailure(ctx.api, failed, message);
       await edit(
         `❌ <b>پردازش ناموفق بود</b>\n\n${escapeHtml(message)}\n\n` +
-          (free ? "<i>سهمیهٔ رایگانت مصرف نشد.</i>" : "<i>سکه‌های رزروشده کامل برگشت.</i>"),
+          "<i>سکه‌های رزروشده کامل برگشت.</i>",
       );
     }
   });
-}
-
-/**
- * خروجی اجرای رایگان: رونوشت، و بعد پیشنهاد.
- *
- * سهمیهٔ رایگان کارِ مشخصی دارد — نشان‌دادن **دقت صوت به متن** روی صوت خودِ
- * کاربر — و همین‌جا تمام می‌شود. اینکه تحلیل چه شکلی است، در تور نمونه
- * (پس از `/start`) جواب داده شده، پس پیام فروش لازم نیست دوباره فهرستش کند؛
- * فقط می‌گوید همان خروجی برای این جلسه چقدر خرج دارد.
- */
-async function sendFreeResult(ctx: Context, sessionId: string, out: PipelineOut): Promise<void> {
-  await ctx.replyWithDocument(new InputFile(out.transcriptPath, "رونوشت کلاس.txt"), {
-    caption:
-      `📄 <b>رونوشت کامل کلاس</b> با مهر زمانی` +
-      (out.skippedMs > 0
-        ? `\n<i>تا ${fmtDuration(freeLimitMs())} — ${fmtDuration(out.skippedMs)} باقیِ فایل پیاده نشد.</i>`
-        : ""),
-    parse_mode: "HTML",
-  });
-
-  const costSec = Math.round(out.originalDurationMs / 1000);
-  const kb = new InlineKeyboard()
-    .text("✨ تحلیل کامل همین جلسه", `full:${sessionId}`)
-    .row()
-    .text("🪙 خرید سکه", "topup");
-  await reply(ctx, S.upsellMessage(costSec), { reply_markup: kb });
 }
 
 type PipelineOut = Awaited<ReturnType<typeof runPipeline>>;

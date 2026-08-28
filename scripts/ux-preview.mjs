@@ -4,7 +4,7 @@
  * پیام‌های تلگرام تنها رابط کاربری این محصول‌اند و تنها راه دیدنشان پیش از
  * انتشار، همین است: چاپشان در ترمینال. اجرا: `node scripts/ux-preview.mjs`
  */
-import { WELCOME, HOW_IT_WORKS, packagesMessage, supportMessage, BTN } from "../src/bot/menu.ts";
+import { WELCOME, HOW_IT_WORKS, packagesMessage, supportMessage, mainKeyboard } from "../src/bot/menu.ts";
 import {
   HELP, PRIVACY, accountMessage, extractedMessage, lowBalanceMessage, recapMessage,
   settlementMessage, timelineMessage, upsellMessage,
@@ -108,7 +108,11 @@ const report = {
 };
 
 line("منو");
-console.log(Object.values(BTN).join("  |  "));
+// صفحه‌کلید واقعی، نه فهرست برچسب‌ها: دکمهٔ مینی‌اپ جای «صوت بفرستم» را
+// می‌گیرد و این تفاوت فقط در خروجی ساخته‌شده دیده می‌شود.
+for (const row of mainKeyboard.build()) {
+  console.log(row.map((b) => b.text).join("  |  "));
+}
 line("/start");
 show(WELCOME);
 line("چطور کار می‌کنه");
@@ -154,7 +158,7 @@ show(extractedMessage(SAMPLE_REPORT));
 line("تور نمونه — گام ۳: بخش‌بندی کلاس");
 show(timelineMessage(SAMPLE_REPORT, false));
 line("تور نمونه — گام ۴: پایان تور");
-show(outroMessage(15, "SUPPORT_ID"));
+show(outroMessage(100, "SUPPORT_ID"));
 
 line("حساب");
 show(accountMessage({ creditSec: coinsToSec(20), usedSec: 0, refundedSec: 0, sessionCount: 0 }));

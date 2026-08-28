@@ -24,7 +24,8 @@ const sessionCost = K * COST_PER_COIN_TOMAN;
 
 /** اجرای رایگانِ یک حساب تازه فقط Soniox خرج دارد — بدون مدل. */
 const SONIOX_HOUR_USD = 0.1;
-const freeRunCost = (config.FREE_TRANSCRIPT_MINUTES / 60) * SONIOX_HOUR_USD * USD_TOMAN;
+// اجرای رایگان حذف شد؛ هزینهٔ کاربر تازه حالا فقط سکهٔ هدیهٔ ثبت‌نام است.
+const freeRunCost = 0;
 
 const share = Math.ceil(K / SHARE_TARGET);
 const ownerFloor = Math.ceil(K * (1 - REFUND_CAP_PCT));
@@ -33,7 +34,7 @@ const refundPerCycle = K - Math.max(share, ownerFloor);
 console.log("فرض‌ها");
 console.log(`  کلاس ${CLASS_MIN} دقیقه‌ای: ${fa(K)} سکه · هزینهٔ پردازش ${fa(sessionCost)} تومان`);
 console.log(`  هدیهٔ شروع: ${config.FREE_TRIAL_COINS} سکه · سهم هر نفر از این کلاس: ${share} سکه`);
-console.log(`  رونویسی رایگان: ${config.FREE_TRANSCRIPT_MINUTES} دقیقه = ${fa(freeRunCost)} تومان`);
+console.log(`  رونویسی رایگان: حذف شد`);
 console.log(`  سقف بازگشت: ${Math.round(REFUND_CAP_PCT * 100)}٪ ⇒ هر جلسه ${fa(refundPerCycle)} سکه برمی‌گردد\n`);
 
 /**

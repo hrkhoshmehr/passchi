@@ -12,6 +12,7 @@
 
 import { InlineKeyboard, Keyboard } from "grammy";
 import { config } from "../config.js";
+import type { Platform } from "../db/identity.js";
 import {
   PACKAGES, RATE_LINE, REFUND_CAP_PCT, SHARE_TARGET, classesFor, coinsAsMinutes, fmtCoins,
   fmtToman,
@@ -25,8 +26,13 @@ export const BTN = {
   courses: "📘 درس‌های من",
   how: "❓ چطور کار می‌کنه",
   support: "👤 پشتیبانی",
-  /** فقط وقتی PUBLIC_URL تنظیم باشد روی صفحه‌کلید می‌آید */
-  app: "📱 باز کردن اپ",
+  /**
+   * فقط وقتی PUBLIC_URL تنظیم باشد روی صفحه‌کلید می‌آید.
+   *
+   * «ارسال صوت» و نه «باز کردن اپ»: کاربر دنبال *کار* می‌گردد نه دنبال ابزار.
+   * با نام قبلی، کسی که می‌خواست صوت بفرستد نمی‌فهمید این همان دکمه است.
+   */
+  app: "📤 ارسال صوت",
 } as const;
 
 /**
@@ -38,10 +44,23 @@ export const BTN = {
  * ساخته نمی‌شود یا صفحهٔ سفید باز می‌کند — بدتر از نبودنش.
  */
 export const mainKeyboard = (() => {
-  const kb = new Keyboard().text(BTN.send).text(BTN.history).row();
+  const kb = new Keyboard();
+
+  /**
+   * دکمهٔ مینی‌اپ **جای** «صوت بفرستم» را می‌گیرد، نه اینکه کنارش بنشیند.
+   *
+   * هر دو یک کار می‌کنند و داشتن هر دو یعنی کاربر باید حدس بزند کدام را
+   * بزند — همان ابهامی که با نام «باز کردن اپ» بدتر هم بود. مینی‌اپ مستقیم
+   * به آپلود می‌رود، و راهنمای فوروارد داخل خودش گفته می‌شود.
+   *
+   * بدون `PUBLIC_URL` معتبر، دکمهٔ متنی برمی‌گردد.
+   */
   if (config.PUBLIC_URL.startsWith("https://")) {
-    kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`).row();
+    kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`).text(BTN.history).row();
+  } else {
+    kb.text(BTN.send).text(BTN.history).row();
   }
+
   return kb
     .text(BTN.account).text(BTN.courses).row()
     .text(BTN.how).text(BTN.support)
@@ -99,8 +118,10 @@ export const WELCOME = `به ${APP_NAME} خوش اومدی 👋
 📕 <b>جزوهٔ PDF</b> — فقط محتوای درس، مرتب و قابل چاپ
 📄 <b>رونوشت کامل</b> — کلمه‌به‌کلمه با مهر زمانی
 
-<b>حرف زدن راجع بهش فایده نداره — بذار نشونت بدم.</b>
-یه کلاس واقعی رو براش پیاده کردم؛ دکمهٔ پایینو بزن تا دقیقاً همون چیزی رو ببینی که تحویل می‌گیری.`;
+<b>یه کلاس واقعی رو براش پیاده کردم.</b>
+اگه می‌خوای اول ببینی خروجی چه شکلیه، دکمهٔ اول رو بزن. اگه صوتت آماده‌ست و می‌خوای شروع کنی، دکمهٔ دوم.
+
+🎁 <b>${toFaDigits(config.FREE_TRIAL_COINS)} سکه هدیهٔ شروع داری</b> — یعنی یه کلاس کامل، مهمون من.`;
 
 /** دکمهٔ گام بعدیِ تور، زیر پیام خوش‌آمد. */
 export const WELCOME_CB = "demo:recap";
@@ -123,10 +144,10 @@ export const HOW_IT_WORKS = `<b>❓ چطور کار می‌کنه</b>
 <b>۴ — می‌نویسم</b>
 آخرش یک جزوهٔ کامل PDF، مرتب و قابل چاپ — فقط محتوای درس، بدون حضور و غیاب و حاشیه. نکتهٔ امتحانی همان‌جا که مبحثش آمده با رنگ متفاوت مشخص می‌شود.
 
-<b>چقدرش رایگان است</b>
-اولین صوت هر کسی رایگان <b>پیاده</b> می‌شود — تا ${toFaDigits(config.FREE_TRANSCRIPT_MINUTES)} دقیقه. یعنی مرحلهٔ اول از این چهار مرحله، و کارش این است که با گوش خودت بسنجی چقدر دقیق می‌شنوم: اصطلاح‌های تخصصی درس خودت، لهجهٔ استادت، کیفیت ضبط گوشی‌ات.
+<b>چقدر خرج دارد</b>
+هر سکه یک دقیقه صوت. یک کلاس ۹۰ دقیقه‌ای یعنی ۹۰ سکه — و برای شروع ${toFaDigits(config.FREE_TRIAL_COINS)} سکه مهمان منی، یعنی یک کلاس کامل رایگان.
 
-اینکه سه مرحلهٔ بعد چه تحویل می‌دهند را لازم نیست حدس بزنی — همان اول کار نمونهٔ یک کلاس واقعی را نشانت دادم. آن سه مرحله سکه می‌خواهد، چون هزینهٔ واقعی همان‌جاست.
+لازم نیست حدس بزنی چه تحویل می‌گیری: همان اول کار نمونهٔ یک کلاس واقعی را نشانت می‌دهم.
 
 <b>و چطور تقریباً مجانی می‌شود</b>
 یک جلسه یک بار پردازش می‌شود. جزوه‌اش را که برای بچه‌های کلاس بفرستی، هرکس برش دارد سهم همه کمتر می‌شود و مابه‌التفاوت به تو برمی‌گردد — تا سقف ${toFaDigits(Math.round(REFUND_CAP_PCT * 100))}٪ آنچه داده‌ای.
@@ -152,8 +173,15 @@ export function supportMessage(): string {
   return lines.join("\n");
 }
 
-export function supportKeyboard(): InlineKeyboard | undefined {
-  if (!config.SUPPORT_USERNAME) return undefined;
+/**
+ * دکمهٔ پشتیبانی — **فقط در تلگرام**.
+ *
+ * آدرس `t.me` داخل بله باز نمی‌شود، و آیدی پشتیبانی هم یک حساب تلگرامی است.
+ * پس دکمه‌ای که کاربر بله را به بن‌بست می‌برد بدتر از نبودنش است؛ آنجا همان
+ * آیدی در متن پیام می‌آید و کاربر خودش کپی می‌کند.
+ */
+export function supportKeyboard(platform: Platform = "telegram"): InlineKeyboard | undefined {
+  if (!config.SUPPORT_USERNAME || platform !== "telegram") return undefined;
   return new InlineKeyboard().url("پیام به پشتیبانی", `https://t.me/${config.SUPPORT_USERNAME}`);
 }
 
