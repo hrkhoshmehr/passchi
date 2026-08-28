@@ -729,9 +729,16 @@ handlers.command("cancel", async (ctx) => {
  */
 handlers.command("grant", async (ctx) => {
   if (!isAdmin(ctx)) return;
+  // رقم فارسی/عربی هم پذیرفته می‌شود — همان دلیلی که در `/gift` توضیح داده شد.
+  const digits = (s: string | undefined) =>
+    (s ?? "")
+      .replace(/[٬,]/g, "")
+      .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+      .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+
   const [target, amount] = ((ctx.match as string | undefined) ?? "").trim().split(/\s+/);
-  const t = Number(target);
-  const coins = Number(amount);
+  const t = Number(digits(target));
+  const coins = Number(digits(amount));
   if (!Number.isFinite(t) || !Number.isFinite(coins) || coins <= 0) {
     await reply(
       ctx,
@@ -778,7 +785,17 @@ handlers.command("gift", async (ctx) => {
   const words: string[] = [];
 
   for (const raw of parts) {
-    const tok = raw.replace(/[٬,]/g, "");
+    /**
+     * رقم فارسی و عربی هم عدد است.
+     *
+     * ادمین این دستور را از روی موبایل و با صفحه‌کلید فارسی می‌زند، و
+     * `/gift ۵۰` پیش‌تر بی‌صدا به «یادداشت» می‌افتاد: کد با ۲۰ سکهٔ پیش‌فرض
+     * ساخته می‌شد و هیچ‌کس نمی‌فهمید تا وقتی گیرنده کمتر از انتظار بگیرد.
+     */
+    const tok = raw
+      .replace(/[٬,]/g, "")
+      .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+      .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
     let m: RegExpMatchArray | null;
     if ((m = tok.match(/^x(\d+)$/i))) maxUses = Number(m[1]);
     else if ((m = tok.match(/^(\d+)d$/i))) days = Number(m[1]);

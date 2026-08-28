@@ -25,6 +25,7 @@ const tests = [
   "no-external",
   "confirm-flow",
   "admin-platform",
+  "gift-parse",
   "gift",
   "identity",
 ];
