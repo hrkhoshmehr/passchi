@@ -6,7 +6,7 @@ import {
   REFUND_CAP_PCT, SHARE_TARGET, balanceCoins, coinsAsMinutesIfUseful, costCoins,
   fmtBalance, fmtCoins, fmtCoinsWithToman, fmtCost, RATE_LINE, shareBack,
 } from "../billing/coins.js";
-import { BTN, TRIAL_COINS } from "./menu.js";
+import { BTN } from "./menu.js";
 
 export const chunk = chunkMessage;
 
@@ -23,10 +23,7 @@ export const HELP = `<b>چیکار می‌کنم</b>
 هر فایل صوتی یا ویس تلگرام. گوشیو بذار رو میز نه تو کیف — نزدیک‌بودن مهم‌تر از گرون‌بودن گوشیه.
 
 <b>سکه‌ها</b>
-با سکه کار می‌کنه: <b>هر سکه یه دقیقه صوت</b>. برای شروع ${toFaDigits(TRIAL_COINS)} سکه مهمون منی — یعنی یه کلاس کامل. از «${BTN.account}» موجودیت رو می‌بینی و شارژ می‌کنی.
-
-<b>یه ترفند</b>
-رو دقیقه‌ها که بزنی، صوت از همون‌جا پخش میشه. (رو موبایل؛ تو دسکتاپ کار نمی‌کنه.)
+با سکه کار می‌کنه: <b>هر سکه یه دقیقه صوت</b>. از «${BTN.account}» موجودیت رو می‌بینی و شارژ می‌کنی.
 
 <b>خرجش با هم‌کلاسیا نصف میشه</b>
 یه جلسه یه بار پردازش میشه. هرکی دیگه هم برداره، سهم همه کمتر میشه و سکه‌هات برمی‌گرده. بعد هر تحلیل دکمه‌شو می‌بینی.

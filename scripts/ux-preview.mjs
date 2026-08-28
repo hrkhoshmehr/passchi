@@ -158,7 +158,7 @@ show(extractedMessage(SAMPLE_REPORT));
 line("تور نمونه — گام ۳: بخش‌بندی کلاس");
 show(timelineMessage(SAMPLE_REPORT, false));
 line("تور نمونه — گام ۴: پایان تور");
-show(outroMessage(100, "SUPPORT_ID"));
+show(outroMessage("SUPPORT_ID"));
 
 line("حساب");
 show(accountMessage({ creditSec: coinsToSec(20), usedSec: 0, refundedSec: 0, sessionCount: 0 }));

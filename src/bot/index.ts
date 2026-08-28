@@ -162,6 +162,47 @@ function touchUser(ctx: Context) {
 // تازه از منو می‌رود و کاربر قدیمی دستور می‌زند، بی‌آنکه دو مسیر جدا در کد
 // باشد که از هم عقب بمانند.
 
+/**
+ * دکمهٔ بازگشت — هر صفحه‌ای که باز می‌شود باید راه برگشت داشته باشد.
+ *
+ * صفحه‌کلیدِ پایین همیشه هست، ولی وقتی کاربر چند پیام پایین رفته دیگر
+ * دیده نمی‌شود و باید اسکرول کند. یک دکمهٔ شیشه‌ایِ زیر همان پیام، راهِ
+ * برگشت را همان‌جا می‌گذارد که کاربر ایستاده.
+ *
+ * `home` منوی اصلی را دوباره می‌فرستد؛ بقیهٔ مقصدها برای صفحه‌های تودرتو
+ * است (مثلاً از «یک جلسه» به فهرست جلسه‌ها).
+ */
+function withBack(kb: InlineKeyboard, to: "home" | null = "home"): InlineKeyboard {
+  if (to !== "home") return kb;
+  /**
+   * ردیف تازه فقط وقتی باز می‌شود که ردیف **آخر** چیزی داشته باشد.
+   *
+   * `new InlineKeyboard()` خودش با یک ردیفِ خالی شروع می‌شود (`[[]]`), پس
+   * شرطِ `length` روی خودِ آرایه گول‌زننده است و یک ردیف خالی جا می‌گذارد —
+   * که تلگرام کل پیام را به‌خاطرش رد می‌کند.
+   */
+  const rows = kb.inline_keyboard;
+  if (rows.length && rows[rows.length - 1]!.length) kb.row();
+  return kb.text("🏠 منوی اصلی", "home");
+}
+
+/** منوی اصلی، به‌عنوان یک پیام — مقصدِ همهٔ دکمه‌های بازگشت. */
+async function homeScreen(ctx: Context): Promise<void> {
+  await ctx.reply(
+    [
+      "🏠 <b>منوی اصلی</b>",
+      "",
+      "از دکمه‌های پایین انتخاب کن، یا مستقیم صوت کلاستو بفرست.",
+    ].join("\n"),
+    { parse_mode: "HTML", reply_markup: mainKeyboard },
+  );
+}
+
+handlers.callbackQuery("home", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await homeScreen(ctx);
+});
+
 async function accountScreen(ctx: Context): Promise<void> {
   const u = touchUser(ctx);
   if (!u) return;
@@ -174,7 +215,7 @@ async function accountScreen(ctx: Context): Promise<void> {
       refundedSec: totalShareRefunds(u.tg_id),
       sessionCount: done,
     }),
-    { reply_markup: new InlineKeyboard().text("🪙 شارژ حساب", "topup") },
+    { reply_markup: withBack(new InlineKeyboard().text("🪙 شارژ حساب", "topup")) },
   );
 }
 
@@ -187,11 +228,11 @@ async function topupScreen(ctx: Context): Promise<void> {
         (config.SUPPORT_USERNAME
           ? `برای شارژ حساب به @${config.SUPPORT_USERNAME} پیام بده.`
           : "کمی بعد دوباره سر بزن."),
-      { reply_markup: supportKeyboard(platformOf(ctx)) },
+      { reply_markup: withBack(supportKeyboard(platformOf(ctx)) ?? new InlineKeyboard()) },
     );
     return;
   }
-  await reply(ctx, packagesMessage(), { reply_markup: packagesKeyboard() });
+  await reply(ctx, packagesMessage(), { reply_markup: withBack(packagesKeyboard()) });
 }
 
 /**
@@ -290,7 +331,7 @@ async function sessionCard(ctx: Context, sessionId: string): Promise<void> {
       s.share_enabled ? `slink:${s.id}` : `son:${s.id}`,
     );
   }
-  kb.row().text("↩️ برگشت به فهرست", "hpage:0");
+  kb.row().text("↩️ فهرست جلسه‌ها", "hpage:0").text("🏠 منوی اصلی", "home");
 
   const course = s.course_id ? getCourse(s.course_id) : null;
   const meta = [s.created_at.slice(0, 10), s.original_ms ? fmtDuration(s.original_ms) : null, course?.name]
@@ -308,7 +349,7 @@ async function sessionCard(ctx: Context, sessionId: string): Promise<void> {
 async function coursesScreen(ctx: Context): Promise<void> {
   touchUser(ctx);
   const courses = listCourses(uid(ctx));
-  const kb = new InlineKeyboard().text("➕ درس جدید", "newcourse");
+  const kb = withBack(new InlineKeyboard().text("➕ درس جدید", "newcourse"));
   if (courses.length === 0) {
     await reply(
       ctx,
@@ -367,7 +408,7 @@ async function sendPrompt(ctx: Context): Promise<void> {
       "• گوشی رو بذار رو میز، نه تو کیف",
       "• هرچی به استاد نزدیک‌تر، بهتر",
     ].join("\n"),
-    { parse_mode: "HTML", reply_markup: kb.inline_keyboard.length ? kb : undefined },
+    { parse_mode: "HTML", reply_markup: withBack(kb) },
   );
 }
 
@@ -443,10 +484,28 @@ handlers.command("start", async (ctx) => {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
     reply_markup: new InlineKeyboard()
-      .text("👀 نمونهٔ یه کلاس واقعی", WELCOME_CB)
+      .text("🎧 صوت می‌فرستم", "startnow")
       .row()
-      .text("🎧 شروع می‌کنم، صوت دارم", "startnow"),
+      .text("❓ چطور کار می‌کنه", "howto"),
   });
+});
+
+/**
+ * «چطور کار می‌کنه» — و زیرش راهِ دیدن نمونه.
+ *
+ * ترتیب عمدی است: کاربری که این را زده هنوز قانع نشده، پس بعد از توضیح
+ * باید **اثبات** ببیند نه دکمهٔ خرید. «نمونه» همان اثبات است و «بازگشت»
+ * راهِ بیرون‌آمدن بدون گیرکردن.
+ */
+async function howtoScreen(ctx: Context): Promise<void> {
+  await reply(ctx, HOW_IT_WORKS, {
+    reply_markup: withBack(new InlineKeyboard().text("👀 نمونهٔ یه کلاس واقعی", WELCOME_CB)),
+  });
+}
+
+handlers.callbackQuery("howto", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await howtoScreen(ctx);
 });
 
 /**
@@ -596,8 +655,8 @@ handlers.callbackQuery(DEMO_CB.outro, async (ctx) => {
     })
     .catch(() => {});
 
-  await reply(ctx, outroMessage(config.FREE_TRIAL_COINS, config.SUPPORT_USERNAME), {
-    reply_markup: supportKeyboard(platformOf(ctx)),
+  await reply(ctx, outroMessage(config.SUPPORT_USERNAME), {
+    reply_markup: withBack(new InlineKeyboard().text("🎧 صوت می‌فرستم", "startnow")),
   });
   demoAudioMsg.delete(ctx.from.id);
 });
@@ -797,7 +856,9 @@ async function notifyGiftClaimed(ctx: Context, code: string, tgId: number, coins
   }
 }
 
-handlers.command("privacy", (ctx) => reply(ctx, S.PRIVACY));
+handlers.command("privacy", (ctx) =>
+  reply(ctx, S.PRIVACY, { reply_markup: withBack(new InlineKeyboard()) }),
+);
 
 /**
  * حذف داده به‌خواستِ کاربر.
@@ -900,7 +961,7 @@ handlers.on("message:text", async (ctx) => {
     if (action === "history") return void (await historyScreen(ctx));
     if (action === "account") return void (await accountScreen(ctx));
     if (action === "courses") return void (await coursesScreen(ctx));
-    if (action === "how") return void (await reply(ctx, HOW_IT_WORKS));
+    if (action === "how") return void (await howtoScreen(ctx));
     /**
      * دکمهٔ مینی‌اپ خودش پنجره را باز می‌کند و اصلاً متنی نمی‌فرستد، پس
      * عملاً به اینجا نمی‌رسد. صریح نوشته شده تا اگر روزی رسید (کلاینت
@@ -914,7 +975,7 @@ handlers.on("message:text", async (ctx) => {
           : "فعلاً نسخهٔ تحت وب فعال نیست. همین‌جا صوتت را بفرست 🎧",
       ));
     }
-    return void (await reply(ctx, supportMessage(), { reply_markup: supportKeyboard(platformOf(ctx)) }));
+    return void (await reply(ctx, supportMessage(), { reply_markup: withBack(supportKeyboard(platformOf(ctx)) ?? new InlineKeyboard()) }));
   }
 
   const state = convo.get(id);
