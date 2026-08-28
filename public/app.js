@@ -369,18 +369,71 @@ $("back-phone").addEventListener("click", () => {
 
 // ─── درس‌ها ─────────────────────────────────────────────────────────────────
 
-async function loadCourses() {
+/**
+ * فهرست درس‌ها را می‌کشد و انتخابگر را می‌سازد.
+ *
+ * `selectId` بعد از ساختن درس تازه داده می‌شود تا همان درس انتخاب بماند —
+ * وگرنه کاربر درس را می‌سازد و انتخابگر برمی‌گردد روی «بدون درس»، و صوتش
+ * بی‌درس آپلود می‌شود؛ یعنی دقیقاً همان کاری که تازه از آن صرف‌نظر کرد.
+ */
+async function loadCourses(selectId = "") {
   try {
     const { courses } = await api.call("/api/courses");
     const sel = $("course");
     sel.innerHTML =
       '<option value="">بدون درس</option>' +
-      courses.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-    show($("course-pick"), courses.length > 0);
+      courses.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("") +
+      '<option value="new">➕ درس جدید…</option>';
+    if (selectId) sel.value = String(selectId);
   } catch {
     /* نبودِ فهرست درس‌ها نباید جلوی ارسال صوت را بگیرد */
   }
 }
+
+// ─── ساختن درس از داخل اپ ───────────────────────────────────────────────────
+//
+// پیش‌تر تنها راه ساختن درس، گفت‌وگو با ربات بود. ولی کاربر بله و کاربر
+// تلگرامِ پشت فیلترشکن اصلاً برای همین به اپ می‌آیند که صوت را اینجا بفرستند؛
+// فرستادنشان به ربات وسط کار یعنی رهاکردن آپلود.
+
+const courseNew = () => $("course-new");
+
+/** انتخابگر را به حالت پیش‌فرض برمی‌گرداند و فرم ساخت را می‌بندد. */
+function closeCourseForm(value = "") {
+  show(courseNew(), false);
+  fail($("course-err"), "");
+  $("course-name").value = "";
+  $("course-prof").value = "";
+  $("course").value = value;
+}
+
+$("course").addEventListener("change", () => {
+  const opening = $("course").value === "new";
+  show(courseNew(), opening);
+  if (opening) $("course-name").focus();
+});
+
+$("course-cancel").addEventListener("click", () => closeCourseForm());
+
+$("course-save").addEventListener("click", async () => {
+  const name = $("course-name").value.trim();
+  if (!name) return fail($("course-err"), "اسم درس را بنویس.");
+
+  const btn = $("course-save");
+  btn.disabled = true;
+  try {
+    const { course } = await api.call("/api/courses", {
+      method: "POST",
+      body: { name, professor: $("course-prof").value.trim() || null },
+    });
+    await loadCourses(course.id);
+    closeCourseForm(String(course.id));
+  } catch (err) {
+    fail($("course-err"), err.message || "ساختن درس نشد. دوباره امتحان کن.");
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // ─── ارسال صوت ──────────────────────────────────────────────────────────────
 
@@ -430,7 +483,10 @@ async function upload(file) {
   fail($("send-err"), "");
   const seconds = await durationOf(file);
   const ext = (file.name.split(".").pop() || "ogg").toLowerCase();
-  const courseId = $("course").value;
+  // `new` یک شناسهٔ درس نیست، برچسب گزینهٔ «درس جدید…» است. اگر کاربر فرم را
+  // باز کند و بی‌آنکه بسازد فایل بفرستد، نباید رشتهٔ `new` به سرور برود.
+  const picked = $("course").value;
+  const courseId = picked === "new" ? "" : picked;
 
   go("prog");
   // بازماندهٔ آپلود قبلی نباید بالای نوار پیشرفتِ تازه بماند.

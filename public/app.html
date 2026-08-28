@@ -80,6 +80,8 @@ input[type="tel"], input[type="text"] {
 input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 /* شماره و کد همیشه چپ‌به‌راست خوانده می‌شوند، حتی در صفحهٔ راست‌به‌چپ */
 input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: center; }
+/* فاصلهٔ حروف برای رقم‌های کد یک‌بارمصرف است، نه برای اسم فارسی درس و استاد */
+#course-name, #course-prof { letter-spacing: normal; }
 
 .err {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
@@ -271,13 +273,35 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
       </div>
       <input type="file" id="file" accept="audio/*,video/*" class="hidden">
 
-      <div id="course-pick" class="hidden">
+      <!--
+        انتخابگر درس همیشه دیده می‌شود، حتی وقتی کاربر هیچ درسی ندارد.
+
+        پیش‌تر با `hidden` شروع می‌شد و فقط وقتی `courses.length > 0` بود باز
+        می‌شد — یعنی کاربر تازه هرگز آن را نمی‌دید و تنها راه ساختن درس، رفتن
+        به ربات بود. ولی همان کاربر تازه دقیقاً کسی است که باید درس بسازد:
+        یادگیری اصطلاح‌ها فقط وقتی کار می‌کند که جلسه به درسی وصل باشد.
+      -->
+      <div id="course-pick">
         <label for="course">درس (اختیاری)</label>
         <select id="course" style="width:100%;padding:13px 15px;font:inherit;font-size:15px;
                 background:var(--surface);color:var(--text);border:1px solid var(--border-strong);
                 border-radius:var(--radius);margin-top:6px">
           <option value="">بدون درس</option>
+          <option value="new">➕ درس جدید…</option>
         </select>
+        <p class="dim" style="margin-top:7px;font-size:13px">
+          با انتخاب درس، اصطلاح‌های تخصصی‌اش را یاد می‌گیرم و جلسه‌های بعدی دقیق‌تر رونویسی می‌شوند.
+        </p>
+
+        <div id="course-new" class="hidden" style="margin-top:11px">
+          <input id="course-name" type="text" maxlength="80" placeholder="اسم درس — مثلاً ریاضی مهندسی">
+          <input id="course-prof" type="text" maxlength="80" placeholder="اسم استاد (اختیاری)" style="margin-top:8px">
+          <div class="err hidden" id="course-err"></div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn btn-primary" type="button" id="course-save" style="flex:1">بساز</button>
+            <button class="btn btn-ghost" type="button" id="course-cancel">بی‌خیال</button>
+          </div>
+        </div>
       </div>
 
       <div class="err hidden" id="send-err"></div>
