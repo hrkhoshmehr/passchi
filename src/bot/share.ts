@@ -1,4 +1,5 @@
-import { InlineKeyboard, InputFile, type Api, type Context } from "grammy";
+import { InlineKeyboard, type Api, type Context } from "grammy";
+import { sendDoc } from "./bale-upload.js";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml } from "../util/text.js";
@@ -139,17 +140,16 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
   await send(S.extractedMessage(r), asReply);
   await send(S.timelineMessage(r, linkable), asReply);
 
+  // `sendDoc` مسیر بله را دستی می‌فرستد و خطا را لاگ می‌کند؛ توضیح در
+  // `bale-upload.ts`. پیش‌تر اینجا `.catch(() => {})` بود و کاربر بله جزوه و
+  // رونوشتِ جلسهٔ اشتراکی را بی‌صدا از دست می‌داد.
   if (s.pdf_path) {
-    await ctx
-      .replyWithDocument(new InputFile(s.pdf_path), { caption: "📕 جزوهٔ این جلسه" })
-      .catch(() => {});
+    await sendDoc(ctx, s.pdf_path, "جزوه.pdf", { caption: "📕 جزوهٔ این جلسه" });
   }
   if (s.transcript_txt) {
-    await ctx
-      .replyWithDocument(new InputFile(Buffer.from(s.transcript_txt, "utf8"), "رونوشت کامل.txt"), {
-        caption: "📄 رونوشت کامل با مهر زمانی",
-      })
-      .catch(() => {});
+    await sendDoc(ctx, Buffer.from(s.transcript_txt, "utf8"), "رونوشت کامل.txt", {
+      caption: "📄 رونوشت کامل با مهر زمانی",
+    });
   }
 }
 

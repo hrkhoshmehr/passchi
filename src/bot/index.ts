@@ -42,6 +42,7 @@ import {
 } from "../db/index.js";
 import { findIdentity, resolveIdentity } from "../db/identity.js";
 import { platformOf, setBaleApi, uid } from "./identity.js";
+import { sendDoc } from "./bale-upload.js";
 import { notifyUser } from "./notify.js";
 
 export const bot = new Bot(
@@ -643,17 +644,13 @@ handlers.callbackQuery(DEMO_CB.outro, async (ctx) => {
   await advance(ctx);
 
   // جزوه و رونوشتِ همان جلسهٔ نمونه — دو تکهٔ آخرِ خروجی واقعی.
-  await ctx
-    .replyWithDocument(new InputFile(SAMPLE_PDF_PATH, "نمونه-جزوه.pdf"), {
-      caption: "📕 <b>جزوهٔ همین جلسه</b>\n<i>فقط محتوای درس؛ نکته‌های امتحانی داخل متن رنگی‌اند.</i>",
-      parse_mode: "HTML",
-    })
-    .catch(() => {});
-  await ctx
-    .replyWithDocument(new InputFile(SAMPLE_TRANSCRIPT_PATH, "نمونه-رونوشت.txt"), {
-      caption: "📄 رونوشت کامل با مهر زمانی",
-    })
-    .catch(() => {});
+  await sendDoc(ctx, SAMPLE_PDF_PATH, "نمونه-جزوه.pdf", {
+    caption: "📕 <b>جزوهٔ همین جلسه</b>\n<i>فقط محتوای درس؛ نکته‌های امتحانی داخل متن رنگی‌اند.</i>",
+    parse_mode: "HTML",
+  });
+  await sendDoc(ctx, SAMPLE_TRANSCRIPT_PATH, "نمونه-رونوشت.txt", {
+    caption: "📄 رونوشت کامل با مهر زمانی",
+  });
 
   await reply(ctx, outroMessage(config.SUPPORT_USERNAME), {
     reply_markup: withBack(new InlineKeyboard().text("🎧 صوت می‌فرستم", "startnow")),
@@ -1306,7 +1303,7 @@ handlers.callbackQuery(/^txt:([a-f0-9]+)$/, async (ctx) => {
     await ctx.reply("رونوشت این جلسه موجود نیست.");
     return;
   }
-  await ctx.replyWithDocument(new InputFile(Buffer.from(s.transcript_txt, "utf8"), "رونوشت کامل.txt"), {
+  await sendDoc(ctx, Buffer.from(s.transcript_txt, "utf8"), "رونوشت کامل.txt", {
     caption: "📄 رونوشت کامل با مهر زمانی",
   });
 });
@@ -1342,9 +1339,9 @@ handlers.callbackQuery(/^pdf:([a-f0-9]+)$/, async (ctx) => {
     await ctx.reply("جزوهٔ این جلسه موجود نیست.");
     return;
   }
-  await ctx.replyWithDocument(new InputFile(s.pdf_path)).catch(async () => {
-    await ctx.reply("فایل جزوه دیگر روی سرور نیست.");
-  });
+  if (!(await sendDoc(ctx, s.pdf_path, "جزوه.pdf", { caption: "📕 جزوهٔ این جلسه" }))) {
+    await ctx.reply("فرستادن جزوه ممکن نشد. دوباره امتحان کن یا به پشتیبانی بگو.");
+  }
 });
 
 handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
@@ -1510,7 +1507,7 @@ async function sendResults(
   if (timeline) await reply(ctx, timeline, asReply);
 
   if (out.pdfPath) {
-    await ctx.replyWithDocument(new InputFile(out.pdfPath, out.pdfName ?? "جزوه.pdf"), {
+    await sendDoc(ctx, out.pdfPath, out.pdfName ?? "جزوه.pdf", {
       caption: "📕 <b>جزوهٔ این جلسه</b>\n<i>فقط محتوای درس؛ نکته‌های امتحانی داخل متن رنگی‌اند.</i>",
       parse_mode: "HTML",
     });
@@ -1524,7 +1521,7 @@ async function sendResults(
     );
   }
 
-  await ctx.replyWithDocument(new InputFile(out.transcriptPath, "رونوشت کامل.txt"), {
+  await sendDoc(ctx, out.transcriptPath, "رونوشت کامل.txt", {
     caption: "📄 رونوشت کامل با مهر زمانی",
   });
 
