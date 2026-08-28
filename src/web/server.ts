@@ -521,14 +521,29 @@ async function serveStatic(req: http.IncomingMessage, res: Res, pathname: string
    */
   const stat = fs.statSync(file);
   const etag = `W/"${stat.size.toString(16)}-${stat.mtimeMs.toString(36)}"`;
+
+  /**
+   * فونت‌ها یک سال کش می‌شوند، چون هرگز عوض نمی‌شوند.
+   *
+   * محتوای یک `.woff2` ثابت است؛ اگر روزی نسخهٔ تازه‌ای لازم شود
+   * `scripts/fetch-font.mjs` نام تازه می‌سازد. برای کاربری که روی اینترنت
+   * ایران است، هر رفت‌وبرگشتِ اضافه — حتی یک ۳۰۴ — دیدنی است، و ۳۴۸ کیلوبایت
+   * فونت نباید هر ساعت دوباره پرسیده شود.
+   */
+  const cache = isShell
+    ? "no-cache"
+    : ext === ".woff2"
+      ? "public, max-age=31536000, immutable"
+      : "public, max-age=3600";
+
   if (req.headers["if-none-match"] === etag) {
-    res.writeHead(304, { etag, "cache-control": isShell ? "no-cache" : "public, max-age=3600" }).end();
+    res.writeHead(304, { etag, "cache-control": cache }).end();
     return;
   }
 
   res.writeHead(200, {
     "content-type": MIME[ext] ?? "application/octet-stream",
-    "cache-control": isShell ? "no-cache" : "public, max-age=3600",
+    "cache-control": cache,
     etag,
   });
   fs.createReadStream(file).pipe(res);

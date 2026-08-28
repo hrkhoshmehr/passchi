@@ -7,9 +7,17 @@
 <meta name="theme-color" content="#b8562f" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#14130f" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📓</text></svg>">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<!--
+  فونت از خودِ همین دامنه می‌آید، نه از گوگل.
+
+  `fonts.googleapis.com` در ایران بدون فیلترشکن یا کند است یا اصلاً جواب
+  نمی‌دهد، و آن `<link>` **رندر را بلوک می‌کند** — یعنی کاربر تا وقتی مرورگر
+  از انتظار ناامید نشود صفحهٔ سفید می‌بیند. و کاربر بله دقیقاً همان کسی است
+  که فیلترشکن ندارد.
+
+  با `scripts/fetch-font.mjs` به‌روز می‌شود.
+-->
+<link rel="stylesheet" href="/fonts/vazirmatn.css">
 <link rel="stylesheet" href="/styles.css">
 
 <!--
@@ -26,8 +34,28 @@
   به‌جایش `initData` مستقیم از قطعهٔ آدرس (`#tgWebAppData=…`) خوانده می‌شود —
   همان چیزی که خودِ SDK هم می‌خواند. اگر روزی آدرس درست پیدا شد، افزودنش
   فقط امکانات اضافه (مثل تم) می‌دهد و چیزی را نمی‌شکند.
+
+  **چرا دیگر مستقیم در `<head>` نیست:** به‌صورت `<script src>` ساده،
+  ۱۱۶ کیلوبایت **رندر را بلوک می‌کرد** و `telegram.org` در ایران بدون
+  فیلترشکن باز نمی‌شود — پس کاربر بله تا رسیدنِ مهلتِ شبکه صفحهٔ سفید
+  می‌دید، برای اسکریپتی که اصلاً به کارش نمی‌آمد. حالا فقط وقتی بار
+  می‌شود که نشانه‌ای از تلگرام باشد، و اپ منتظرش نمی‌ماند.
 -->
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+  (function () {
+    // نشانهٔ تلگرام: یا SDK از قبل هست، یا قطعهٔ آدرس کلید مخصوص خودش را دارد.
+    var frag = (location.hash || "") + (location.search || "");
+    var looksTelegram = frag.indexOf("tgWebApp") >= 0;
+    if (!looksTelegram) return;
+
+    var s = document.createElement("script");
+    s.src = "https://telegram.org/js/telegram-web-app.js";
+    // `async` یعنی تجزیهٔ صفحه متوقف نمی‌شود؛ اگر هم نیامد، `app.js` خودش
+    // `initData` را از آدرس می‌خواند و کار می‌کند.
+    s.async = true;
+    document.head.appendChild(s);
+  })();
+</script>
 
 <style>
 body { padding-bottom: env(safe-area-inset-bottom); }

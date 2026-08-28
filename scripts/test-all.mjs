@@ -22,6 +22,7 @@ const tests = [
   "bale-plain",
   "history-page",
   "app-send",
+  "no-external",
   "gift",
   "identity",
 ];
