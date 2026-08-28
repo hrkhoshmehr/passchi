@@ -105,6 +105,28 @@ check("آپلود مهلت ندارد", /xhr\.timeout = 0/.test(js));
 check("خطای XHR همان شکل api.call را دارد", /\{ data, status: xhr\.status \}/.test(js));
 check("نوار پیشرفت در نشانه‌گذاری هست", html.includes("bar-fill"));
 
+// ─── آپلودی که وسط راه خشک می‌شد ────────────────────────────────────────────
+//
+// سرور وقتی وسط یک آپلودِ در جریان پاسخ می‌داد و بدنه را نمی‌خواند، بافر
+// دریافتِ سوکت پر می‌شد و `xhr.upload.onprogress` **از حرکت می‌ایستاد**:
+// کاربر نوار درصد را روی مثلاً ۳۸٪ خشک می‌دید و بعد «اتصال قطع شد» می‌گرفت،
+// در حالی که سرور از همان اول جواب داده بود. روی اینترنت پرسرعت دیده نمی‌شد
+// چون کل فایل در بافرها جا می‌شد؛ روی موبایل ایران همیشه اتفاق می‌افتاد.
+check("تابع refuse بدنه را مصرف می‌کند", /function refuse\([\s\S]{0,400}?req\.resume\(\)/.test(server));
+check("پاسخ پس از پایان بدنه می‌رود", /req\.on\("end", done\)/.test(server));
+check("۴۰۲ آپلود از refuse رد می‌شود", /return refuse\(req, res, 402/.test(server));
+check("۴۰۱ هم از refuse رد می‌شود", /refuse\(req, res, 401/.test(server));
+
+// و راه‌حل اصلی: پیش از فرستادن بایت‌ها بپرس
+check("مسیر precheck هست", /case "POST \/api\/sessions\/precheck"/.test(server));
+check("precheck اعتبار را می‌سنجد", /sec > 0 && u\.credit_sec < sec/.test(server));
+check("precheck حجم را هم می‌سنجد", /sizeBytes > MAX_UPLOAD_BYTES/.test(server));
+check("اپ پیش از آپلود precheck می‌زند", /api\.call\("\/api\/sessions\/precheck"/.test(js));
+check(
+  "precheck پیش از uploadWithProgress صدا زده می‌شود",
+  js.indexOf("/api/sessions/precheck") < js.indexOf("uploadWithProgress(`/api/sessions/upload"),
+);
+
 // ─── ورود از سایت روی گوشی ─────────────────────────────────────────────────
 check(
   "کاربر موبایل به دکمه‌های ربات ارجاع داده می‌شود",

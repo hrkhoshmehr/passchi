@@ -615,6 +615,33 @@ async function upload(file) {
     '<div class="bar"><div class="bar-fill" id="up-fill"></div></div>' +
     '<p class="dim" id="up-note">صفحه رو نبند تا آپلود تمام شود.</p>';
 
+  /**
+   * پیش از فرستادنِ یک بایت بپرس که این فایل پذیرفته می‌شود یا نه.
+   *
+   * بدون این، تنها راهِ فهمیدنِ «اعتبارت کم است» فرستادن کل فایل بود — و
+   * چون سرور وسط راه جواب می‌داد و بدنه را نمی‌خواند، نوار درصد روی همان
+   * عدد **خشک می‌شد** و بعد «اتصال قطع شد» می‌آمد. روی اینترنت موبایل با
+   * فایل ۵۰ مگابایتی همیشه اتفاق می‌افتاد.
+   */
+  try {
+    await api.call("/api/sessions/precheck", {
+      method: "POST",
+      body: { durationSec: seconds, sizeBytes: file.size },
+    });
+  } catch (err) {
+    resetDrop();
+    if (err.status === 402) {
+      const d = err.data || {};
+      fail(
+        $("send-err"),
+        `اعتبارت کم است — این جلسه ${faGroup(d.needCoins ?? 0)} سکه می‌خواهد و ${faGroup(d.haveCoins ?? 0)} سکه داری.`,
+      );
+    } else {
+      fail($("send-err"), err.message);
+    }
+    return;
+  }
+
   const qs = new URLSearchParams({ duration: String(seconds), ext });
   if (courseId) qs.set("courseId", courseId);
 

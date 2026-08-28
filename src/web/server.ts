@@ -58,6 +58,36 @@ function json(res: Res, status: number, body: unknown): void {
   res.end(text);
 }
 
+/**
+ * رد کردن یک آپلود **بی‌آنکه کلاینت سرِ کار بماند.**
+ *
+ * ## باگی که این تابع رفع می‌کند
+ *
+ * وقتی سرور وسط یک آپلودِ در جریان پاسخ می‌داد و بدنه را نمی‌خواند، مرورگر
+ * همچنان در حال فرستادن بود: بافر دریافتِ سوکت پر می‌شد، `TCP` پنجره را
+ * می‌بست، و `xhr.upload.onprogress` **از حرکت می‌ایستاد**. کاربر یک نوار
+ * درصد می‌دید که روی مثلاً ۳۸٪ خشک می‌شد و بعد از مدتی «اتصال قطع شد»
+ * می‌گرفت — در حالی که سرور از همان اول جواب داده بود و مشکل شبکه نبود.
+ *
+ * روی اینترنت پرسرعت دیده نمی‌شد چون کل فایل پیش از پاسخ در بافرها جا
+ * می‌شد؛ روی موبایل ایران با فایل ۵۰ مگابایتی، همیشه اتفاق می‌افتاد.
+ *
+ * پس بدنه **مصرف** می‌شود و بعد پاسخ می‌رود. بایت‌ها دور ریخته می‌شوند، ولی
+ * کلاینت آپلودش را تمام می‌کند و خطای درست را می‌بیند. برای فایل بزرگ این
+ * یعنی انتقالِ بی‌فایده، پس صدازننده باید **پیش از** شروع آپلود جلوی این
+ * حالت را بگیرد (`POST /api/sessions/precheck`) و این تابع تور ایمنی است.
+ */
+function refuse(req: http.IncomingMessage, res: Res, status: number, body: unknown): void {
+  // اگر بدنه‌ای در راه نیست، همان‌جا جواب بده.
+  if (req.readableEnded || req.method === "GET" || req.method === "HEAD") {
+    return json(res, status, body);
+  }
+  const done = () => json(res, status, body);
+  req.on("end", done);
+  req.on("error", done);
+  req.resume(); // بایت‌ها را بخوان و دور بریز
+}
+
 function readBody(req: http.IncomingMessage, limit = 1024 * 1024): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -97,7 +127,9 @@ function authUser(req: http.IncomingMessage): number | null {
 function requireUser(req: http.IncomingMessage, res: Res): number | null {
   const id = authUser(req);
   if (id === null) {
-    json(res, 401, { error: "وارد نشده‌ای." });
+    // `refuse` و نه `json`: اگر توکن نشستِ کاربری وسط یک آپلود منقضی شود،
+    // پاسخِ بی‌مصرف‌کردنِ بدنه، آپلود را روی همان درصد خشک می‌کند.
+    refuse(req, res, 401, { error: "وارد نشده‌ای." });
     return null;
   }
   return id;
@@ -274,6 +306,42 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
       return json(res, 200, { sessions: listSessions(uid, 50).map(publicSession) });
     }
 
+    /**
+     * پیش از فرستادن بایت‌ها بپرس: این فایل اصلاً قابل قبول است؟
+     *
+     * بدون این، تنها راهِ فهمیدنِ «اعتبارت کم است» فرستادن کل فایل بود — و
+     * چون سرور وسط راه پاسخ می‌داد، آپلود روی همان درصد خشک می‌شد. حالا
+     * کاربر پیش از مصرف یک بایت از اینترنت موبایلش جواب می‌گیرد.
+     */
+    case "POST /api/sessions/precheck": {
+      const uid = requireUser(req, res);
+      if (uid === null) return;
+      const { durationSec = 0, sizeBytes = 0 } = await readJson<{
+        durationSec?: number;
+        sizeBytes?: number;
+      }>(req);
+      const u = getUser(uid)!;
+      const sec = Math.max(0, Math.round(durationSec));
+
+      if (sizeBytes > MAX_UPLOAD_BYTES) {
+        return json(res, 413, {
+          error: `فایل خیلی بزرگ است. سقف ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))} مگابایت است.`,
+        });
+      }
+      if (sec > 0 && u.credit_sec < sec) {
+        return json(res, 402, {
+          error: "اعتبارت کم است.",
+          needCoins: costCoins(sec),
+          haveCoins: balanceCoins(u.credit_sec),
+        });
+      }
+      return json(res, 200, {
+        ok: true,
+        costCoins: sec > 0 ? costCoins(sec) : null,
+        haveCoins: balanceCoins(u.credit_sec),
+      });
+    }
+
     case "POST /api/sessions/upload": {
       const uid = requireUser(req, res);
       if (uid === null) return;
@@ -356,7 +424,7 @@ async function uploadAudio(
   const courseId = Number(url.searchParams.get("courseId") ?? 0) || null;
 
   if (declaredSec > 0 && u.credit_sec < declaredSec) {
-    return json(res, 402, {
+    return refuse(req, res, 402, {
       error: "اعتبارت کم است.",
       needCoins: costCoins(declaredSec),
       haveCoins: balanceCoins(u.credit_sec),
