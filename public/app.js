@@ -627,19 +627,36 @@ async function upload(file) {
     await api.call("/api/sessions/precheck", {
       method: "POST",
       body: { durationSec: seconds, sizeBytes: file.size },
+      // مهلت بلندتر از پیش‌فرض: روی اینترنت موبایلِ کند، ۱۵ ثانیه برای یک
+      // رفت‌وبرگشتِ ساده هم کم می‌آید و آن‌وقت کاربر پیش از شروعِ آپلود
+      // خطا می‌گیرد — بدتر از نداشتنِ این بررسی.
+      timeoutMs: 45000,
     });
   } catch (err) {
-    resetDrop();
-    if (err.status === 402) {
-      const d = err.data || {};
-      fail(
-        $("send-err"),
-        `اعتبارت کم است — این جلسه ${faGroup(d.needCoins ?? 0)} سکه می‌خواهد و ${faGroup(d.haveCoins ?? 0)} سکه داری.`,
-      );
-    } else {
-      fail($("send-err"), err.message);
+    /**
+     * مهلت یا قطعی شبکه نباید جلوی آپلود را بگیرد.
+     *
+     * این بررسی یک **راحتی** است، نه یک دروازه: سرور موقع آپلود خودش دوباره
+     * اعتبار را می‌سنجد. اگر خودِ این درخواست نرسید، بهتر است آپلود شروع
+     * شود تا اینکه کاربر خطایی ببیند که هیچ ربطی به فایلش ندارد.
+     *
+     * `err.status` یعنی سرور جواب داده — آن جواب معتبر است و باید نشان
+     * داده شود. نبودش یعنی مهلت یا قطعی، که رد می‌شود.
+     */
+    if (err.status) {
+      resetDrop();
+      if (err.status === 402) {
+        const d = err.data || {};
+        fail(
+          $("send-err"),
+          `اعتبارت کم است — این جلسه ${faGroup(d.needCoins ?? 0)} سکه می‌خواهد و ${faGroup(d.haveCoins ?? 0)} سکه داری.`,
+        );
+      } else {
+        fail($("send-err"), err.message);
+      }
+      return;
     }
-    return;
+    console.warn("precheck failed, continuing anyway:", err.message);
   }
 
   const qs = new URLSearchParams({ duration: String(seconds), ext });
@@ -648,12 +665,39 @@ async function upload(file) {
   const total = mb(file.size);
   let out;
   try {
-    out = await uploadWithProgress(`/api/sessions/upload?${qs}`, file, (ratio) => {
-      const pct = Math.min(99, Math.round(ratio * 100));
-      $("up-fill").style.width = `${pct}%`;
-      $("up-title").textContent = `${fa(pct)}٪ فرستاده شد`;
-      $("up-note").textContent = `${fa(mb(file.size * ratio))} از ${fa(total)} مگابایت`;
-    });
+    /**
+     * تا سه بار تلاش — چون شکست، **گاه‌به‌گاه** است نه همیشگی.
+     *
+     * اندازه‌گیری روی سرور نشان داد CDN جلوی دامنه گاهی وسط آپلود
+     * `504` می‌سازد **بی‌آنکه درخواست اصلاً به سرور برسد** (لاگ مبدأ هیچ
+     * ۵۰۴ای ندارد). شش تلاش پیاپی موفق بود و یکی پیش از آن شکست — یعنی
+     * الگویی در کار نیست که بشود دورش زد، ولی تلاش دوباره معمولاً می‌گیرد.
+     *
+     * فقط خطای شبکه و ۵xx دوباره امتحان می‌شوند: ۴۰۲ و ۴۰۰ جوابِ درستِ
+     * سرورند و تکرارشان فقط وقت کاربر را می‌گیرد.
+     */
+    const MAX_TRIES = 3;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        out = await uploadWithProgress(`/api/sessions/upload?${qs}`, file, (ratio) => {
+          const pct = Math.min(99, Math.round(ratio * 100));
+          $("up-fill").style.width = `${pct}%`;
+          $("up-title").textContent = `${fa(pct)}٪ فرستاده شد`;
+          $("up-note").textContent =
+            `${fa(mb(file.size * ratio))} از ${fa(total)} مگابایت` +
+            (attempt > 1 ? ` — تلاش ${fa(attempt)}` : "");
+        });
+        break;
+      } catch (err) {
+        const retryable = !err.status || err.status >= 500;
+        if (!retryable || attempt >= MAX_TRIES) throw err;
+
+        $("up-fill").style.width = "0%";
+        $("up-title").textContent = "ارتباط قطع شد، دوباره تلاش می‌کنم…";
+        $("up-note").textContent = `تلاش ${fa(attempt + 1)} از ${fa(MAX_TRIES)}`;
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
+    }
 
     /**
      * رسیدنِ آخرین بایت پایانِ کار نیست.
