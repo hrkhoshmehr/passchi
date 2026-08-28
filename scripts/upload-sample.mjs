@@ -5,14 +5,17 @@
  * تاریخچهٔ git نیست. یک بار فرستاده می‌شود، شناسه‌اش در `.env` می‌نشیند، و از
  * آن به بعد تور فقط همان ارجاع را می‌فرستد — بی‌آنکه فایل روی سرور لازم باشد.
  *
- * مقصد، **چتِ خودِ ربات** است (`getMe().id`): پیام جایی دیده نمی‌شود ولی
- * شناسه ساخته می‌شود. فرستادن به کانال بایگانی هم کار می‌کرد، ولی آنجا
- * محتوای کاربران است و شلوغش نمی‌کنیم.
+ * مقصد را خودت می‌دهی (آرگومان دوم) یا از `ADMIN_IDS` گرفته می‌شود. ربات
+ * نمی‌تواند به خودش پیام بدهد (`403: the bot can't send messages to the bot`)،
+ * پس یک چت واقعی لازم است — سادهٔ‌ترینش چت خودت با ربات.
+ *
+ * ⚠️ برای بله باید **یک بار** به ربات بله پیام داده باشی، وگرنه ربات اجازهٔ
+ * شروع گفت‌وگو ندارد. شناسهٔ چت بله با تلگرام فرق دارد.
  *
  * ⚠️ شناسه به توکن ربات گره خورده. با عوض‌شدن توکن، دوباره اجرا کن.
  *
  * اجرا:
- *   node --import tsx scripts/upload-sample.mjs <path-to-audio.mp3>
+ *   node --import tsx scripts/upload-sample.mjs <audio.mp3> [tgChatId] [baleChatId]
  */
 import fs from "node:fs";
 import { Bot, InputFile } from "grammy";
@@ -30,13 +33,23 @@ if (sizeMb > 20) {
   console.log("⚠️  بالای بیست مگابایت است؛ بله احتمالاً نمی‌پذیرد. اول فشرده‌اش کن.\n");
 }
 
+const tgChat = Number(process.argv[3] || config.ADMIN_IDS[0] || 0) || null;
+const baleChat = Number(process.argv[4] || 0) || null;
+
 const targets = [
-  { name: "telegram", token: config.BOT_TOKEN, env: "SAMPLE_AUDIO_FILE_ID", apiRoot: undefined },
+  {
+    name: "telegram",
+    token: config.BOT_TOKEN,
+    env: "SAMPLE_AUDIO_FILE_ID",
+    apiRoot: undefined,
+    chatId: tgChat,
+  },
   {
     name: "bale",
     token: config.BALE_BOT_TOKEN,
     env: "SAMPLE_AUDIO_FILE_ID_BALE",
     apiRoot: config.BALE_API_ROOT.replace(/\/+$/, ""),
+    chatId: baleChat,
   },
 ];
 
@@ -46,10 +59,14 @@ for (const t of targets) {
     console.log(`⏭  ${t.name}: توکن تنظیم نشده، رد شد`);
     continue;
   }
+  if (!t.chatId) {
+    console.log(`⏭  ${t.name}: شناسهٔ چت داده نشده، رد شد`);
+    continue;
+  }
   const bot = new Bot(t.token, t.apiRoot ? { client: { apiRoot: t.apiRoot } } : undefined);
   try {
     const me = await bot.api.getMe();
-    const msg = await bot.api.sendAudio(me.id, new InputFile(file, "نمونه-صوت.mp3"), {
+    const msg = await bot.api.sendAudio(t.chatId, new InputFile(file, "نمونه-صوت.mp3"), {
       caption: "صوت نمونهٔ تور — برای گرفتن file_id",
     });
     const id = msg.audio?.file_id;
