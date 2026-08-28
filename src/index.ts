@@ -58,7 +58,17 @@ async function baleStatus(): Promise<string> {
   if (!baleBot) return "خاموش";
   try {
     const me = await baleBot.api.getMe();
-    return `روشن (@${me.username})`;
+    /**
+     * نبودِ `BALE_ADMIN_IDS` هم همین‌جا گفته می‌شود.
+     *
+     * بدون آن، `/gift` و بقیهٔ دستورهای مدیریتی روی بله بی‌صدا کار نمی‌کنند —
+     * دقیقاً همان‌طور که خودِ اتصال بله یک بار بی‌صدا خراب بود و مدت‌ها
+     * نادیده ماند.
+     */
+    const admins = config.BALE_ADMIN_IDS.length
+      ? ""
+      : " ⚠️ BALE_ADMIN_IDS خالی — دستورهای مدیریتی روی بله کار نمی‌کنند";
+    return `روشن (@${me.username})${admins}`;
   } catch (e) {
     return `⚠️ پاسخ نمی‌دهد — ${String(e).slice(0, 80)}`;
   }

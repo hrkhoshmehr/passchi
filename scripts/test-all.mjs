@@ -24,6 +24,7 @@ const tests = [
   "app-send",
   "no-external",
   "confirm-flow",
+  "admin-platform",
   "gift",
   "identity",
 ];

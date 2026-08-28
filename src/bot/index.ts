@@ -117,8 +117,37 @@ type Pending =
 
 const convo = new Map<number, Pending>();
 
-function isAdmin(id: number): boolean {
-  return config.ADMIN_IDS.includes(id);
+/**
+ * آیا این گفت‌وگو مالِ یک ادمین است؟
+ *
+ * **چرا `Context` می‌گیرد و نه یک عدد:** `ADMIN_IDS` شناسه‌های تلگرام‌اند، و
+ * پیش‌تر همان `ctx.from.id` خام با آن مقایسه می‌شد. روی بله شناسهٔ کاربر
+ * عدد دیگری است، پس هیچ ادمینی روی بله ادمین شناخته نمی‌شد و دستورهای
+ * مدیریتی — از جمله `/gift` — **بی‌صدا** هیچ کاری نمی‌کردند: نه خطا، نه
+ * پیام، فقط `return`.
+ *
+ * حالا از هویت داخلی هم پرسیده می‌شود: اگر ادمینی حساب تلگرام و بلهٔ خود را
+ * زیر یک کاربر داشته باشد، روی هر دو ادمین است. مقایسهٔ خام هم می‌ماند تا
+ * ادمینی که هنوز هویت ثبت‌شده ندارد قفل نشود.
+ */
+function isAdmin(ctx: Context): boolean {
+  const raw = ctx.from?.id;
+  if (raw === undefined) return false;
+
+  // فهرست درست برای همین سکو — شناسهٔ بله با شناسهٔ تلگرام یکی نیست.
+  const list = platformOf(ctx) === "bale" ? config.BALE_ADMIN_IDS : config.ADMIN_IDS;
+  if (list.includes(raw)) return true;
+
+  /**
+   * اگر ادمین حساب‌هایش را زیر یک کاربر آورده باشد، روی هر دو سکو ادمین است.
+   *
+   * این راهِ دوم لازم است چون امروز حساب تلگرام و بلهٔ یک نفر دو کاربر جدا
+   * هستند؛ روزی که سینک شماره‌موبایل بیاید، همین شرط بدون تغییر کار می‌کند.
+   */
+  const me = uid(ctx);
+  return config.ADMIN_IDS.some(
+    (adminTgId) => findIdentity("telegram", String(adminTgId))?.user_id === me,
+  );
 }
 
 async function reply(ctx: Context, text: string, extra: Record<string, unknown> = {}): Promise<void> {
@@ -699,7 +728,7 @@ handlers.command("cancel", async (ctx) => {
  * درست است، نه این.
  */
 handlers.command("grant", async (ctx) => {
-  if (!isAdmin(ctx.from!.id)) return;
+  if (!isAdmin(ctx)) return;
   const [target, amount] = ((ctx.match as string | undefined) ?? "").trim().split(/\s+/);
   const t = Number(target);
   const coins = Number(amount);
@@ -740,7 +769,7 @@ handlers.command("grant", async (ctx) => {
  * عددِ خالی مقدار سکه، و باقی‌مانده یادداشت.
  */
 handlers.command("gift", async (ctx) => {
-  if (!isAdmin(ctx.from!.id)) return;
+  if (!isAdmin(ctx)) return;
 
   const parts = ((ctx.match as string | undefined) ?? "").trim().split(/\s+/).filter(Boolean);
   let coins: number | null = null;
@@ -801,7 +830,7 @@ handlers.command("gift", async (ctx) => {
 
 /** باطل‌کردن کدی که هنوز خرج نشده — یا خرج شده و جلوی بقیه‌اش باید گرفته شود. */
 handlers.command("ungift", async (ctx) => {
-  if (!isAdmin(ctx.from!.id)) return;
+  if (!isAdmin(ctx)) return;
   const code = ((ctx.match as string | undefined) ?? "").trim().replace(/^g_/, "");
   if (!code) {
     await reply(ctx, "استفاده: <code>/ungift &lt;code&gt;</code>");
@@ -823,7 +852,7 @@ handlers.command("ungift", async (ctx) => {
 
 /** کدهای اخیر و وضعیتشان. */
 handlers.command("gifts", async (ctx) => {
-  if (!isAdmin(ctx.from!.id)) return;
+  if (!isAdmin(ctx)) return;
   const rows = listGifts(20);
   if (rows.length === 0) {
     await reply(ctx, "هنوز کد هدیه‌ای ساخته نشده. با <code>/gift</code> بساز.");
@@ -846,8 +875,20 @@ async function notifyGiftClaimed(ctx: Context, code: string, tgId: number, coins
     `گیرنده: ${escapeHtml(describeUser(tgId))} — <code>${tgId}</code>`,
     fmtCoins(coins),
   ].join("\n");
-  for (const admin of config.ADMIN_IDS) {
-    await ctx.api.sendMessage(admin, text, { parse_mode: "HTML" }).catch((e: unknown) => {
+  /**
+   * هر ادمین از رباتِ سکوی خودش خبر می‌گیرد.
+   *
+   * پیش‌تر همه با `ctx.api` فرستاده می‌شد — یعنی اگر هدیه‌ای در بله برداشته
+   * می‌شد، شناسهٔ تلگرامیِ ادمین به API بله داده می‌شد و پیام یا شکست
+   * می‌خورد یا به چتِ بی‌ربطی می‌رفت.
+   */
+  const targets: Array<[Api | null, number]> = [
+    ...config.ADMIN_IDS.map((id) => [bot.api, id] as [Api, number]),
+    ...config.BALE_ADMIN_IDS.map((id) => [baleBot?.api ?? null, id] as [Api | null, number]),
+  ];
+  for (const [api, admin] of targets) {
+    if (!api) continue;
+    await api.sendMessage(admin, text, { parse_mode: "HTML" }).catch((e: unknown) => {
       logger.warn({ admin, err: String(e) }, "notify gift claim failed");
     });
   }
@@ -906,7 +947,7 @@ handlers.command("forget", async (ctx) => {
 });
 
 handlers.command("stats", async (ctx) => {
-  if (!isAdmin(ctx.from!.id)) return;
+  if (!isAdmin(ctx)) return;
   const q = queueDepth();
   await reply(
     ctx,
@@ -917,7 +958,7 @@ handlers.command("stats", async (ctx) => {
 
 /** فهرست شارژهای منتظر تأیید — برای وقتی که پیامِ اعلانِ ادمین گم شده باشد. */
 handlers.command("pending", async (ctx) => {
-  if (!isAdmin(ctx.from!.id)) return;
+  if (!isAdmin(ctx)) return;
   const rows = pendingTopups(20);
   if (rows.length === 0) {
     await reply(ctx, "شارژ بی‌تکلیفی نیست ✅");
@@ -1236,7 +1277,7 @@ handlers.callbackQuery(/^bcancel:([a-f0-9]+)$/, async (ctx) => {
  * فرستاده شده و بدون این کار دومی روی سفارشِ بسته کلیک می‌کند.
  */
 handlers.callbackQuery(/^(tok|trej):([a-f0-9]+)$/, async (ctx) => {
-  if (!isAdmin(ctx.from.id)) {
+  if (!isAdmin(ctx)) {
     await ctx.answerCallbackQuery({ text: "این دکمه مال تو نیست." });
     return;
   }

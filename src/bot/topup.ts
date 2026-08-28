@@ -20,6 +20,7 @@ import { InlineKeyboard, type Api, type Context } from "grammy";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml } from "../util/text.js";
+import { isBale } from "./identity.js";
 import { coinsToSec, findPackage, fmtBalance, fmtCoins, fmtToman } from "../billing/coins.js";
 import { grant } from "../billing/ledger.js";
 import {
@@ -101,10 +102,18 @@ async function notifyAdmins(api: Api, t: TopupRow): Promise<void> {
     .text("✅ تأیید", `tok:${t.id}`)
     .text("❌ رد", `trej:${t.id}`);
 
-  if (config.ADMIN_IDS.length === 0) {
-    logger.warn({ topup: t.id }, "درخواست شارژ رسید ولی ADMIN_IDS خالی است");
+  /**
+   * ادمین‌های همین سکو، نه فهرست تلگرام برای همه.
+   *
+   * برخلاف خبرِ هدیه که فقط متن است، اینجا `receipt_file_id` در کار است و
+   * شناسهٔ فایل به سکویی که آپلود شده گره خورده — پس پیام باید از همان
+   * `api` برود، و مقصدش هم باید شناسهٔ همان سکو باشد.
+   */
+  const admins = isBale(api) ? config.BALE_ADMIN_IDS : config.ADMIN_IDS;
+  if (admins.length === 0) {
+    logger.warn({ topup: t.id }, "درخواست شارژ رسید ولی فهرست ادمینِ این سکو خالی است");
   }
-  for (const admin of config.ADMIN_IDS) {
+  for (const admin of admins) {
     try {
       if (!t.receipt_file_id) {
         await api.sendMessage(admin, caption, { parse_mode: "HTML", reply_markup: kb });
