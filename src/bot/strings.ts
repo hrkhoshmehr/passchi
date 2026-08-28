@@ -26,7 +26,7 @@ export const HELP = `<b>چیکار می‌کنم</b>
 با سکه کار می‌کنه: <b>هر سکه یه دقیقه صوت</b>. از «${BTN.account}» موجودیت رو می‌بینی و شارژ می‌کنی.
 
 <b>خرجش با هم‌کلاسیا نصف میشه</b>
-یه جلسه یه بار پردازش میشه. هرکی دیگه هم برداره، سهم همه کمتر میشه و سکه‌هات برمی‌گرده. بعد هر تحلیل دکمه‌شو می‌بینی.
+یه جلسه یه بار پردازش میشه. هرکی دیگه هم برداره، <b>سهم تو کمتر میشه</b> و سکه‌هات برمی‌گرده — تا ۱۰ نفر. بعد هر تحلیل دکمه‌شو می‌بینی.
 
 <b>دستورا</b>
 /history جلسه‌های قبلی
@@ -454,8 +454,8 @@ export function upsellMessage(costSec: number): string {
     `تحلیل کامل همین جلسه: <b>${fmtCoinsWithToman(costCoins(costSec))}</b>`,
     "",
     `💰 <b>ولی لازم نیست همه‌شو خودت بدی.</b> جزوه رو برای بچه‌های کلاس بفرست — ` +
-      `اگه ${toFaDigits(SHARE_TARGET)} نفر برش دارن، سهم هرکس ${fmtCoins(share)} میشه و ` +
-      `<b>${fmtCoins(back)}</b> (یعنی ${toFaDigits(pct)}٪) برمی‌گرده به حسابت.`,
+      `هرچی بیشتر برش دارن، <b>سهم تو کمتر می‌شه</b> — تا ${toFaDigits(SHARE_TARGET)} نفر. ` +
+      `با ${toFaDigits(SHARE_TARGET)} نفر سهم تو ${fmtCoins(share)} می‌شه و <b>${fmtCoins(back)}</b> برمی‌گرده به حسابت.`,
   ].join("\n");
 }
 
@@ -465,8 +465,7 @@ export function settlementMessage(costSec: number, balanceSec: number): string {
   return [
     `تمومه ✅ این جلسه <b>${fmtCost(costSec)}</b> شد و <b>${fmtBalance(balanceSec)}</b> برات مونده.`,
     "",
-    `اگه ${toFaDigits(SHARE_TARGET)} نفر از بچه‌های کلاس هم برش دارن، سهم هرکس ` +
-      `${fmtCoins(share)} میشه و <b>${fmtCoins(back)}</b> از سکه‌هات (${toFaDigits(pct)}٪) ` +
-      `برمی‌گرده به حسابت 👇`,
+    `هرچی بیشتر از بچه‌های کلاس برش دارن، <b>سهم تو کمتر می‌شه</b> — تا ${toFaDigits(SHARE_TARGET)} نفر. ` +
+      `با ${toFaDigits(SHARE_TARGET)} نفر سهم تو ${fmtCoins(share)} می‌شه و <b>${fmtCoins(back)}</b> برمی‌گرده به حسابت 👇`,
   ].join("\n");
 }

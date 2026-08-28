@@ -30,7 +30,7 @@ import {
   mintGift, refusalMessage,
 } from "./gift.js";
 import {
-  coinsAsMinutesIfUseful, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
+  SHARE_TARGET, coinsAsMinutesIfUseful, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
 } from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
@@ -388,7 +388,7 @@ async function coursesScreen(ctx: Context): Promise<void> {
 async function sendPrompt(ctx: Context): Promise<void> {
   const kb = new InlineKeyboard();
   if (config.PUBLIC_URL.startsWith("https://")) {
-    kb.webApp("📤 ارسال صوت", `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
+    kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
   }
 
   await ctx.reply(
@@ -399,7 +399,7 @@ async function sendPrompt(ctx: Context): Promise<void> {
       "فورواردش کن همین‌جا — سریع‌ترین راه، چون فایل اصلاً از گوشیت آپلود نمی‌شه.",
       "",
       "<b>۲. اگه صوت تو گوشیته</b>",
-      "دکمهٔ <b>📤 ارسال صوت</b> پایین رو بزن. یه صفحه باز می‌شه که همون‌جا فایلو انتخاب" +
+      "دکمهٔ <b>📤 آپلود فایل</b> پایین رو بزن. یه صفحه باز می‌شه که همون‌جا فایلو انتخاب" +
         " می‌کنی و آپلود می‌شه — با اینترنت ملی و بدون محدودیت حجم.",
       "",
       "<i>چه فوروارد کنی چه آپلود، نتیجه همین‌جا تو ربات برات میاد.</i>",
@@ -1572,9 +1572,9 @@ async function sendInvitation(ctx: Context, sessionId: string): Promise<void> {
   });
   await ctx.reply(
     "☝️ این پیام را در گروه درس فوروارد کن.\n\n" +
-      `هر کسی که از این لینک بیاید، سهم هر نفر کمتر می‌شود و مابه‌التفاوت به تو برمی‌گردد. ` +
-      `تا الان <b>${fmtCost(st?.ownerRefundedSec ?? 0)}</b> پس گرفته‌ای.\n\n` +
-      `<i>سقف بازگشت، همان چیزی است که خودت داده‌ای — از این محصول نمی‌شود درآمد ساخت، فقط می‌شود هزینه‌اش را صفر کرد.</i>`,
+      `هر کسی که از این لینک بیاید، <b>سهم تو کمتر می‌شود</b> و مابه‌التفاوت به حسابت ` +
+      `برمی‌گردد — تا ${toFaDigits(SHARE_TARGET)} نفر.\n\n` +
+      `تا الان <b>${fmtCost(st?.ownerRefundedSec ?? 0)}</b> پس گرفته‌ای.`,
     { parse_mode: "HTML" },
   );
 }

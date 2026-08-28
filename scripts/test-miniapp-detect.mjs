@@ -56,8 +56,8 @@ function grab(name) {
 
 const body = grab("initDataFromUrl") + "\n" + grab("host") + "\nreturn { host };";
 
-function run(hash, globals = {}) {
-  return new Function("location", "globalThis", body)({ hash }, globals);
+function run(hash, globals = {}, search = "") {
+  return new Function("location", "globalThis", body)({ hash, search }, globals);
 }
 
 const DATA = "user=%7B%22id%22%3A5%7D&auth_date=1787850000&hash=abc";
@@ -91,6 +91,20 @@ check("مرورگر معمولی مینی‌اپ تشخیص داده نمی‌ش
 
 // قطعهٔ آدرسِ بی‌ربط نباید مینی‌اپ حساب شود
 check("قطعهٔ نامربوط نادیده گرفته می‌شود", run("#foo=bar").host() === null);
+
+// بله ممکن است initData را جای دیگری بگذارد — همهٔ جاهای محتمل بررسی می‌شوند
+check(
+  "کلید initData در قطعهٔ آدرس",
+  run(`#initData=${encodeURIComponent(DATA)}`).host()?.sdk.initData === DATA,
+);
+check(
+  "initData در رشتهٔ پرس‌وجو",
+  run("", {}, `?tgWebAppData=${encodeURIComponent(DATA)}`).host()?.sdk.initData === DATA,
+);
+// بدون `hash=` یک رشتهٔ initData معتبر نیست و نباید برداشته شود
+check("مقدار بی‌امضا رد می‌شود", run("#tgWebAppData=user%3D1").host() === null);
+// `location` ناقص نباید بالاآمدن را بشکند
+check("location بدون search خطا نمی‌دهد", run("#foo=bar", {}, undefined).host() === null);
 
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
 process.exit(bad === 0 ? 0 : 1);
