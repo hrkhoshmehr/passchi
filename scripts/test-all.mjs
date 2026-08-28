@@ -26,6 +26,7 @@ const tests = [
   "confirm-flow",
   "admin-platform",
   "gift-parse",
+  "platform-neutral",
   "gift",
   "identity",
 ];

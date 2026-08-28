@@ -192,6 +192,18 @@ function host() {
 const miniApp = host();
 
 /**
+ * سکویی که نشستِ فعلی با آن وارد شده — «telegram» یا «bale».
+ *
+ * `miniApp.platform` برای بله `null` است (چون `initData` از قطعهٔ آدرس
+ * خوانده می‌شود و SDKی در کار نیست)، پس این مقدار از پاسخ ورود می‌آید و در
+ * `localStorage` می‌ماند تا بازکردن دوبارهٔ اپ هم آن را بداند.
+ *
+ * تنها مصرفش امروز، بردنِ کاربر به رباتِ **درست** است.
+ */
+let platformOfSession =
+  miniApp?.platform || localStorage.getItem("passchi_platform") || null;
+
+/**
  * آیا این دستگاه یک کامپیوتر رومیزی است؟
  *
  * بله روی دسکتاپ دکمهٔ مینی‌اپ را داخل خودش باز نمی‌کند و لینک را به مرورگر
@@ -275,11 +287,25 @@ async function boot() {
     const candidates = miniApp.platform ? [miniApp.platform] : ["bale", "telegram"];
     for (const platform of candidates) {
       try {
-        const { token } = await api.call("/api/auth/miniapp", {
+        const res = await api.call("/api/auth/miniapp", {
           method: "POST",
           body: { platform, initData: miniApp.sdk.initData },
         });
-        await afterLogin(token);
+        /**
+         * سکو را از **پاسخ سرور** بگیر، نه از حدس خودمان.
+         *
+         * وقتی `initData` از قطعهٔ آدرس خوانده شده — تنها راه در بله —
+         * `miniApp.platform` برابر `null` است و اینجا هر دو توکن امتحان
+         * می‌شوند. سروری که امضا را پذیرفته می‌داند کدام بود؛ بدون ثبتِ
+         * جوابش، دکمهٔ «برگرد به ربات» کاربر بله را به تلگرام می‌برد.
+         */
+        platformOfSession = res.platform ?? platform;
+        try {
+          localStorage.setItem("passchi_platform", platformOfSession);
+        } catch {
+          /* حالت ناشناس مرورگر — بدون ماندگاری هم همین نشست درست کار می‌کند */
+        }
+        await afterLogin(res.token);
         return;
       } catch (e) {
         console.warn(`mini app login failed on ${platform}:`, e.message);
@@ -666,8 +692,14 @@ async function handedOff() {
   let url = null;
   try {
     const { bots = {} } = await api.call("/api/config");
-    // همان سکویی که کاربر از آن آمده؛ اگر معلوم نبود، تلگرام.
-    url = (miniApp?.platform && bots[miniApp.platform]) || bots.telegram || bots.bale || null;
+    /**
+     * رباتِ همان سکویی که کاربر از آن آمده.
+     *
+     * پیش‌تر `miniApp.platform` خوانده می‌شد که برای بله همیشه `null` است،
+     * پس به `bots.telegram` می‌افتاد: کاربر بله روی «برگرد به ربات» می‌زد و
+     * **تلگرام** باز می‌شد.
+     */
+    url = (platformOfSession && bots[platformOfSession]) || null;
   } catch {
     /* بی‌آدرس هم کارت پیام خودش را می‌دهد */
   }

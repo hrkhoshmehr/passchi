@@ -146,6 +146,15 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
       return json(res, 200, {
         token: createSessionToken(user.tg_id, platform),
         user: { name: user.name, coins: balanceCoins(user.credit_sec) },
+        /**
+         * سکویی که امضایش **واقعاً** پذیرفته شد.
+         *
+         * کلاینت خودش نمی‌داند: وقتی `initData` از قطعهٔ آدرس خوانده می‌شود
+         * (تنها راه در بله، چون SDK ندارد) `platform` سمت اپ `null` می‌ماند و
+         * هر دو توکن امتحان می‌شوند. بدون این پاسخ، اپ نمی‌دانست کاربر از
+         * کجا آمده و دکمهٔ «برگرد به ربات» کاربر بله را به **تلگرام** می‌برد.
+         */
+        platform,
       });
     }
 
