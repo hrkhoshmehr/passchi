@@ -362,26 +362,33 @@ footer {
       <p><b>هر سکه = یک دقیقه صوت.</b> برای شروع <span data-trial-coins>۲۰</span> سکه هدیه می‌گیری.</p>
     </div>
     <div class="prices" id="prices">
-      <!-- از /api/packages پر می‌شود؛ این نسخه‌ها اگر جاوااسکریپت نبود می‌مانند -->
+      <!--
+        از /api/packages پر می‌شود؛ این نسخه‌ها فقط اگر جاوااسکریپت نبود می‌مانند.
+
+        ⚠️ این اعداد دستی‌اند و یک بار از قیمت واقعی عقب افتادند: تعدادِ
+        سکه‌ها از دورانِ «هفت سکه در دقیقه» مانده بود و مبلغ‌ها از افزایش
+        قیمت. اگر PACKAGES در billing/coins.ts عوض شد، اینجا هم عوض کن —
+        scripts/test-price-sync.mjs همین را می‌سنجد.
+      -->
       <article class="card price">
         <h3>یک کلاس</h3>
-        <div class="price-coins num">۷۰۰</div>
-        <div class="price-toman num">۹۵٬۰۰۰ تومان</div>
+        <div class="price-coins num">۱۰۰</div>
+        <div class="price-toman num">۱۱۸٬۰۰۰ تومان</div>
         <p class="price-worth">۱ کلاس ۹۰ دقیقه‌ای</p>
         <a class="btn btn-ghost btn-block" href="/app">انتخاب</a>
       </article>
       <article class="card price featured">
         <span class="pill price-tag">محبوب</span>
         <h3>چند جلسه</h3>
-        <div class="price-coins num">۲٬۰۰۰</div>
-        <div class="price-toman num">۲۳۹٬۰۰۰ تومان</div>
+        <div class="price-coins num">۲۸۵</div>
+        <div class="price-toman num">۳۰۷٬۰۰۰ تومان</div>
         <p class="price-worth">۳ کلاس ۹۰ دقیقه‌ای</p>
         <a class="btn btn-primary btn-block" href="/app">انتخاب</a>
       </article>
       <article class="card price">
         <h3>یک ترم</h3>
-        <div class="price-coins num">۵٬۰۰۰</div>
-        <div class="price-toman num">۵۳۹٬۰۰۰ تومان</div>
+        <div class="price-coins num">۷۱۵</div>
+        <div class="price-toman num">۷۰۱٬۰۰۰ تومان</div>
         <p class="price-worth">۷ کلاس ۹۰ دقیقه‌ای</p>
         <a class="btn btn-ghost btn-block" href="/app">انتخاب</a>
       </article>

@@ -5,10 +5,18 @@
  * رایگان یا ارزان از سر تا ته اجرا کرد و به‌جای تخمین، *اندازه‌گیری* داشت:
  * «یک سخنرانی فارسی واقعاً چند توکن است» و «مدل ارزان‌تر برای فارسی کافی است یا نه».
  *
- * دو تفاوت ذاتی وجود دارد و پنهان نمی‌شوند:
+ * یک تفاوت ذاتی هست و پنهان نمی‌شود:
  * • **بدون Batch API** — تخفیف ۵۰٪ اینجا نیست؛ توکن را اندازه بگیر، نه قیمت را.
- * • **بدون prompt caching** — پس رونوشت در پاس دوم دوباره کامل فرستاده می‌شود.
- *   در محاسبهٔ هزینه این را با مسیر آنتروپیک یکی نگیر.
+ *
+ * **کشِ پرامپت از ۲۰۲۶-۰۹-۰۱ اینجا هم هست.** پیش‌تر نبود، و این یعنی قیدِ
+ * «system و بلوک رونوشت باید بایت‌به‌بایت یکسان بمانند» که کل ساختار
+ * `prompts.ts` را شکل داده — و یک بار باگِ «جزوهٔ لاغر» را ساخت — هزینه‌اش
+ * پرداخت می‌شد ولی سودش گرفته نمی‌شد. با `cached()` رونوشت در پاس دوم به
+ * نرخ خواندنِ کش حساب می‌شود (حدود یک‌دهمِ ورودی معمولی).
+ *
+ * انتظار زیادی از این صرفه‌جویی نداشته باش: در این کار **خروجی گران‌تر از
+ * ورودی است** (جزوهٔ بلند)، پس کش حدود ده تا پانزده درصد از هزینهٔ مدل کم
+ * می‌کند، نه بیشتر.
  */
 
 import { config } from "../config.js";
@@ -18,9 +26,29 @@ const BASE_URL = "https://openrouter.ai/api/v1";
 const MAX_ATTEMPTS = 4;
 const BACKOFF_MS = 3_000;
 
+/**
+ * محتوای پیام — یا رشتهٔ ساده، یا بلوک‌هایی که یکی‌شان می‌تواند کش شود.
+ *
+ * شکل بلوکی فقط وقتی لازم است که بخواهیم `cache_control` بگذاریم؛ برای بقیهٔ
+ * فراخوانی‌ها رشتهٔ ساده هم کار می‌کند و خواناتر است.
+ */
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "text"; text: string; cache_control: { type: "ephemeral" } };
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | ContentBlock[];
+}
+
+/**
+ * همان بلوک، با علامتِ «این را کش کن».
+ *
+ * OpenRouter برای Gemini همان نحو آنتروپیک را می‌پذیرد، ولی `cache_control`
+ * باید **داخل بلوک محتوا** بنشیند نه در سطح پیام.
+ */
+export function cached(text: string): ContentBlock {
+  return { type: "text", text, cache_control: { type: "ephemeral" } };
 }
 
 export interface ChatResult {
@@ -30,11 +58,18 @@ export interface ChatResult {
   model: string;
   /** هزینهٔ واقعی این فراخوانی به دلار، طبق گزارش خود OpenRouter */
   costUsd: number;
+  /** چند توکن از کش خوانده شد — صفر یعنی کش نخورده. */
+  cachedTokens: number;
 }
 
 interface CompletionResponse {
   choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    cost?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+  };
   model?: string;
   error?: { message?: string; code?: number };
 }
@@ -128,9 +163,16 @@ export async function chat(
         // OpenRouter هزینهٔ واقعی را در usage.cost برمی‌گرداند. تخمین نزن —
         // مسیریابی به ارائه‌دهنده‌های مختلف قیمت را عوض می‌کند.
         costUsd: Number(body.usage?.cost ?? 0),
+        cachedTokens: body.usage?.prompt_tokens_details?.cached_tokens ?? 0,
       };
       logger.debug(
-        { model: result.model, in: result.inputTokens, out: result.outputTokens, usd: result.costUsd },
+        {
+          model: result.model,
+          in: result.inputTokens,
+          out: result.outputTokens,
+          cached: result.cachedTokens,
+          usd: result.costUsd,
+        },
         "openrouter call",
       );
       return result;

@@ -15,7 +15,7 @@ import {
   type VerifiedEvidence,
 } from "./schema.js";
 import { SYSTEM_COMMON, TASK_ANALYSIS, TASK_NOTES, transcriptBlock } from "./prompts.js";
-import { chat as orChat, extractJson } from "./openrouter.js";
+import { cached, chat as orChat, extractJson } from "./openrouter.js";
 import { isDegenerate, repairAnalysis } from "./repair.js";
 
 const client = new Anthropic({
@@ -340,7 +340,9 @@ export async function analyzeClass(
     const res = await orChat(
       [
         { role: "system", content: SYSTEM_COMMON },
-        { role: "user", content: `${transcriptText}\n\n${TASK_ANALYSIS}` },
+        // رونوشت بلوکِ کش‌شونده است و در هر دو پاس عیناً یکسان می‌رود؛ دستور
+        // که کوتاه است **بعد** از آن می‌آید تا مرزِ کش را نشکند.
+        { role: "user", content: [cached(transcriptText), { type: "text", text: TASK_ANALYSIS }] },
       ],
       {
         model: config.OPENROUTER_ANALYSIS_MODEL || config.OPENROUTER_MODEL,
@@ -473,11 +475,16 @@ export async function analyzeClass(
     logger.info({ provider: config.NOTES_PROVIDER }, "analysis pass 2 (جزوه)");
 
     if (config.NOTES_PROVIDER === "openrouter") {
-      // اینجا کشی در کار نیست: رونوشت کامل دوباره فرستاده می‌شود.
+      // کش روشن است: رونوشت دوباره فرستاده می‌شود ولی به نرخ خواندنِ کش.
       const res = await orChat(
         [
           { role: "system", content: SYSTEM_COMMON },
-          { role: "user", content: `${transcriptText}\n\n${TASK_NOTES}\n\n${skeleton}` },
+          // همان بلوکِ بایت‌به‌بایتِ پاس اول ⇒ اینجا به نرخ خواندنِ کش حساب
+          // می‌شود، نه نرخ ورودی کامل.
+          {
+            role: "user",
+            content: [cached(transcriptText), { type: "text", text: `${TASK_NOTES}\n\n${skeleton}` }],
+          },
         ],
         { model: config.OPENROUTER_NOTES_MODEL || config.OPENROUTER_MODEL, maxTokens: 32_000 },
       );

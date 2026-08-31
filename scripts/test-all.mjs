@@ -21,6 +21,7 @@ const tests = [
   "archive-routing",
   "interrupted-recovery",
   "internal-id",
+  "price-sync",
   "miniapp-detect",
   "bale-plain",
   "history-page",
