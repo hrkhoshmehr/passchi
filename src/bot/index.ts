@@ -30,7 +30,7 @@ import {
   mintGift, refusalMessage,
 } from "./gift.js";
 import {
-  SHARE_TARGET, coinsAsMinutesIfUseful, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
+  RATE_LINE, SHARE_TARGET, coinsAsMinutesIfUseful, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
 } from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
@@ -416,6 +416,7 @@ async function coursesScreen(ctx: Context): Promise<void> {
  * (آپلود روی اینترنت ملی، بدون سقف حجم).
  */
 async function sendPrompt(ctx: Context): Promise<void> {
+  const balanceSec = getUser(uid(ctx))?.credit_sec ?? 0;
   const kb = new InlineKeyboard();
   if (config.PUBLIC_URL.startsWith("https://")) {
     kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
@@ -433,6 +434,13 @@ async function sendPrompt(ctx: Context): Promise<void> {
         " می‌کنی و آپلود می‌شه — با اینترنت ملی و بدون محدودیت حجم.",
       "",
       "<i>چه فوروارد کنی چه آپلود، نتیجه همین‌جا تو ربات برات میاد.</i>",
+      "",
+      // موجودی و نرخ **پیش از** آپلود گفته می‌شود. پیش‌تر اینجا هیچ عددی
+      // نبود: کاربر تازه صوت ۹۰ دقیقه‌ای را می‌فرستاد، منتظر می‌ماند، و
+      // آن‌سرِ کار «سکه‌هات کم میاد» می‌گرفت — یعنی هزینهٔ آپلود را داده
+      // بود و دست خالی برمی‌گشت. گفتنِ نرخ در همین صفحه آن بن‌بست را
+      // از اول برمی‌دارد.
+      `💰 موجودیت: <b>${fmtBalance(balanceSec)}</b> — ${RATE_LINE}.`,
       "",
       "<b>دو نکته که کیفیتو بالا می‌بره:</b>",
       "• گوشی رو بذار رو میز، نه تو کیف",
@@ -1142,9 +1150,13 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
       await ctx.api.editMessageText(
         ctx.chat!.id,
         statusMsg.message_id,
-        "❌ این فایل بزرگ‌تر از سقف دانلود تلگرام است (۲۰ مگابایت) و مسیر جایگزین پیکربندی نشده.\n\n" +
-          "<b>راه‌حل مدیر سیستم:</b> مقدار <code>TELEGRAM_API_ID</code> و <code>TELEGRAM_API_HASH</code> را ست کن تا مسیر MTProto فعال شود.\n\n" +
-          "<b>راه‌حل فوری برای تو:</b> فایل را به‌صورت <b>ویس</b> بفرست — تلگرام خودش فشرده‌اش می‌کند و کیفیتش برای تشخیص گفتار کافی است.",
+        // متن قبلی به دانشجو می‌گفت `TELEGRAM_API_ID` را ست کند — دستورالعملِ
+        // مدیر سیستم، روی صفحهٔ کسی که فقط صوت کلاس فرستاده. این شاخه تنها
+        // وقتی نیست که MTProto پیکربندی نشده باشد: وقتی دانلودِ MTProto هم
+        // وسط راه شکست بخورد به همین‌جا می‌رسیم. پس پیام باید کاری بگوید که
+        // **خودِ کاربر** بتواند انجام دهد.
+        "❌ نشد این فایلو بگیرم — حجمش زیاده.\n\n" +
+          "<b>راه‌حل:</b> همون فایلو به‌صورت <b>ویس</b> بفرست. تلگرام خودش فشرده‌ش می‌کنه و کیفیتش برای من کافیه.",
         { parse_mode: "HTML" },
       );
       return;
@@ -1465,7 +1477,19 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
     reserve(userId, reservedSec, sessionId);
   } catch (e) {
     if (e instanceof InsufficientCredit) {
-      await edit(S.lowBalanceMessage(e.needed, e.balance));
+      /**
+       * دکمهٔ شارژ همین‌جا لازم است، نه فقط اشاره به منو.
+       *
+       * این پیام جای پیامِ «دارم کار می‌کنم» را می‌گیرد و کاربر درست در
+       * لحظه‌ای است که می‌خواهد ادامه دهد. بدون دکمه، باید صفحه‌کلید پایین
+       * را پیدا کند — یعنی همان‌جا که آدم‌ها ول می‌کنند.
+       */
+      await ctx.api
+        .editMessageText(chatId, progress.message_id, S.lowBalanceMessage(e.needed, e.balance), {
+          parse_mode: "HTML",
+          reply_markup: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
+        })
+        .catch(() => {});
       return;
     }
     throw e;
