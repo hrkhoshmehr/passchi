@@ -1495,7 +1495,14 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
     throw e;
   }
 
-  enqueue(String(userId), async (signal) => {
+  /**
+   * جای صف به کاربر گفته می‌شود.
+   *
+   * `MAX_CONCURRENT_JOBS` دوتاست، پس در ساعت شلوغ — مثلاً وقتی یک گروه درسی
+   * با هم می‌فرستند — کاربر سوم باید منتظر بماند. بدون این پیام او فقط
+   * «دارم آماده می‌شم…» می‌بیند که تکان نمی‌خورد، و خرابی می‌فهمدش.
+   */
+  const position = enqueue(String(userId), async (signal) => {
     try {
       const course = job.courseId ? getCourse(job.courseId) : null;
       const out = await runPipeline({
@@ -1535,6 +1542,13 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
       );
     }
   });
+
+  // صفر یعنی همین حالا شروع شد؛ فقط وقتی واقعاً پشت کسی است خبر بده.
+  if (position > 0) {
+    await edit(
+      `⏳ <b>نوبتت تو صفه</b>\n\nنفر <b>${toFaDigits(position)}</b> در صف. تا نوبتت برسه همین‌جا خبرت می‌کنم.`,
+    );
+  }
 }
 
 type PipelineOut = Awaited<ReturnType<typeof runPipeline>>;
