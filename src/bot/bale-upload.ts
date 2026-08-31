@@ -31,10 +31,11 @@
  * برای همین چند فراخوانی، درخواست دستی ساخته می‌شود.
  */
 import fs from "node:fs/promises";
-import { InputFile, type Context } from "grammy";
+import { InputFile, type Api, type Context } from "grammy";
 import { config } from "../config.js";
 import { htmlToPlain } from "../util/text.js";
 import { platformOf } from "./identity.js";
+import type { Platform } from "../db/identity.js";
 import { logger } from "../util/logger.js";
 
 /** متدهایی که فایل می‌فرستند و نام میدانِ فایل در هرکدام. */
@@ -166,4 +167,48 @@ export async function sendDoc(
     logger.warn({ filename, platform, err: (err as Error).message }, "ارسال سند شکست خورد");
     return false;
   }
+}
+
+/**
+ * همان کار، ولی بدون `Context` — برای مسیرهایی که فقط `Api` و شناسهٔ چت دارند.
+ *
+ * `deliverToBot` دقیقاً همین حالت است: از مینی‌اپ صدا زده می‌شود، جایی که
+ * هیچ آپدیتی در کار نیست. پیش‌تر مستقیم `InputFile` می‌ساخت و برای کاربر
+ * **بله** هر سه فایل — صوت، جزوه، و رونوشت — با
+ * `failed to get HTTP URL content` رد می‌شدند؛ یعنی کاربر بله که از مینی‌اپ
+ * آپلود کرده بود، متن‌ها را می‌گرفت ولی **جزوه‌اش هرگز نمی‌رسید**.
+ *
+ * `platform` صریح گرفته می‌شود نه حدس‌زده: صدازننده از `deliveryChannel`
+ * می‌داند روی کدام سکو حرف می‌زند.
+ */
+export async function sendFileTo(
+  api: Api,
+  chatId: number,
+  platform: Platform,
+  method: UploadMethod,
+  source: { path: string; filename: string } | { bytes: Buffer; filename: string },
+  opts: { caption?: string; title?: string } = {},
+): Promise<{ message_id: number; fileId: string | null } | null> {
+  if (platform === "bale") {
+    const res = await baleSendFile(method, chatId, source, {
+      caption: opts.caption ? htmlToPlain(opts.caption) : undefined,
+      title: opts.title,
+    });
+    if (!res) return null;
+    const fileId =
+      res.audio?.file_id ?? res.document?.file_id ?? res.voice?.file_id ?? res.video?.file_id ?? null;
+    return { message_id: res.message_id, fileId };
+  }
+
+  const file = "bytes" in source ? new InputFile(source.bytes, source.filename) : new InputFile(source.path, source.filename);
+  const extra = {
+    ...(opts.caption ? { caption: opts.caption, parse_mode: "HTML" as const } : {}),
+    ...(opts.title ? { title: opts.title } : {}),
+  };
+  const sent =
+    method === "sendAudio"
+      ? await api.sendAudio(chatId, file, extra)
+      : await api.sendDocument(chatId, file, extra);
+  const s = sent as { message_id: number; audio?: { file_id: string }; document?: { file_id: string } };
+  return { message_id: s.message_id, fileId: s.audio?.file_id ?? s.document?.file_id ?? null };
 }

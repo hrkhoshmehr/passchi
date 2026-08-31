@@ -13,12 +13,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 /** آزمون‌هایی که به پایگاه‌دادهٔ تازه نیاز دارند. */
-const NEEDS_DB = new Set(["gift", "identity", "archive-routing"]);
+const NEEDS_DB = new Set(["gift", "identity", "archive-routing", "interrupted-recovery"]);
 
 const tests = [
   "keyboards",
   "platform-detect",
   "archive-routing",
+  "interrupted-recovery",
   "miniapp-detect",
   "bale-plain",
   "history-page",

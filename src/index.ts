@@ -10,6 +10,8 @@ import { publishProfile } from "./bot/profile.js";
 import { resolveBotLinks } from "./bot/links.js";
 import { APP_NAME } from "./bot/menu.js";
 import { archiveStatus } from "./bot/archive.js";
+import { drain } from "./queue.js";
+import { recoverInterrupted } from "./jobs/service.js";
 
 for (const dir of [config.dataDir, config.audioDir, config.workDir, config.outDir]) {
   fs.mkdirSync(dir, { recursive: true });
@@ -19,11 +21,30 @@ const cleanupTimer = setInterval(() => void cleanupOldAudio(), 6 * 60 * 60_000);
 
 const web = startWebServer();
 
+/**
+ * خاموشیِ باقاعده — **اول کارهای در جریان، بعد خروج.**
+ *
+ * پیش‌تر مستقیم `process.exit(0)` می‌زد. یک `systemctl restart` وسطِ یک
+ * جلسه، پروسه را می‌کشت؛ و چون پروسه **می‌میرد** نه اینکه پرتاب کند، آن
+ * `catch` در `startJob` که سکه را برمی‌گرداند هرگز اجرا نمی‌شد. جلسه تا
+ * ابد روی `preprocess` می‌ماند و سکه‌ها رزروشده. یک بار روی کاربر واقعی
+ * افتاد: ۸۵ سکه رفت و هیچ خروجی‌ای نیامد.
+ *
+ * ترتیب مهم است: **اول** polling می‌ایستد تا کار تازه‌ای نیاید، بعد منتظر
+ * کارهای در جریان می‌مانیم، و آخر منابع بسته می‌شوند — بستنِ مرورگر پیش از
+ * پایانِ کاری که دارد PDF می‌سازد، همان کار را می‌شکند.
+ */
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, "shutting down");
   clearInterval(cleanupTimer);
+
+  // اول در ورودی را ببند: از این به بعد کار تازه‌ای وارد صف نمی‌شود.
   await bot.stop();
   await baleBot?.stop();
+
+  const { finished, active } = await drain();
+  logger.info({ finished, active }, finished ? "کارهای در جریان تمام شدند" : "مهلت خاموشی تمام شد");
+
   web?.close();
   await mtprotoDisconnect();
   await closeBrowser();
@@ -42,6 +63,16 @@ await publishProfile(bot.api);
 await resolveBotLinks(bot.api, baleBot?.api ?? null);
 
 void cleanupOldAudio();
+
+/**
+ * جلسه‌های نیمه‌کاره‌ای که از اجرای قبلی مانده‌اند.
+ *
+ * `drain()` هنگام خاموشیِ باقاعده جلویشان را می‌گیرد، ولی `SIGKILL` و OOM
+ * مهلتی نمی‌دهند. اینجا تنها جایی است که می‌شود بعد از آن حالت‌ها سکه‌ها را
+ * برگرداند — و **پیش از** بالاآمدن ربات انجام می‌شود تا کاربری که همان
+ * لحظه پیام می‌دهد، موجودیِ درست را ببیند.
+ */
+const recovered = recoverInterrupted();
 
 /**
  * وضعیت بله را **می‌آزماید**، نه اینکه فقط وجود توکن را گزارش کند.
@@ -87,6 +118,8 @@ logger.info(
     provider: config.ANALYSIS_PROVIDER,
     model: effectiveModel,
     stt: config.SONIOX_MODEL,
+    // اگر اجرای قبلی وسط کار مرده باشد، اینجا معلوم می‌شود چند جلسه جمع شد
+    ...(recovered ? { recovered } : {}),
     // بایگانی بی‌صدا شکست می‌خورد، پس دست‌کم موقع بالاآمدن معلوم باشد روشن است یا نه
     archive: archiveStatus(),
     bale: await baleStatus(),

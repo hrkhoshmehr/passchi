@@ -53,3 +53,35 @@ export function isBusy(id: string): boolean {
 export function queueDepth(): { active: number; pending: number } {
   return { active: active.size, pending: pending.length };
 }
+
+/**
+ * منتظر بمان تا کارهای در جریان تمام شوند — برای خاموشیِ باقاعده.
+ *
+ * ## چرا لازم شد
+ *
+ * `shutdown()` مستقیم `process.exit(0)` می‌زد. یک `systemctl restart` وسطِ
+ * یک جلسه یعنی پروسه می‌میرد، و چون **پرتاب نمی‌شود** بلکه می‌میرد، آن
+ * `catch` در `startJob` که سکه‌ها را برمی‌گرداند هرگز اجرا نمی‌شود. نتیجه:
+ * جلسه تا ابد روی `preprocess` می‌ماند و سکه‌های کاربر رزرو-شده می‌مانند.
+ *
+ * یک بار روی کاربر واقعی اتفاق افتاد: ۸۵ سکه رفت و هیچ خروجی‌ای نیامد.
+ *
+ * کارهای **در صف** (که هنوز شروع نشده‌اند) دور ریخته می‌شوند نه اینکه
+ * منتظرشان بمانیم — آن‌ها هنوز چیزی مصرف نکرده‌اند و صدازننده با
+ * `drainPending` می‌تواند سکه‌شان را برگرداند.
+ *
+ * `timeoutMs` تور ایمنی است: اگر کاری گیر کرده باشد، خاموشی نباید تا ابد
+ * معلق بماند. `TimeoutStopSec` در systemd سی ثانیه است، پس پیش‌فرض کمتر از
+ * آن گرفته شده تا خودمان تمام کنیم نه اینکه systemd با `SIGKILL` بزند.
+ */
+export async function drain(timeoutMs = 25_000): Promise<{ finished: boolean; active: number }> {
+  const dropped = pending.splice(0, pending.length);
+  for (const j of dropped) logger.warn({ jobId: j.id }, "کار صف‌نشده هنگام خاموشی دور ریخته شد");
+
+  const deadline = Date.now() + timeoutMs;
+  while (active.size > 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return { finished: active.size === 0, active: active.size };
+}
+

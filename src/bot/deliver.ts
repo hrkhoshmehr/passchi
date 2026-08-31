@@ -14,7 +14,7 @@
  */
 
 import fs from "node:fs";
-import { InputFile } from "grammy";
+import { sendFileTo } from "./bale-upload.js";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml } from "../util/text.js";
@@ -85,15 +85,23 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
   const audio = await playableAudio(s);
   if (audio) {
     try {
-      const sent = await ch.api.sendAudio(ch.chatId, new InputFile(audio.file), {
-        caption: `🎧 ${escapeHtml(s.title ?? "صوت جلسه")}`,
-        parse_mode: "HTML",
-        title: s.title ?? undefined,
-      });
-      audioMessageId = sent.message_id;
+      // از `sendFileTo` و نه `InputFile` خام: روی بله، ارجاعِ `attach://` که
+      // grammY می‌سازد با `failed to get HTTP URL content` رد می‌شود.
+      const sent = await sendFileTo(
+        ch.api,
+        ch.chatId,
+        ch.platform,
+        "sendAudio",
+        { path: audio.file, filename: `${s.title ?? "جلسه"}.mp3` },
+        {
+          caption: `🎧 ${escapeHtml(s.title ?? "صوت جلسه")}`,
+          ...(s.title ? { title: s.title } : {}),
+        },
+      );
+      audioMessageId = sent?.message_id ?? null;
       // `file_id` نگه داشته می‌شود تا دفعهٔ بعد (اشتراک‌گذاری، تاریخچه) آپلود
       // دوباره لازم نباشد.
-      if (sent.audio?.file_id) updateSession(s.id, { audio_file_id: sent.audio.file_id });
+      if (sent?.fileId) updateSession(s.id, { audio_file_id: sent.fileId });
     } catch (e) {
       logger.warn({ sessionId: s.id, err: String(e) }, "deliver audio failed");
     } finally {
@@ -134,18 +142,24 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
   await send(S.timelineMessage(r, linkable), asReply);
 
   if (s.pdf_path && fs.existsSync(s.pdf_path)) {
-    await ch.api
-      .sendDocument(ch.chatId, new InputFile(s.pdf_path), { caption: "📕 جزوهٔ این جلسه" })
-      .catch((e: unknown) => logger.warn({ err: String(e) }, "deliver pdf failed"));
+    await sendFileTo(
+      ch.api,
+      ch.chatId,
+      ch.platform,
+      "sendDocument",
+      { path: s.pdf_path, filename: `${s.title ?? "جزوه"}.pdf` },
+      { caption: "📕 جزوهٔ این جلسه" },
+    ).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver pdf failed"));
   }
   if (s.transcript_txt) {
-    await ch.api
-      .sendDocument(
-        ch.chatId,
-        new InputFile(Buffer.from(s.transcript_txt, "utf8"), "رونوشت کامل.txt"),
-        { caption: "📄 رونوشت کامل با مهر زمانی" },
-      )
-      .catch((e: unknown) => logger.warn({ err: String(e) }, "deliver transcript failed"));
+    await sendFileTo(
+      ch.api,
+      ch.chatId,
+      ch.platform,
+      "sendDocument",
+      { bytes: Buffer.from(s.transcript_txt, "utf8"), filename: "رونوشت کامل.txt" },
+      { caption: "📄 رونوشت کامل با مهر زمانی" },
+    ).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver transcript failed"));
   }
 
   logger.info({ sessionId: s.id, userId, platform: ch.platform }, "delivered to bot");

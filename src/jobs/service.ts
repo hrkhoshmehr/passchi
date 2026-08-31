@@ -15,7 +15,7 @@
 import { logger } from "../util/logger.js";
 import { runPipeline, type Stage } from "../pipeline.js";
 import { enqueue } from "../queue.js";
-import { commit, refund, reserve, InsufficientCredit } from "../billing/ledger.js";
+import { commit, danglingReservations, refund, reserve, InsufficientCredit } from "../billing/ledger.js";
 import { registerOwner } from "../billing/sharing.js";
 import {
   getCourse, getSession, markFreeRunUsed, updateSession,
@@ -90,3 +90,37 @@ export function startJob(job: JobSpec): void {
 }
 
 export { InsufficientCredit, getSession };
+
+/**
+ * جلسه‌های نیمه‌کاره‌ای که از اجرای قبلی مانده‌اند را جمع کن.
+ *
+ * ## چرا لازم است
+ *
+ * تا وقتی پروسه زنده است، هر شکستی از `catch` بالا رد می‌شود و سکه برمی‌گردد.
+ * ولی سه چیز **پرتاب نمی‌کنند، فقط می‌کشند**: `process.exit` در خاموشی،
+ * `SIGKILL` وقتی مهلت systemd تمام شود، و OOM. در آن حالت نه بازپرداختی
+ * هست نه به‌روزرسانی وضعیت — جلسه تا ابد روی `preprocess` می‌ماند و سکهٔ
+ * کاربر رزرو-شده.
+ *
+ * یک بار روی کاربر واقعی افتاد و ۸۵ سکه‌اش رفت. `drain()` در `index.ts`
+ * جلوی حالتِ **باقاعده** را می‌گیرد؛ این تابع تورِ حالت‌های دیگر است.
+ *
+ * عمداً کار را **دوباره اجرا نمی‌کند**: فایل ممکن است پاک شده باشد، و مهم‌تر
+ * اینکه اجرای خودکارِ چیزی که همین حالا سرور را کشته راهِ خوبی برای کشتنِ
+ * دوبارهٔ آن است. سکه برمی‌گردد و کاربر خودش تصمیم می‌گیرد.
+ */
+export function recoverInterrupted(): number {
+  const dangling = danglingReservations();
+  for (const d of dangling) {
+    refund(d.tgId, d.reservedSec, d.sessionId, "سرور وسط پردازش متوقف شد");
+    updateSession(d.sessionId, {
+      status: "error",
+      error: "سرور وسط پردازش متوقف شد؛ سکه‌ها برگشت. دوباره بفرست.",
+    });
+    logger.warn(
+      { sessionId: d.sessionId, tgId: d.tgId, sec: d.reservedSec },
+      "جلسهٔ نیمه‌کاره جمع شد و سکه برگشت",
+    );
+  }
+  return dangling.length;
+}

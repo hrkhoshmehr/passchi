@@ -169,3 +169,42 @@ export function totalShareRefunds(tgId: number): number {
     .get(tgId) as unknown as { total: number };
   return row.total;
 }
+
+/**
+ * جلسه‌هایی که سکه‌شان رزرو شد ولی هرگز تسویه یا برگشت نخورد.
+ *
+ * یعنی پروسه وسطِ کار مُرد. تا وقتی زنده است، هر شکستی از `catch` در
+ * `startJob` رد می‌شود و بازپرداخت می‌کند؛ ولی `process.exit` و OOM و
+ * `SIGKILL` پرتاب نمی‌کنند — فقط می‌میرند. آن‌وقت سکه رزرو-شده می‌ماند و
+ * جلسه تا ابد روی `preprocess`.
+ *
+ * منبع حقیقت **دفتر** است نه ستون `status`: اگر جایی وضعیت درست به‌روز
+ * نشود باز هم پول درست حساب می‌شود، و این همان چیزی است که کاربر می‌بیند.
+ */
+export function danglingReservations(): Array<{
+  sessionId: string;
+  tgId: number;
+  reservedSec: number;
+}> {
+  return db
+    .prepare(
+      `SELECT r.session_id AS sessionId, r.tg_id AS tgId, -SUM(r.delta_sec) AS reservedSec
+         FROM credit_ledger r
+        WHERE r.reason = 'reserve' AND r.session_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM credit_ledger x
+             WHERE x.session_id = r.session_id
+               AND x.reason IN ('refund', 'commit')
+          )
+          -- ⚠️ commit وقتی تفاوت صفر باشد **هیچ سطری نمی‌نویسد**، پس
+          -- نبودِ سطر به‌تنهایی یعنی «ناتمام» نیست. جلسه‌ای که به سرانجام
+          -- رسیده هرگز آویزان نیست، هر چه در دفتر باشد.
+          AND EXISTS (
+            SELECT 1 FROM sessions s
+             WHERE s.id = r.session_id
+               AND s.status NOT IN ('done', 'error', 'cancelled')
+          )
+        GROUP BY r.session_id, r.tg_id`,
+    )
+    .all() as unknown as Array<{ sessionId: string; tgId: number; reservedSec: number }>;
+}
