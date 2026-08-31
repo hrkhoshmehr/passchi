@@ -46,6 +46,8 @@ function ratioOf(m) {
   };
 }
 
+const COINS_PER_HOUR = 60 * COINS_PER_MINUTE;
+
 const primaryId = models[0];
 const primary = data.find((m) => m.id === primaryId);
 if (!primary) {
@@ -56,7 +58,9 @@ if (!primary) {
 const { inp, out, ratio } = ratioOf(primary);
 const llmNow = LLM_COST_PER_HOUR_USD * ratio;
 const hourNow = STT_COST_PER_HOUR_USD + llmNow;
-const coinCostNow = (hourNow / 60 / 7) * USD_TOMAN;
+// سومین جای همان باگ: تقسیم بر هفت از دورانِ «هفت سکه در هر دقیقه» مانده
+// بود و هزینهٔ هر سکه را یک‌هفتم نشان می‌داد ⇒ حاشیهٔ ×۱۱٫۸ به‌جای ×۲٫۴.
+const coinCostNow = (hourNow / COINS_PER_HOUR) * USD_TOMAN;
 
 console.log(`مدل اصلی: ${primaryId}`);
 console.log(`  قیمت پایه: ورودی ${MODEL_PRICE_BASELINE.in} · خروجی ${MODEL_PRICE_BASELINE.out}`);
@@ -74,12 +78,6 @@ for (const p of PACKAGES) {
 /** مدل چند برابر گران‌تر شود تا حاشیه به کف برسد. */
 const worstPkg = PACKAGES.reduce((a, b) => (a.price / a.coins < b.price / b.coins ? a : b));
 const maxCoinCost = worstPkg.price / worstPkg.coins / MIN_MARGIN;
-// سکه‌های یک ساعت صوت. پیش‌تر `* 60 * 7` سفت نوشته شده بود — از روزی که
-// هر دقیقه هفت سکه بود. با رفتن نرخ به «یک سکه، یک دقیقه» این عدد هفت
-// برابر بزرگ ماند و **همین دیدبان** حاشیه را هفت برابر خوش‌بینانه‌تر از
-// واقعیت گزارش می‌کرد؛ یعنی ابزاری که قرار بود گران‌شدن مدل را بگیرد، خودش
-// کور بود. حالا از خودِ ثابت درمی‌آید تا دوباره از هم عقب نیفتند.
-const COINS_PER_HOUR = 60 * COINS_PER_MINUTE;
 const maxHour = (maxCoinCost / USD_TOMAN) * COINS_PER_HOUR;
 const headroom = (maxHour - STT_COST_PER_HOUR_USD) / LLM_COST_PER_HOUR_USD;
 
