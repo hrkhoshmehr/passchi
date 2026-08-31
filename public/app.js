@@ -734,8 +734,8 @@ function resetDrop() {
   drop.classList.remove("busy");
   drop.innerHTML =
     '<div class="drop-ico">🎧</div>' +
-    "<h3>صوت کلاست رو بذار اینجا</h3>" +
-    "<p>یا بزن تا از دستگاهت انتخاب کنی</p>" +
+    "<h3>برای انتخاب صوت کلاس بزن</h3>" +
+    "<p>یا فایل رو بکش و همین‌جا رها کن</p>" +
     '<p class="dim" style="margin-top:9px">mp3 · m4a · ogg · wav — تا ۵۰۰ مگابایت</p>';
 }
 

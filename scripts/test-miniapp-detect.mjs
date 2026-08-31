@@ -106,5 +106,25 @@ check("مقدار بی‌امضا رد می‌شود", run("#tgWebAppData=user%3
 // `location` ناقص نباید بالاآمدن را بشکند
 check("location بدون search خطا نمی‌دهد", run("#foo=bar", {}, undefined).host() === null);
 
+// ─── متنِ کادر صوت در دو جا نوشته شده و نباید از هم عقب بماند ────────────────
+//
+// یک‌بار در `app.html` (حالت اول) و یک‌بار در `resetDrop()` (بعد از خطا یا
+// آپلود). عوض‌کردن یکی و جاماندنِ دیگری هیچ خطایی نمی‌دهد: کاربر فقط بعد از
+// اولین خطا متنِ کهنه را می‌بیند و کسی متوجه نمی‌شود.
+{
+  const inHtml = html.match(/<div class="drop" id="drop">([\s\S]*?)<\/div>\s*<input/);
+  const inJs = src.match(/function resetDrop\(\)[\s\S]*?drop\.innerHTML =([\s\S]*?);\n\}/);
+  const words = (s) => (s ? (s.match(/[؀-ۿ]+/g) ?? []).join(" ") : null);
+  check("متن کادر صوت در html پیدا شد", Boolean(inHtml));
+  check("متن کادر صوت در resetDrop پیدا شد", Boolean(inJs));
+  check(
+    "دو نسخهٔ متنِ کادر صوت یکی‌اند",
+    words(inHtml?.[1]) === words(inJs?.[1]),
+    `html=${words(inHtml?.[1])} | js=${words(inJs?.[1])}`,
+  );
+  // و خودِ متن باید کاری را بگوید که روی موبایل ممکن است: زدن، نه کشیدن.
+  check("تیتر کادر، «زدن» را می‌گوید نه «گذاشتن»", /بزن<\/h3>/.test(inHtml?.[1] ?? ""));
+}
+
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
 process.exit(bad === 0 ? 0 : 1);
