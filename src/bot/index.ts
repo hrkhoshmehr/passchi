@@ -599,7 +599,7 @@ const demoAudioMsg = new Map<number, number>();
 function demoAudioIdOf(ctx: Context): number | null {
   const fromButton = Number((ctx.callbackQuery?.data ?? "").split(":")[2]);
   if (Number.isFinite(fromButton) && fromButton > 0) return fromButton;
-  return demoAudioMsg.get(ctx.from!.id) ?? null;
+  return demoAudioMsg.get(uid(ctx)) ?? null;
 }
 
 handlers.callbackQuery(DEMO_CB.recap, async (ctx) => {
@@ -636,7 +636,7 @@ handlers.callbackQuery(DEMO_CB.recap, async (ctx) => {
   if (!fileId) {
     logger.warn({ platform }, "sample audio file id not configured; tour has no audio");
   }
-  if (sent) demoAudioMsg.set(ctx.from.id, sent.message_id);
+  if (sent) demoAudioMsg.set(uid(ctx), sent.message_id);
   // شناسهٔ صوت در خودِ دکمه حمل می‌شود تا زنجیرهٔ ریپلای به حافظه وابسته نباشد
   const audioSuffix = sent ? `:${sent.message_id}` : "";
 
@@ -698,7 +698,7 @@ handlers.callbackQuery(DEMO_CB.outro, async (ctx) => {
   await reply(ctx, outroMessage(config.SUPPORT_USERNAME), {
     reply_markup: withBack(new InlineKeyboard().text("🎧 صوت می‌فرستم", "startnow")),
   });
-  demoAudioMsg.delete(ctx.from.id);
+  demoAudioMsg.delete(uid(ctx));
 });
 
 handlers.command("help", (ctx) => reply(ctx, S.HELP, { reply_markup: mainKeyboard }));
@@ -708,7 +708,7 @@ handlers.command("buy", (ctx) => topupScreen(ctx));
 
 handlers.command("course", async (ctx) => {
   touchUser(ctx);
-  convo.set(ctx.from!.id, { kind: "await_course_name" });
+  convo.set(uid(ctx), { kind: "await_course_name" });
   await reply(
     ctx,
     "اسم درس چیه؟\n\n<i>مثلاً: ریاضی مهندسی</i>",
@@ -723,7 +723,7 @@ handlers.command("cancel", async (ctx) => {
   const rows = listSessions(id, 5).filter((s) => !["done", "error", "cancelled"].includes(s.status));
   let done = false;
   for (const s of rows) if (cancelJob(s.id)) { updateSession(s.id, { status: "cancelled" }); done = true; }
-  convo.delete(ctx.from!.id);
+  convo.delete(id);
   await reply(ctx, done ? "لغو شد ✅" : "کاری در جریان نیست.");
 });
 
@@ -1012,7 +1012,7 @@ handlers.command("pending", async (ctx) => {
 // ─── پیام متنی: اول منو، بعد ادامهٔ گفت‌وگو ─────────────────────────────────
 
 handlers.on("message:text", async (ctx) => {
-  const id = ctx.from.id;
+  const id = uid(ctx);
   const text = ctx.message.text.trim();
   if (text.startsWith("/")) return;
 
@@ -1101,7 +1101,7 @@ handlers.on(["message:photo", "message:document"], async (ctx, next) => {
 handlers.on(["message:audio", "message:voice", "message:document", "message:video_note"], async (ctx) => {
   const u = touchUser(ctx);
   if (!u) return;
-  const id = ctx.from!.id;
+  const id = u.tg_id;
 
   const msg = ctx.message!;
   const media =
@@ -1294,13 +1294,26 @@ handlers.callbackQuery("topup", async (ctx) => {
 
 handlers.callbackQuery("newcourse", async (ctx) => {
   await ctx.answerCallbackQuery();
-  convo.set(ctx.from.id, { kind: "await_course_name" });
+  convo.set(uid(ctx), { kind: "await_course_name" });
   await reply(ctx, "اسم درس چیه؟\n\n<i>مثلاً: ریاضی مهندسی</i>");
 });
 
+/**
+ * ⚠️ `uid(ctx)` و نه `ctx.from.id` — و این در کل این فایل قاعده است.
+ *
+ * سفارش شارژ با شناسه‌ای ساخته می‌شد که از `ctx.from.id` می‌آمد، ولی
+ * `receiveReceipt` با `uid(ctx)` دنبالش می‌گشت. روی تلگرام این دو **برابرند**
+ * پس هیچ‌وقت دیده نشد؛ روی بله شناسهٔ داخلی از فضای دیگری می‌آید و سفارش
+ * عملاً گم می‌شد: کاربر پکیج را انتخاب می‌کرد، رسید می‌فرستاد، و جواب
+ * می‌گرفت «این عکسه 🤔 من فایل صوتی می‌خوام» — یعنی پول داده بود و ربات
+ * وانمود می‌کرد سفارشی در کار نیست.
+ *
+ * همین اشتباه در مقایسهٔ مالکیت جلسه هم بود (`s.tg_id !== ctx.from.id`) و
+ * به کاربر بله می‌گفت جلسهٔ خودش مال او نیست.
+ */
 handlers.callbackQuery(/^buy:(\w+)$/, async (ctx) => {
   touchUser(ctx);
-  const out = beginTopup(ctx.from.id, ctx.match![1]!);
+  const out = beginTopup(uid(ctx), ctx.match![1]!);
   if (!out) {
     await ctx.answerCallbackQuery({ text: "این پکیج دیگر موجود نیست." });
     return;
@@ -1310,7 +1323,7 @@ handlers.callbackQuery(/^buy:(\w+)$/, async (ctx) => {
 });
 
 handlers.callbackQuery(/^bcancel:([a-f0-9]+)$/, async (ctx) => {
-  const ok = cancelTopup(ctx.match![1]!, ctx.from.id);
+  const ok = cancelTopup(ctx.match![1]!, uid(ctx));
   await ctx.answerCallbackQuery({ text: ok ? "سفارش لغو شد." : "این سفارش دیگر باز نیست." });
   if (ok) await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
 });
@@ -1326,7 +1339,7 @@ handlers.callbackQuery(/^(tok|trej):([a-f0-9]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: "این دکمه مال تو نیست." });
     return;
   }
-  const out = await decide(ctx.api, ctx.match![2]!, ctx.from.id, ctx.match![1] === "tok");
+  const out = await decide(ctx.api, ctx.match![2]!, uid(ctx), ctx.match![1] === "tok");
   await ctx.answerCallbackQuery({ text: out.toast });
   await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   if (out.adminNote) await ctx.reply(out.adminNote);
@@ -1344,7 +1357,7 @@ handlers.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
   const sessionId = ctx.match![1]!;
   const s = getSession(sessionId);
   const u = touchUser(ctx);
-  if (!s || !u || s.tg_id !== ctx.from.id) {
+  if (!s || !u || s.tg_id !== u.tg_id) {
     await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
     return;
   }
@@ -1353,7 +1366,7 @@ handlers.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
     await reply(ctx, "فایل صوتی این جلسه دیگر روی سرور نیست 😔 دوباره بفرستش تا کامل تحلیلش کنم.");
     return;
   }
-  if (isBusy(String(ctx.from.id))) {
+  if (isBusy(String(uid(ctx)))) {
     await ctx.answerCallbackQuery({ text: "یه کار در جریانه، صبر کن تموم شه." });
     return;
   }
@@ -1471,7 +1484,7 @@ interface JobRequest {
 async function startJob(ctx: Context, job: JobRequest): Promise<void> {
   const { sessionId, mode } = job;
   const chatId = ctx.chat!.id;
-  const userId = ctx.from!.id;
+  const userId = uid(ctx);
   const progress = await ctx.api.sendMessage(chatId, S.progressMessage("preprocess"), {
     parse_mode: "HTML",
   });
@@ -1652,7 +1665,7 @@ async function sendResults(
 handlers.callbackQuery(/^son:([a-f0-9]+)$/, async (ctx) => {
   const sessionId = ctx.match![1]!;
   const s = getSession(sessionId);
-  if (!s || s.tg_id !== ctx.from.id) {
+  if (!s || s.tg_id !== uid(ctx)) {
     await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
     return;
   }
@@ -1664,7 +1677,7 @@ handlers.callbackQuery(/^son:([a-f0-9]+)$/, async (ctx) => {
 handlers.callbackQuery(/^slink:([a-f0-9]+)$/, async (ctx) => {
   const sessionId = ctx.match![1]!;
   const s = getSession(sessionId);
-  if (!s || s.tg_id !== ctx.from.id) {
+  if (!s || s.tg_id !== uid(ctx)) {
     await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
     return;
   }

@@ -20,6 +20,7 @@ const tests = [
   "platform-detect",
   "archive-routing",
   "interrupted-recovery",
+  "internal-id",
   "miniapp-detect",
   "bale-plain",
   "history-page",
