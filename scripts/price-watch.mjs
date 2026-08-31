@@ -12,7 +12,7 @@
  * اجرا: node scripts/price-watch.mjs [--notify]
  */
 import {
-  COST_PER_COIN_TOMAN, LLM_COST_PER_HOUR_USD, MODEL_PRICE_BASELINE, PACKAGES,
+  COINS_PER_MINUTE, COST_PER_COIN_TOMAN, LLM_COST_PER_HOUR_USD, MODEL_PRICE_BASELINE, PACKAGES,
   STT_COST_PER_HOUR_USD, USD_TOMAN,
 } from "../src/billing/coins.ts";
 import { config } from "../src/config.ts";
@@ -74,10 +74,16 @@ for (const p of PACKAGES) {
 /** مدل چند برابر گران‌تر شود تا حاشیه به کف برسد. */
 const worstPkg = PACKAGES.reduce((a, b) => (a.price / a.coins < b.price / b.coins ? a : b));
 const maxCoinCost = worstPkg.price / worstPkg.coins / MIN_MARGIN;
-const maxHour = (maxCoinCost / USD_TOMAN) * 60 * 7;
+// سکه‌های یک ساعت صوت. پیش‌تر `* 60 * 7` سفت نوشته شده بود — از روزی که
+// هر دقیقه هفت سکه بود. با رفتن نرخ به «یک سکه، یک دقیقه» این عدد هفت
+// برابر بزرگ ماند و **همین دیدبان** حاشیه را هفت برابر خوش‌بینانه‌تر از
+// واقعیت گزارش می‌کرد؛ یعنی ابزاری که قرار بود گران‌شدن مدل را بگیرد، خودش
+// کور بود. حالا از خودِ ثابت درمی‌آید تا دوباره از هم عقب نیفتند.
+const COINS_PER_HOUR = 60 * COINS_PER_MINUTE;
+const maxHour = (maxCoinCost / USD_TOMAN) * COINS_PER_HOUR;
 const headroom = (maxHour - STT_COST_PER_HOUR_USD) / LLM_COST_PER_HOUR_USD;
 
-const breakEvenHour = (worstPkg.price / worstPkg.coins / USD_TOMAN) * 60 * 7;
+const breakEvenHour = (worstPkg.price / worstPkg.coins / USD_TOMAN) * COINS_PER_HOUR;
 const breakEven = (breakEvenHour - STT_COST_PER_HOUR_USD) / LLM_COST_PER_HOUR_USD;
 
 console.log(`\nتا کف حاشیهٔ ×${MIN_MARGIN}، قیمت مدل می‌تواند تا ×${headroom.toFixed(1)} گران شود.`);
