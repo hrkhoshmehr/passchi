@@ -90,8 +90,19 @@ for (const model of models) {
     row.quotes = `${q.ok}/${q.total}`;
     row.quoteRate = q.total ? q.ok / q.total : null;
 
-    // زمان‌ها باید در بازهٔ صوت باشند — همان خطایی که qwen داشت
-    const times = (report.chapters ?? []).map((c) => c.at_ms).filter((n) => typeof n === "number");
+    /**
+     * زمان‌ها باید در بازهٔ صوت باشند — همان خطایی که qwen داشت.
+     *
+     * ⚠️ سرفصل‌ها `start_ms`/`end_ms` دارند نه `at_ms`؛ فقط `parts` داخلشان
+     * `at_ms` دارد. نسخهٔ اول اینجا `at_ms` می‌خواند، هیچ عددی پیدا نمی‌کرد،
+     * و برای **هر سه مدل** «زمان خراب» گزارش می‌داد — یعنی سنجه‌ای که قرار
+     * بود مدل بد را بگیرد، همه را یکسان بد نشان می‌داد.
+     */
+    const times = [];
+    for (const c of report.chapters ?? []) {
+      for (const k of [c.start_ms, c.end_ms]) if (typeof k === "number") times.push(k);
+      for (const p of c.parts ?? []) if (typeof p.at_ms === "number") times.push(p.at_ms);
+    }
     row.timeMax = times.length ? Math.max(...times) : 0;
     row.timeSane = times.length ? row.timeMax <= durationMs * 1.05 : null;
 
