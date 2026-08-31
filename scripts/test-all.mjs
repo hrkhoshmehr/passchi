@@ -22,6 +22,7 @@ const tests = [
   "interrupted-recovery",
   "internal-id",
   "price-sync",
+  "pdf-math",
   "miniapp-detect",
   "bale-plain",
   "history-page",
