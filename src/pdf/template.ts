@@ -2,6 +2,7 @@ import MarkdownIt from "markdown-it";
 import katex from "katex";
 import { buildFontCss } from "./assets.js";
 import { escapeHtml } from "../util/text.js";
+import { logger } from "../util/logger.js";
 import { fmtDuration, toFaDigits } from "../util/time.js";
 import type { AnalysisReport } from "../analysis/schema.js";
 
@@ -29,18 +30,54 @@ function normalizeListMarkers(src: string): string {
   });
 }
 
-/** $...$ و $$...$$ را با KaTeX رندر می‌کند (سمت سرور، بدون جاوااسکریپت در صفحه). */
-function renderMath(html: string): string {
-  const render = (tex: string, display: boolean) => {
+/**
+ * ریاضی را **پیش از** مارک‌داون بیرون می‌کشد و جایش نگهدارنده می‌گذارد.
+ *
+ * ## باگی که این کار را لازم کرد
+ *
+ * پیش‌تر `renderMath(md.render(...))` بود، یعنی مارک‌داون اول متن را
+ * دست‌کاری می‌کرد و بعد KaTeX می‌خواست همان را بخواند. دو چیز خراب می‌شد:
+ *
+ * • `>` به `&gt;` تبدیل می‌شد (HTML-escape)، پس `T_g > T_bulk` دیگر ریاضیِ
+ *   معتبر نبود.
+ * • `\text` را مارک‌داون یک escape می‌دید و به **کاراکتر tab** تبدیلش
+ *   می‌کرد، پس `\text{bulk}` می‌شد «<tab>ext{bulk}».
+ *
+ * و چرا ماه‌ها بی‌صدا ماند: `throwOnError: false` باعث می‌شود KaTeX **پرتاب
+ * نکند** و به‌جایش متنِ خراب را به‌عنوان خروجی رندر کند. آن `catch` که
+ * دقیقاً برای همین گذاشته شده بود هرگز اجرا نمی‌شد، و کاربر در جزوهٔ PDF
+ * چیزی مثل `}T_g &lt; T_{g,\text{bulk}(` می‌دید.
+ *
+ * نگهدارنده عمداً بدون `_`، `*`، `$` و `\` است تا خودش از دست مارک‌داون در
+ * امان بماند.
+ */
+
+function extractMath(src: string): { text: string; blocks: string[] } {
+  const blocks: string[] = [];
+  const stash = (tex: string, display: boolean): string => {
+    let html: string;
     try {
-      return katex.renderToString(tex, { displayMode: display, throwOnError: false, output: "html" });
-    } catch {
-      return `<code>${escapeHtml(tex)}</code>`;
+      // `throwOnError` روشن است تا خطای واقعی به `catch` برسد و لاگ شود؛
+      // با `false` خرابی به‌شکل متنِ زشت در PDF می‌نشیند و کسی نمی‌فهمد.
+      html = katex.renderToString(tex, { displayMode: display, throwOnError: true, output: "html" });
+    } catch (e) {
+      logger.warn({ tex: tex.slice(0, 80), err: String(e).slice(0, 120) }, "رندر ریاضی شکست خورد");
+      html = `<code>${escapeHtml(tex)}</code>`;
     }
+    blocks.push(html);
+    return `KATEXPLACEHOLDER${blocks.length - 1}ENDKATEX`;
   };
-  return html
-    .replace(/\$\$([\s\S]+?)\$\$/g, (_m, tex: string) => render(tex.trim(), true))
-    .replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_m, pre: string, tex: string) => pre + render(tex.trim(), false));
+
+  const text = src
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_m, tex: string) => stash(tex.trim(), true))
+    .replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_m, pre: string, tex: string) => pre + stash(tex.trim(), false));
+
+  return { text, blocks };
+}
+
+/** نگهدارنده‌ها را با HTML رندرشده جایگزین می‌کند — پس از اجرای مارک‌داون. */
+function restoreMath(html: string, blocks: string[]): string {
+  return html.replace(/KATEXPLACEHOLDER(\d+)ENDKATEX/g, (m, i: string) => blocks[Number(i)] ?? m);
 }
 
 export interface NoteDocument {
@@ -86,9 +123,12 @@ function markHighlights(html: string): string {
 
 export function buildHtml(doc: NoteDocument): string {
   const r = doc.report;
-  const body = markHighlights(
-    renderMath(md.render(normalizeListMarkers(doc.notesMarkdown || "_جزوه‌ای تولید نشد._"))),
+  // ترتیب مهم است: ریاضی **پیش از** مارک‌داون کنار گذاشته می‌شود و **پس از**
+  // آن برمی‌گردد. عکسش یعنی مارک‌داون فرمول‌ها را دست‌کاری کند.
+  const { text: protectedMd, blocks } = extractMath(
+    normalizeListMarkers(doc.notesMarkdown || "_جزوه‌ای تولید نشد._"),
   );
+  const body = markHighlights(restoreMath(md.render(protectedMd), blocks));
   const fa = (n: string | number) => toFaDigits(n);
 
   return `<!doctype html>
