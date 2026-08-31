@@ -268,6 +268,10 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
       return json(res, 200, {
         phoneLogin: phoneLoginEnabled(),
         coinsPerMinute: COINS_PER_MINUTE,
+        // هدیهٔ شروع از پیکربندی می‌آید، نه از متنِ سفت‌شده در HTML. یک بار
+        // صفحه «۱۰۰ سکه» تبلیغ می‌کرد در حالی که مقدار واقعی ۲۰ شده بود —
+        // یعنی کاربر با وعده‌ای می‌آمد که ربات زیرش نمی‌زد.
+        trialCoins: config.FREE_TRIAL_COINS,
         // آدرس‌ها از خودِ `getMe` می‌آیند نه از HTML سفت‌شده یا متغیر محیطی:
         // هر دو با عوض‌شدن توکن ربات بی‌صدا کهنه می‌شوند و کاربر را به چت
         // اشتباه می‌برند.

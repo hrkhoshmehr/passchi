@@ -222,7 +222,7 @@ footer {
 
 <header class="hero">
   <div class="wrap hero-in">
-    <span class="pill">🎁 ۱۰۰ سکه هدیهٔ شروع — یک کلاس کامل</span>
+    <span class="pill">🎁 <span data-trial-coins>۲۰</span> سکه هدیهٔ شروع — رایگان امتحانش کن</span>
     <h1>دیگه لازم نیست<br>سر کلاس <em>جزوه بنویسی</em></h1>
     <p class="hero-sub">
       صوت کلاس رو بفرست. خلاصهٔ جلسه، نکته‌های امتحانی با عین حرف استاد،
@@ -359,7 +359,7 @@ footer {
   <div class="wrap">
     <div class="section-head">
       <h2>قیمت</h2>
-      <p><b>هر سکه = یک دقیقه صوت.</b> برای شروع ۱۰۰ سکه هدیه می‌گیری.</p>
+      <p><b>هر سکه = یک دقیقه صوت.</b> برای شروع <span data-trial-coins>۲۰</span> سکه هدیه می‌گیری.</p>
     </div>
     <div class="prices" id="prices">
       <!-- از /api/packages پر می‌شود؛ این نسخه‌ها اگر جاوااسکریپت نبود می‌مانند -->
@@ -408,7 +408,7 @@ footer {
       <summary>چقدر خرج دارد؟</summary>
       <p>
         هر سکه یک دقیقه صوت است، پس یک کلاس ۹۰ دقیقه‌ای ۹۰ سکه می‌شود. تازه که
-        بیایی <b>۱۰۰ سکه</b> هدیه می‌گیری — یعنی اولین کلاست مهمان ماست.
+        بیایی <b><span data-trial-coins>۲۰</span> سکه</b> هدیه می‌گیری تا بدون پرداخت امتحانش کنی.
       </p>
       <p>
         بعدش هم لازم نیست خرج کلاس را تنها بدهی: جزوه را برای بچه‌های کلاس
@@ -460,7 +460,7 @@ footer {
   <div class="wrap">
     <div class="card">
       <h2>صوت کلاس امروزت رو بفرست</h2>
-      <p>۱۰۰ سکه هدیهٔ شروع — یعنی یک کلاس کامل، مهمان ما.</p>
+      <p><span data-trial-coins>۲۰</span> سکه هدیهٔ شروع — بدون پرداخت، خودت ببین چه تحویل می‌گیری.</p>
       <div class="hero-cta">
         <a class="btn btn-primary" href="/app">🎧 شروع کن</a>
       </div>
@@ -492,6 +492,24 @@ addEventListener("scroll", onScroll, { passive: true });
  * درخواست موفق شد، جای خودش را به دادهٔ واقعی می‌دهد.
  */
 const fa = (n) => n.toLocaleString("en-US").replace(/[0-9]/g, d => "۰۱۲۳۴۵۶۷۸۹"[d]).replace(/,/g, "٬");
+
+/**
+ * عدد هدیهٔ شروع از سرور می‌آید.
+ *
+ * متن HTML یک مقدار پیش‌فرض دارد تا بدون جاوااسکریپت هم چیزی نوشته باشد،
+ * ولی مرجع واقعی `FREE_TRIAL_COINS` است. یک بار صفحه «۱۰۰ سکه» تبلیغ
+ * می‌کرد در حالی که ربات ۲۰ می‌داد — کاربر با وعده‌ای می‌آمد که زیرش زده
+ * می‌شد. حالا اگر آن مقدار عوض شود، صفحه خودش به‌روز می‌شود.
+ */
+fetch("/api/config")
+  .then(r => r.ok ? r.json() : Promise.reject())
+  .then(({ trialCoins }) => {
+    if (typeof trialCoins !== "number" || trialCoins <= 0) return;
+    for (const el of document.querySelectorAll("[data-trial-coins]")) {
+      el.textContent = fa(trialCoins);
+    }
+  })
+  .catch(() => {});
 
 fetch("/api/packages")
   .then(r => r.ok ? r.json() : Promise.reject())
