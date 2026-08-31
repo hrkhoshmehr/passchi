@@ -4,7 +4,7 @@
  * برای این است که ادمین بدون سرکشیدن به پایگاه‌داده ببیند چه می‌گذرد: چه
  * کسی چه فرستاده، رایگان بوده یا پولی، و اگر پولی بوده خروجی‌اش چه شد.
  *
- * دو قاعده که کل این ماژول را شکل می‌دهند:
+ * سه قاعده که کل این ماژول را شکل می‌دهند:
  *
  * **۱) هرگز مسیر کاربر را نمی‌شکند.** بایگانی یک قابلیت جانبی است؛ اگر ربات
  * از کانال اخراج شده باشد یا شناسه غلط باشد، کاربر نباید چیزی بفهمد. پس هر
@@ -14,23 +14,51 @@
  * گزارشِ شناور بی‌فایده است. شناسهٔ پیام صوت در `archive_message_id` ذخیره
  * می‌شود تا گزارش دقیقاً زیر همان صوت بنشیند.
  *
+ * **۳) همیشه تلگرام، هر جا که کاربر باشد.** کانال بایگانی یک کانال تلگرامی
+ * است و باید تنها جایی بماند که همه‌چیز آنجا دیده می‌شود. پس این ماژول هرگز
+ * `ctx.api` نمی‌گیرد؛ خودش `Api` تلگرام را برمی‌دارد. پیش‌تر `ctx.api`
+ * گرفته می‌شد و برای کاربر بله یعنی `sendAudio` روی سرورِ **بله** با شناسهٔ
+ * چتِ **تلگرام** — که همیشه رد می‌شد، و چون شکست بایگانی بلعیده می‌شود
+ * (قاعدهٔ ۱) بی‌صدا رد می‌شد. صوت مینی‌اپ هم اصلاً به اینجا نمی‌رسید.
+ *
  * ⚠️ محتوای این کانال خصوصی است: صوت کلاس، صدای دانشجوهای دیگر، و تحلیل
  * جلسه. کانال باید خصوصی بماند و فقط ادمین‌ها عضوش باشند.
  */
 
-import type { Api } from "grammy";
+import fs from "node:fs";
+import { InputFile, type Api } from "grammy";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml } from "../util/text.js";
 import { fmtDuration } from "../util/time.js";
 import { fmtCost } from "../billing/coins.js";
-import { updateSession, type SessionMode, type SessionRow } from "../db/index.js";
+import { getSession, updateSession, type SessionMode, type SessionRow } from "../db/index.js";
+import type { Platform } from "../db/identity.js";
 import type { AnalysisReport } from "../analysis/schema.js";
+import { transcodeForTelegram } from "../audio/ffmpeg.js";
 import * as S from "./strings.js";
 
-/** بایگانی وقتی خاموش است که شناسهٔ کانال ست نشده باشد. */
+/**
+ * `Api` ربات تلگرام — تنها راهِ رسیدن به کانال بایگانی.
+ *
+ * با `setArchiveApi` از `bot/index.ts` پر می‌شود، به همان دلیلی که
+ * `identity.setBaleApi` این‌طور است: وارد کردنِ مستقیمِ `bot` وابستگی حلقوی
+ * می‌سازد، چون خودِ `index.ts` این فایل را وارد می‌کند.
+ */
+let tgApi: Api | null = null;
+
+export function setArchiveApi(api: Api): void {
+  tgApi = api;
+}
+
+/**
+ * بایگانی وقتی خاموش است که شناسهٔ کانال ست نشده باشد.
+ *
+ * نبودِ `tgApi` هم خاموشش می‌کند: بدون آن راهی به کانال نیست، و ادعای
+ * روشن‌بودن فقط خطای بی‌فایده تولید می‌کند.
+ */
 export function archiveEnabled(): boolean {
-  return config.ARCHIVE_CHAT_ID !== undefined;
+  return config.ARCHIVE_CHAT_ID !== undefined && tgApi !== null;
 }
 
 export interface Sender {
@@ -45,6 +73,21 @@ function senderLine(u: Sender): string {
   if (u.username) parts.push(`@${escapeHtml(u.username)}`);
   return `👤 ${parts.join(" · ")}\n🆔 <code>${u.tgId}</code>`;
 }
+
+/**
+ * از کدام در وارد شده.
+ *
+ * وقتی هر سه مسیر در یک کانال می‌نشینند، بدون این برچسب ادمین نمی‌فهمد چرا
+ * صوتی کیفیتش پایین‌تر است یا چرا جلسه‌ای در کانال هست ولی در چت ربات نبوده.
+ *
+ * همان `Platform` پایگاه‌داده است و نه یک نوعِ موازی، تا اگر روزی سکوی
+ * چهارمی اضافه شود، اینجا **کامپایل نشود** به‌جای اینکه بی‌برچسب بماند.
+ */
+const ORIGIN_LABEL: Record<Platform, string> = {
+  telegram: "✈️ تلگرام",
+  bale: "🟢 بله",
+  web: "🌐 مینی‌اپ",
+};
 
 const MODE_LABEL: Record<SessionMode, string> = {
   free_trial: "🎁 رایگان (فقط رونویسی)",
@@ -64,6 +107,8 @@ export function audioCaption(i: {
   durationMs: number;
   sessionId: string;
   courseName: string | null;
+  /** از کجا آمده — حالا که هر سه مسیر به یک کانال می‌ریزند، لازم است. */
+  origin?: Platform;
 }): string {
   const out = [
     MODE_LABEL[i.mode] ?? i.mode,
@@ -71,6 +116,7 @@ export function audioCaption(i: {
     senderLine(i.sender),
     `⏱ ${fmtDuration(i.durationMs)}`,
   ];
+  if (i.origin && i.origin !== "telegram") out.push(ORIGIN_LABEL[i.origin]);
   if (i.courseName) out.push(`📘 ${escapeHtml(i.courseName)}`);
   if (i.mode === "full") {
     out.push(`💸 ${fmtCost(Math.round(i.durationMs / 1000))}`);
@@ -80,30 +126,111 @@ export function audioCaption(i: {
 }
 
 /**
+ * سقف آپلود ربات تلگرام. عمداً از `deliver.ts` جدا نگه داشته نشده — همان
+ * عدد است و از همان‌جا وارد نمی‌شود فقط تا این ماژول به تحویل وابسته نشود.
+ */
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * منبع صوت برای بایگانی.
+ *
+ * `fileId` فقط وقتی معنی دارد که کاربر خودش در **تلگرام** فرستاده باشد؛
+ * آنگاه تلگرام فایل را دارد و نه آپلود دوباره‌ای لازم است نه پهنای باندی.
+ * `path` برای دو مسیر دیگر است: `file_id` بله روی تلگرام بی‌معنی است و
+ * آپلود مینی‌اپ اصلاً `file_id` ندارد — در هر دو، همان فایلی که پردازش
+ * می‌شود روی دیسک هست و از آنجا آپلود می‌شود.
+ */
+export type AudioSource = { fileId: string } | { path: string };
+
+/**
+ * صوت را طوری آماده کن که ربات بتواند آپلودش کند.
+ *
+ * بالای پنجاه مگابایت آپلود رد می‌شود، پس نسخهٔ فشردهٔ مونو ساخته می‌شود —
+ * همان کاری که `deliver.playableAudio` برای کاربر می‌کند. برای بایگانی
+ * کیفیتِ پایین‌تر قابل قبول است: رونویسی از فایل اصلی انجام شده و این نسخه
+ * فقط برای این است که ادمین بتواند گوش بدهد.
+ *
+ * `null` یعنی نشد — و بایگانی باید بدون صوت جلو برود، نه اینکه هیچ ردی از
+ * جلسه در کانال نماند.
+ */
+async function uploadable(sessionId: string, file: string): Promise<{ file: string; temp: boolean } | null> {
+  if (!fs.existsSync(file)) return null;
+  if (fs.statSync(file).size <= MAX_UPLOAD_BYTES) return { file, temp: false };
+  try {
+    const out = await transcodeForTelegram(file, config.workDir, MAX_UPLOAD_BYTES);
+    return out ? { file: out, temp: true } : null;
+  } catch (e) {
+    logger.warn({ sessionId, err: String(e) }, "archive compress failed");
+    return null;
+  }
+}
+
+/**
  * فرستادن صوت به کانال، همراه کپشن.
  *
- * با `file_id` فرستاده می‌شود نه با فایل روی دیسک: تلگرام خودش فایل را دارد،
- * پس نه آپلود دوباره‌ای لازم است نه پهنای باندی. برمی‌گرداند شناسهٔ پیام را
- * تا گزارش بعداً ریپلایش شود.
+ * برمی‌گرداند شناسهٔ پیام را تا گزارش بعداً ریپلایش شود.
+ *
+ * اگر صوت به هیچ شکلی نرود (فایل نبود، فشرده‌سازی شکست خورد، آپلود رد شد)
+ * **کپشن به‌تنهایی** فرستاده می‌شود. جلسه‌ای که در کانال هیچ ردی ندارد از
+ * دید ادمین اصلاً وجود نداشته؛ بهتر است بداند جلسه‌ای بوده و صوتش نرفته.
  */
 export async function archiveAudio(
-  api: Api,
   sessionId: string,
-  fileId: string,
+  source: AudioSource,
   caption: string,
 ): Promise<number | null> {
   if (!archiveEnabled()) return null;
+  const chat = config.ARCHIVE_CHAT_ID!;
+
+  let temp: string | null = null;
   try {
-    const sent = await api.sendAudio(config.ARCHIVE_CHAT_ID!, fileId, {
-      caption,
-      parse_mode: "HTML",
-    });
+    let payload: string | InputFile | null = null;
+    if ("fileId" in source) {
+      payload = source.fileId;
+    } else {
+      const ready = await uploadable(sessionId, source.path);
+      if (ready) {
+        payload = new InputFile(ready.file);
+        if (ready.temp) temp = ready.file;
+      }
+    }
+
+    const sent = payload
+      ? await tgApi!.sendAudio(chat, payload, { caption, parse_mode: "HTML" })
+      : await tgApi!.sendMessage(chat, `${caption}\n\n⚠️ صوت آپلود نشد.`, {
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+        });
+
     updateSession(sessionId, { archive_message_id: sent.message_id });
     return sent.message_id;
   } catch (e) {
     logger.warn({ sessionId, err: String(e) }, "archive audio failed");
     return null;
+  } finally {
+    if (temp) await fs.promises.unlink(temp).catch(() => {});
   }
+}
+
+/**
+ * پارامترهای ریپلای — با شناسه‌ای که **همین حالا** در پایگاه‌داده است.
+ *
+ * سطرِ `SessionRow` که صدازننده در دست دارد یک عکس لحظه‌ای است و ممکن است
+ * پیش از پایان آپلودِ صوت گرفته شده باشد: مسیر بله و مینی‌اپ آپلود را
+ * `await` نمی‌کنند، پس `archive_message_id` در آن عکس هنوز `null` است در
+ * حالی که در پایگاه‌داده نشسته. کد قبلی در همین حالت **کل گزارش را دور
+ * می‌ریخت** — بی‌صدا، چون شرطِ زودهنگام بود نه خطا.
+ *
+ * و اگر واقعاً صوتی نرفته باشد (آپلود شکست خورده، یا هنوز در راه است)
+ * `undefined` برمی‌گردد: گزارش شناور در کانال از نبودِ گزارش بهتر است، چون
+ * `sessionId` در متنش هست و ادمین می‌تواند وصلش کند.
+ */
+function replyTo(s: SessionRow): {
+  reply_parameters?: { message_id: number; allow_sending_without_reply: true };
+} {
+  const id = getSession(s.id)?.archive_message_id ?? s.archive_message_id;
+  if (!id) return {};
+  return { reply_parameters: { message_id: id, allow_sending_without_reply: true } };
 }
 
 /**
@@ -118,24 +245,18 @@ export async function archiveAudio(
  * `linkable=false` تا ادعای نادرستی نکنیم.
  */
 export async function archiveReport(
-  api: Api,
   s: SessionRow,
   report: AnalysisReport,
   courseName: string | null,
 ): Promise<void> {
-  if (!archiveEnabled() || !s.archive_message_id) return;
+  if (!archiveEnabled()) return;
 
-  const asReply = {
-    reply_parameters: {
-      message_id: s.archive_message_id,
-      allow_sending_without_reply: true,
-    },
-  } as const;
+  const asReply = replyTo(s);
 
   const send = async (text: string) => {
     if (!text) return;
     for (const part of S.chunk(text)) {
-      await api.sendMessage(config.ARCHIVE_CHAT_ID!, part, {
+      await tgApi!.sendMessage(config.ARCHIVE_CHAT_ID!, part, {
         parse_mode: "HTML",
         link_preview_options: { is_disabled: true },
         ...asReply,
@@ -162,19 +283,14 @@ export async function archiveReport(
 }
 
 /** خبر شکست پردازش — تا ادمین بدون گشتن در لاگ بفهمد چه جلسه‌ای خطا خورد. */
-export async function archiveFailure(api: Api, s: SessionRow, message: string): Promise<void> {
-  if (!archiveEnabled() || !s.archive_message_id) return;
+export async function archiveFailure(s: SessionRow, message: string): Promise<void> {
+  if (!archiveEnabled()) return;
   try {
-    await api.sendMessage(
+    await tgApi!.sendMessage(
       config.ARCHIVE_CHAT_ID!,
-      `❌ <b>پردازش ناموفق بود</b>\n\n<code>${escapeHtml(message.slice(0, 300))}</code>`,
-      {
-        parse_mode: "HTML",
-        reply_parameters: {
-          message_id: s.archive_message_id,
-          allow_sending_without_reply: true,
-        },
-      },
+      `❌ <b>پردازش ناموفق بود</b> — <code>${s.id}</code>\n\n` +
+        `<code>${escapeHtml(message.slice(0, 300))}</code>`,
+      { parse_mode: "HTML", ...replyTo(s) },
     );
   } catch (e) {
     logger.warn({ sessionId: s.id, err: String(e) }, "archive failure note failed");
@@ -187,19 +303,17 @@ export async function archiveFailure(api: Api, s: SessionRow, message: string): 
  * صوتش قبلاً در کانال هست و دوباره فرستادنش فقط تکرار است؛ پس فقط یک خط
  * ریپلای می‌شود که کپشن اولیه («رایگان») دیگر کل ماجرا نیست.
  */
-export async function archiveUpgrade(api: Api, s: SessionRow): Promise<void> {
-  if (!archiveEnabled() || !s.archive_message_id) return;
+export async function archiveUpgrade(s: SessionRow): Promise<void> {
+  if (!archiveEnabled()) return;
+  // برخلاف گزارش، این پیام بدون صوتِ بایگانی‌شده بی‌معنی است: کل حرفش این
+  // است که «کپشنِ آن صوت دیگر درست نیست».
+  const reply = replyTo(s);
+  if (!reply.reply_parameters) return;
   try {
-    await api.sendMessage(
+    await tgApi!.sendMessage(
       config.ARCHIVE_CHAT_ID!,
       `⬆️ <b>ارتقا به تحلیل کامل</b> — ${fmtCost(Math.round(s.original_ms / 1000))} کسر شد.`,
-      {
-        parse_mode: "HTML",
-        reply_parameters: {
-          message_id: s.archive_message_id,
-          allow_sending_without_reply: true,
-        },
-      },
+      { parse_mode: "HTML", ...reply },
     );
   } catch (e) {
     logger.warn({ sessionId: s.id, err: String(e) }, "archive upgrade note failed");

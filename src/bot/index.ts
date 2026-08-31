@@ -22,7 +22,7 @@ import {
   SAMPLE_REPORT, SAMPLE_TRANSCRIPT_PATH, outroMessage, stepKeyboard,
 } from "./demo.js";
 import {
-  archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption,
+  archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption, setArchiveApi,
 } from "./archive.js";
 import { beginTopup, cancelTopup, decide, paymentConfigured, receiveReceipt } from "./topup.js";
 import {
@@ -49,6 +49,12 @@ export const bot = new Bot(
   requireKey("BOT_TOKEN"),
   config.TELEGRAM_API_ROOT ? { client: { apiRoot: config.TELEGRAM_API_ROOT } } : undefined,
 );
+
+/**
+ * کانال بایگانی تلگرامی است، پس همیشه از `Api` تلگرام رد می‌شود — حتی وقتی
+ * کاربر در بله است یا از مینی‌اپ آپلود کرده.
+ */
+setArchiveApi(bot.api);
 
 /**
  * ربات بله — همان دست‌کدها، سرور دیگر.
@@ -1196,23 +1202,33 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
   await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
 
   /**
-   * یک نسخه به کانال بایگانی.
+   * یک نسخه به کانال بایگانی — که همیشه در تلگرام است، حتی برای کاربر بله.
    *
    * همین‌جا و نه بعد از پردازش: اگر خط لوله شکست بخورد هم ادمین باید صوت را
    * داشته باشد تا بفهمد چه چیزی شکست. گزارش بعداً ریپلایِ همین پیام می‌شود.
+   *
+   * منبع بر اساس سکو فرق می‌کند: `file_id` تلگرام را خودِ تلگرام می‌شناسد و
+   * آپلود دوباره لازم ندارد، ولی `file_id` بله برای تلگرام یک رشتهٔ بی‌معنی
+   * است — پس همان فایلی که تازه دانلود شد آپلود می‌شود.
+   *
+   * و دقیقاً به همین دلیل مسیر بله `await` نمی‌شود: فرستادن `file_id` یک
+   * تماس کوتاه است، ولی آپلودِ ده‌ها مگابایت می‌تواند دقیقه‌ها طول بکشد و
+   * کاربر بله را پشت یک قابلیتِ ادمین منتظر نگه دارد.
    */
-  await archiveAudio(
-    ctx.api,
+  const platform = platformOf(ctx);
+  const caption = audioCaption({
+    sender: { tgId: id, name: u.name, username: u.username },
+    mode: "full",
+    durationMs: durationSec * 1000,
     sessionId,
-    media.file_id,
-    audioCaption({
-      sender: { tgId: id, name: u.name, username: u.username },
-      mode: "full",
-      durationMs: durationSec * 1000,
-      sessionId,
-      courseName: courseId ? (getCourse(courseId)?.name ?? null) : null,
-    }),
-  );
+    courseName: courseId ? (getCourse(courseId)?.name ?? null) : null,
+    origin: platform,
+  });
+  if (platform === "bale") {
+    void archiveAudio(sessionId, { path: audioFile }, caption);
+  } else {
+    await archiveAudio(sessionId, { fileId: media.file_id }, caption);
+  }
 
   /**
    * مدت واقعی — نه فقط آنچه تلگرام گفته.
@@ -1356,7 +1372,7 @@ handlers.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
   updateSession(sessionId, { mode: "full" });
   // صوتش قبلاً در کانال هست؛ فقط خبر ارتقا ریپلای می‌شود تا کپشن «رایگان»
   // آخرین حرف نباشد.
-  await archiveUpgrade(ctx.api, s);
+  await archiveUpgrade(s);
   await startJob(ctx, {
     sessionId,
     audioFile: s.original_file,
@@ -1527,7 +1543,7 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
       // گزارش جلسهٔ پولی، ریپلایِ صوتِ همان جلسه در کانال بایگانی
       const saved = getSession(sessionId);
       if (saved && out.report) {
-        await archiveReport(ctx.api, saved, out.report, course?.name ?? null);
+        await archiveReport(saved, out.report, course?.name ?? null);
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -1535,7 +1551,7 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
       updateSession(sessionId, { status: "error", error: message.slice(0, 500) });
       refund(userId, reservedSec, sessionId, "کار ناموفق بود");
       const failed = getSession(sessionId);
-      if (failed) await archiveFailure(ctx.api, failed, message);
+      if (failed) await archiveFailure(failed, message);
       await edit(
         `❌ <b>پردازش ناموفق بود</b>\n\n${escapeHtml(message)}\n\n` +
           "<i>سکه‌های رزروشده کامل برگشت.</i>",

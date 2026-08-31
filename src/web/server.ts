@@ -25,6 +25,7 @@ import {
 } from "./auth.js";
 import { botLinks } from "../bot/links.js";
 import { deliverToBot } from "../bot/deliver.js";
+import { archiveAudio, archiveFailure, archiveReport, audioCaption } from "../bot/archive.js";
 import { liveMessage, notifyUser } from "../bot/notify.js";
 import { progressMessage } from "../bot/strings.js";
 import { probe } from "../audio/ffmpeg.js";
@@ -34,7 +35,7 @@ import { InsufficientCredit } from "../billing/ledger.js";
 import { balanceCoins, costCoins, fmtCoins, PACKAGES, COINS_PER_MINUTE } from "../billing/coins.js";
 import { history } from "../billing/ledger.js";
 import {
-  createCourse, createSession, getSession, getUser, listCourses, listSessions,
+  createCourse, createSession, getCourse, getSession, getUser, listCourses, listSessions,
   sessionReport, updateSession, isTranscriptOnly,
 } from "../db/index.js";
 import { identitiesOf } from "../db/identity.js";
@@ -605,9 +606,18 @@ async function confirmSession(res: Res, userId: number, sessionId: string): Prom
        * شکستش بی‌صداست: کاربر جلسه‌اش را در تاریخچه دارد و یک خطای شبکه
        * نباید نتیجه را از بین ببرد.
        */
-      onDone: () => {
+      onDone: (out) => {
         setProgress(sessionId, { stage: "done" });
         const done = getSession(sessionId);
+        // گزارش، ریپلایِ همان صوتی که بالاتر به کانال رفت — همان چیزی که
+        // مسیر ربات می‌کند، تا بایگانی برای هر سه در یک شکل باشد.
+        if (done && out.report) {
+          void archiveReport(
+            done,
+            out.report,
+            done.course_id ? (getCourse(done.course_id)?.name ?? null) : null,
+          );
+        }
         // پیام وضعیت پیش از تحویل برداشته می‌شود، وگرنه «دارم جزوه رو
         // می‌نویسم…» بالای نتیجهٔ آماده می‌ماند.
         void live.finish().then(() => {
@@ -620,6 +630,8 @@ async function confirmSession(res: Res, userId: number, sessionId: string): Prom
       },
       onError: (message) => {
         setProgress(sessionId, { stage: "error", message });
+        const failed = getSession(sessionId);
+        if (failed) void archiveFailure(failed, message);
         void live
           .finish()
           .then(() => notifyUser(userId, `⚠️ تحلیل این صوت به مشکل خورد.\n${message}`))
@@ -636,6 +648,33 @@ async function confirmSession(res: Res, userId: number, sessionId: string): Prom
     }
     throw e;
   }
+
+  /**
+   * یک نسخه به کانال بایگانی تلگرام — همان کانالی که صوت‌های ربات می‌روند.
+   *
+   * **اینجا و نه در `uploadAudio`:** آپلود هنوز تعهدی نیست؛ کاربر قیمت را
+   * می‌بیند و می‌تواند برود. اگر بایگانی سرِ آپلود انجام می‌شد، کانال پر
+   * می‌شد از صوت‌هایی که هیچ‌وقت پردازش نشدند.
+   *
+   * از `file_id` خبری نیست چون این فایل هرگز از تلگرام رد نشده؛ خودِ فایل
+   * روی دیسک آپلود می‌شود و اگر از سقف ربات بزرگ‌تر بود، فشرده.
+   *
+   * `void`: آپلود یک فایل بزرگ می‌تواند طولانی باشد و پاسخِ `202` نباید
+   * پشتش منتظر بماند. شکستش هم مثل هر مسیر بایگانیِ دیگر بی‌سروصداست.
+   */
+  const uc = getUser(userId);
+  void archiveAudio(
+    sessionId,
+    { path: dest },
+    audioCaption({
+      sender: { tgId: userId, name: uc?.name ?? null, username: uc?.username ?? null },
+      mode: "full",
+      durationMs: sec * 1000,
+      sessionId,
+      courseName: s.course_id ? (getCourse(s.course_id)?.name ?? null) : null,
+      origin: "web",
+    }),
+  );
 
   /**
    * اولین پیام وضعیت را همین حالا بگذار، نه با اولین `onProgress`.
