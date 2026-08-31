@@ -60,7 +60,30 @@ const Schema = z.object({
   ANALYSIS_PROVIDER: z.enum(["anthropic", "openrouter"]).optional().default("openrouter"),
   NOTES_PROVIDER: z.enum(["anthropic", "openrouter"]).optional().default("openrouter"),
   OPENROUTER_ANALYSIS_MODEL: z.string().optional(),
-  OPENROUTER_NOTES_MODEL: z.string().optional(),
+  /**
+   * جزوه روی مدل گران‌تر می‌رود، عمداً.
+   *
+   * پاس اول (JSON ساختاریافته) و پاس دوم (جزوهٔ فارسی) کارِ یکسانی نیستند.
+   * در مقایسهٔ دو کلاس واقعی، `2.5-flash` در پاس اول هم‌سطحِ `3.7-flash` بود
+   * — نقل‌قول‌ها صددرصد تأییدشده در هر دو — ولی در **جزوه** تفاوت دیده شد:
+   * `3.7-flash` فهرست شماره‌دار و سلسله‌مراتب واقعی می‌سازد، و یک بار
+   * جزئیاتی گرفت که دیگری نگرفت (اینکه استاد گفت این بخش در امتحان
+   * نمی‌آید) — دقیقاً همان چیزی که برای دانشجوی امتحان‌محور مهم است.
+   *
+   * هزینه‌اش اندازه‌گیری شده و کم است: کلاس ۹۰ دقیقه‌ای از ۴۰٬۴۰۰ به ۴۳٬۳۰۰
+   * تومان می‌رود (۷٪)، چون **۷۸٪ هزینهٔ هر کلاس رونویسی است نه مدل** و این
+   * تغییر فقط روی نیمی از آن ۲۲٪ اثر دارد. حاشیه ×۲٫۰۴ می‌ماند.
+   *
+   * ⚠️ **تاریخ انقضا دارد:** قیمت `3.7-flash` طبق اعلام ارائه‌دهنده در
+   * ۲۰۲۶-۱۲-۳۱ دو برابر می‌شود. آن موقع همین کلاس حدود ۴۹ هزار تومان
+   * می‌شود و حاشیه به ×۱٫۸ می‌افتد — زیر کف. پیش از آن تاریخ یا این خط
+   * برمی‌گردد به `2.5-flash` یا قیمت‌ها باید بالا بروند.
+   * `scripts/price-watch.mjs` این را می‌گیرد.
+   */
+  OPENROUTER_NOTES_MODEL: z
+    .string()
+    .optional()
+    .default("google/gemini-3.7-flash,google/gemini-2.5-flash"),
 
   AUDIO_SAMPLE_RATE: num(16000),
   AUDIO_BITRATE: z.string().optional().default("32k"),

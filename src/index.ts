@@ -113,10 +113,18 @@ const effectiveModel =
     ? (config.OPENROUTER_ANALYSIS_MODEL || config.OPENROUTER_MODEL).split(",")[0]
     : config.ANALYSIS_MODEL;
 
+// جزوه می‌تواند روی مدل دیگری برود؛ اگر لاگ فقط یکی را نشان دهد، همان
+// گمراهیِ بالا از در دیگر برمی‌گردد.
+const effectiveNotesModel =
+  config.NOTES_PROVIDER === "openrouter"
+    ? (config.OPENROUTER_NOTES_MODEL || config.OPENROUTER_MODEL).split(",")[0]
+    : config.NOTES_MODEL;
+
 logger.info(
   {
     provider: config.ANALYSIS_PROVIDER,
     model: effectiveModel,
+    ...(effectiveNotesModel !== effectiveModel ? { notesModel: effectiveNotesModel } : {}),
     stt: config.SONIOX_MODEL,
     // اگر اجرای قبلی وسط کار مرده باشد، اینجا معلوم می‌شود چند جلسه جمع شد
     ...(recovered ? { recovered } : {}),
