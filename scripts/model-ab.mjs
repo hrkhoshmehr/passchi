@@ -31,14 +31,24 @@ if (!cacheFile || models.length === 0) {
 }
 
 const cached = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
-// نگاشت زمانی همانی است که وقتی سکوت حذف نشده باشد کار می‌کند: یک‌به‌یک.
-const t = buildTranscript(cached.tokens, TimeMap.identity());
+
+/**
+ * ساختار کش: `transcript.tokens` توکن‌های خام و `preprocess.timeMap` نگاشت
+ * زمانی همان اجرا.
+ *
+ * نگاشتِ **ذخیره‌شده** استفاده می‌شود نه `identity`: اگر سکوت حذف شده باشد،
+ * زمان‌های توکن روی فایل پیش‌پردازش‌شده‌اند و بدون نگاشت، همهٔ مهرهای زمانی
+ * جابه‌جا می‌شوند — یعنی آزمایش، مدل‌ها را با رونوشتی می‌سنجید که تولید
+ * هرگز نمی‌بیند.
+ */
+const durationMs = cached.preprocess?.originalDurationMs ?? cached.transcription?.audio_duration_ms ?? 0;
+const t = buildTranscript(cached.transcript.tokens, TimeMap.fromJSON(cached.preprocess?.timeMap));
 const rendered = renderForModel(t);
-const meta = `مدت: ${Math.round(cached.audioDurationMs / 60000)} دقیقه`;
+const meta = `مدت: ${Math.round(durationMs / 60000)} دقیقه`;
 const transcriptText = P.transcriptBlock(meta, rendered);
 
 console.log(`فایل: ${path.basename(cacheFile)}`);
-console.log(`رونوشت: ${rendered.length} نویسه · ${t.utterances.length} پاره‌گفتار · ${Math.round(cached.audioDurationMs / 60000)} دقیقه\n`);
+console.log(`رونوشت: ${rendered.length} نویسه · ${t.utterances.length} پاره‌گفتار · ${Math.round(durationMs / 60000)} دقیقه\n`);
 
 /** نقل‌قول‌هایی که واقعاً در رونوشت پیدا می‌شوند — سنجهٔ اصلیِ توهم. */
 function quoteScore(report) {
@@ -83,12 +93,12 @@ for (const model of models) {
     // زمان‌ها باید در بازهٔ صوت باشند — همان خطایی که qwen داشت
     const times = (report.chapters ?? []).map((c) => c.at_ms).filter((n) => typeof n === "number");
     row.timeMax = times.length ? Math.max(...times) : 0;
-    row.timeSane = times.length ? row.timeMax <= cached.audioDurationMs * 1.05 : null;
+    row.timeSane = times.length ? row.timeMax <= durationMs * 1.05 : null;
 
     console.log(`پاس ۱: ${row.p1Sec}s · ${row.p1In}→${row.p1Out} توکن · $${row.p1Cost.toFixed(5)}`);
     console.log(`  روایت ${row.recapWords} کلمه · ${row.keyPoints} نکته · ${row.chapters} سرفصل · ${row.assignments} تکلیف`);
     console.log(`  نقل‌قول تأییدشده: ${row.quotes}${row.quoteRate !== null ? ` (${Math.round(row.quoteRate * 100)}٪)` : ""}`);
-    console.log(`  بیشینهٔ زمان: ${Math.round(row.timeMax / 60000)}د از ${Math.round(cached.audioDurationMs / 60000)}د ${row.timeSane ? "✅" : "⚠️ خارج از بازه"}`);
+    console.log(`  بیشینهٔ زمان: ${Math.round(row.timeMax / 60000)}د از ${Math.round(durationMs / 60000)}د ${row.timeSane ? "✅" : "⚠️ خارج از بازه"}`);
 
     // ── پاس ۲: جزوه ────────────────────────────────────────────────────────
     //
