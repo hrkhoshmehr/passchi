@@ -767,7 +767,25 @@ async function serveStatic(req: http.IncomingMessage, res: Res, pathname: string
 
 export function createWebServer(): http.Server {
   return http.createServer((req, res) => {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    /**
+     * هدر `Host` از بیرون می‌آید و **قابل اعتماد نیست**. اسکنرها مقدارهای
+     * بدشکل می‌فرستند (یک نمونهٔ واقعی: `091.107.246.090` با صفرِ پیشوند)
+     * و `new URL` روی آن پرتاب می‌کند. چون این خط بیرون از هر try بود،
+     * یک درخواستِ بدشکل **کل پروسه را می‌کشت** — یعنی ربات تلگرام و بله و
+     * سایت با هم می‌رفتند. دو بار در لاگ همین شد.
+     * پس میزبانِ بدشکل را دور می‌ریزیم و به `localhost` برمی‌گردیم.
+     */
+    let url: URL;
+    try {
+      url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    } catch {
+      try {
+        url = new URL(req.url ?? "/", "http://localhost");
+      } catch {
+        res.writeHead(400).end("bad request");
+        return;
+      }
+    }
 
     /**
      * مینی‌اپ داخل iframe تلگرام و بله بارگذاری می‌شود، پس `X-Frame-Options`
