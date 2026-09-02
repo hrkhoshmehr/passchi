@@ -701,6 +701,14 @@ const MIME: Record<string, string> = {
   ".webp": "image/webp",
   ".woff2": "font/woff2",
   ".ico": "image/x-icon",
+  /**
+   * برای فایل‌های راستی‌آزماییِ مالکیت دامنه (درگاه پرداخت، وبمستر و مانند
+   * آن‌ها) که یک `.txt` در ریشه می‌خواهند.
+   *
+   * بدون این، پیش‌فرض `application/octet-stream` می‌شد و مرورگر به‌جای
+   * نشان‌دادن متن، دانلودش می‌کرد — و بعضی راستی‌آزماها همان را رد می‌کنند.
+   */
+  ".txt": "text/plain; charset=utf-8",
 };
 
 async function serveStatic(req: http.IncomingMessage, res: Res, pathname: string): Promise<void> {
