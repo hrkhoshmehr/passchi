@@ -60,6 +60,17 @@ export function createTusServer(deps: TusDeps): Server {
     maxSize: deps.maxSize,
 
     /**
+     * **آدرسِ نسبی، نه مطلق — وگرنه PATCH به ریدایرکت می‌خورد.**
+     *
+     * پشتِ تونلِ NSIN مبدأ درخواست را روی `http` می‌بیند، پس tus آدرسِ
+     * `http://passchi.ir/api/tus/<id>` را در `Location` می‌گذارد. کلاینت که
+     * روی `https` است به آن `http` می‌زند، CDN به `https` ریدایرکت می‌کند، و
+     * بدنهٔ PATCH وسطِ ریدایرکت می‌پرد. با آدرسِ نسبی (`/api/tus/<id>`)، کلاینت
+     * خودش آن را به مبدأِ `https`ِ صفحه می‌چسباند و ریدایرکتی در کار نیست.
+     */
+    relativeLocation: true,
+
+    /**
      * مینی‌اپ داخلِ iframe اجرا می‌شود و مبدأش ثابت نیست، پس همهٔ مبدأها
      * پذیرفته می‌شوند و `Authorization` به هدرهای مجازِ CORS اضافه می‌شود —
      * وگرنه preflightِ مرورگر توکن را نمی‌فرستد.
