@@ -229,7 +229,7 @@ export function classesFor(coins: number, minutesPerClass = 90): number {
 }
 
 /**
- * تعداد نفراتی که در پیام‌ها به‌عنوان «تقسیم با هم‌کلاسیا» پیشنهاد می‌شود.
+ * تعداد نفراتی که وقتی مالک تعدادی نمی‌گوید، پیش‌فرض گرفته می‌شود.
  *
  * ده نفر، چون در یک گروه کلاسی واقعی به‌راحتی جمع می‌شود.
  */
@@ -254,15 +254,27 @@ export const SHARE_TARGET = 10;
 export const REFUND_CAP_PCT = 0.5;
 
 /**
- * اگر جلسه‌ای با هزینهٔ costSec بین `people` نفر تقسیم شود، برای فرستنده چه
- * می‌ماند و چقدر برمی‌گردد — با احتساب سقف بازگشت.
+ * سهمِ ثابتِ هر نفر و سقفِ بازگشتِ مالک، وقتی جلسه با `people` هم‌کلاسی
+ * تقسیم شود.
+ *
+ * مالک تعداد را می‌گوید و از همان‌جا `seat` درمی‌آید: هزینه‌ای که هر
+ * هم‌کلاسی هنگام برداشتن می‌دهد، ثابت و از پیش معلوم. همان مبلغ به حساب
+ * مالک برمی‌گردد تا جمعِ بازگشت به `cap` (نصفِ هزینه) برسد؛ از آن به بعد
+ * برداشتن رایگان است.
+ *
+ * `seat` را طوری می‌گیریم که `people` نفر تقریباً سقف را پر کنند، پس با
+ * «۱ نفر» همان یک نفر نصفِ هزینه را می‌دهد و کامل به مالک برمی‌گردد.
+ * `fills` می‌گوید تقریباً چند نفر لازم است تا سقف پر شود.
  */
-export function shareBack(costSec: number, people = SHARE_TARGET): { share: number; back: number; pct: number } {
+export function shareBack(
+  costSec: number,
+  people = SHARE_TARGET,
+): { seat: number; cap: number; fills: number } {
   const total = costCoins(costSec);
-  const share = costCoins(Math.ceil(costSec / people));
-  const floor = Math.ceil(total * (1 - REFUND_CAP_PCT));
-  const back = Math.max(0, total - Math.max(share, floor));
-  return { share, back, pct: total > 0 ? Math.round((back / total) * 100) : 0 };
+  const cap = Math.floor(total * REFUND_CAP_PCT);
+  const n = Math.max(1, Math.round(people));
+  const seat = Math.max(1, Math.ceil(cap / n));
+  return { seat, cap, fills: Math.ceil(cap / seat) };
 }
 
 export function findPackage(id: string): CoinPackage | null {

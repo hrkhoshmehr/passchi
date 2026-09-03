@@ -4,11 +4,10 @@
  * هدف: دیدن دقیقاً همان چیزی که کاربر می‌بیند، به همان ترتیب، تا بشود قضاوت
  * کرد کجا گیج می‌شود یا کجا متن زیاد است.
  */
-import { WELCOME, HELP, PRIVACY, overviewMessage, keyPointsMessage, progressMessage, creditMessage } from "../src/bot/strings.js";
+import { WELCOME, HELP, PRIVACY, overviewMessage, keyPointsMessage, progressMessage, creditMessage, settlementMessage } from "../src/bot/strings.js";
 import { SHORT_DESCRIPTION, DESCRIPTION, COMMANDS } from "../src/bot/profile.js";
 import { listSessions, sessionReport } from "../src/db/index.js";
 import { fmtDuration } from "../src/util/time.js";
-import { fairShare } from "../src/billing/sharing.js";
 
 const plain = (s) => s.replace(/<[^>]+>/g, "");
 let total = 0;
@@ -56,9 +55,7 @@ step("۸. فایل‌ها", "📕 جزوهٔ این جلسه\n📄 رونوشت 
 const cost = Math.round(s.original_ms / 1000);
 step(
   "۹. پیام پایانی + دکمهٔ اشتراک",
-  `تمومه ✅  ${fmtDuration(4200 * 1000)} اعتبار برات مونده.\n\n` +
-    `اگه ۴ نفر از بچه‌های کلاس هم برش دارن، سهم هرکس ${fmtDuration(fairShare(cost, 5) * 1000)} میشه و بقیه‌ش برمی‌گرده به تو 👇\n` +
-    `[ 👥 تقسیم با هم‌کلاسیا ]`,
+  `${plain(settlementMessage(cost, 4200))}\n[ 👥 تقسیم با هم‌کلاسیا ]`,
 );
 
 console.log(`\n\x1b[2m${"─".repeat(64)}\x1b[0m`);

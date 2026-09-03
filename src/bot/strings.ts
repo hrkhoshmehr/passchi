@@ -3,7 +3,7 @@ import { config } from "../config.js";
 import { chunkMessage, escapeHtml } from "../util/text.js";
 import { fmtClock, fmtClockLink, fmtDuration, toFaDigits } from "../util/time.js";
 import {
-  REFUND_CAP_PCT, SHARE_TARGET, balanceCoins, coinsAsMinutesIfUseful, costCoins,
+  balanceCoins, coinsAsMinutesIfUseful, costCoins,
   fmtBalance, fmtCoins, fmtCoinsWithToman, fmtCost, RATE_LINE, shareBack,
 } from "../billing/coins.js";
 import { BTN } from "./menu.js";
@@ -29,7 +29,7 @@ export const HELP = `<b>چیکار می‌کنم</b>
 با سکه کار می‌کنه: <b>هر سکه یه دقیقه صوت</b>. از «${BTN.account}» موجودیت رو می‌بینی و شارژ می‌کنی.
 
 <b>خرجش با هم‌کلاسیا نصف میشه</b>
-یه جلسه یه بار پردازش میشه. هرکی دیگه هم برداره، <b>سهم تو کمتر میشه</b> و سکه‌هات برمی‌گرده — تا ۱۰ نفر. بعد هر تحلیل دکمه‌شو می‌بینی.
+یه جلسه یه بار پردازش میشه. سهم هر هم‌کلاسی ثابته و سکه‌ش برمی‌گرده به تو، تا نصفِ هزینه؛ بعدش برای بقیه رایگانه. بعد هر تحلیل دکمه‌شو می‌بینی.
 
 <b>دستورا</b>
 /history جلسه‌های قبلی
@@ -444,7 +444,7 @@ export function lowBalanceMessage(neededSec: number, balanceSec: number): string
  * صفحهٔ شارژ برای فهمیدن عدد واقعی، و همان کلیک جایی است که آدم‌ها می‌روند.
  */
 export function upsellMessage(costSec: number): string {
-  const { share, back, pct } = shareBack(costSec);
+  const { cap } = shareBack(costSec);
   return [
     "☝️ <b>این متنِ خام کلاسته.</b> دیدی چقدر دقیق می‌شنوم؟",
     "",
@@ -457,18 +457,35 @@ export function upsellMessage(costSec: number): string {
     `تحلیل کامل همین جلسه: <b>${fmtCoinsWithToman(costCoins(costSec))}</b>`,
     "",
     `💰 <b>ولی لازم نیست همه‌شو خودت بدی.</b> جزوه رو برای بچه‌های کلاس بفرست — ` +
-      `هرچی بیشتر برش دارن، <b>سهم تو کمتر می‌شه</b> — تا ${toFaDigits(SHARE_TARGET)} نفر. ` +
-      `با ${toFaDigits(SHARE_TARGET)} نفر سهم تو ${fmtCoins(share)} می‌شه و <b>${fmtCoins(back)}</b> برمی‌گرده به حسابت.`,
+      `هر کی برش داره سکه‌ش برمی‌گرده به حساب تو، تا نصفِ هزینه (<b>${fmtCoins(cap)}</b>) جبران شه. ` +
+      `بعدش برای بقیه رایگانه.`,
   ].join("\n");
 }
 
 /** پیام پایانی هر جلسهٔ کامل: چقدر رفت، چقدر مانده، و چطور برمی‌گردد. */
 export function settlementMessage(costSec: number, balanceSec: number): string {
-  const { share, back, pct } = shareBack(costSec);
+  const { cap } = shareBack(costSec);
   return [
     `تمومه ✅ این جلسه <b>${fmtCost(costSec)}</b> شد و <b>${fmtBalance(balanceSec)}</b> برات مونده.`,
     "",
-    `هرچی بیشتر از بچه‌های کلاس برش دارن، <b>سهم تو کمتر می‌شه</b> — تا ${toFaDigits(SHARE_TARGET)} نفر. ` +
-      `با ${toFaDigits(SHARE_TARGET)} نفر سهم تو ${fmtCoins(share)} می‌شه و <b>${fmtCoins(back)}</b> برمی‌گرده به حسابت 👇`,
+    `جزوه رو با هم‌کلاسیا تقسیم کن: هر کی برش داره سکه‌ش برمی‌گرده به حساب تو، ` +
+      `تا نصفِ هزینه (<b>${fmtCoins(cap)}</b>) جبران شه. بعدش برای بقیه رایگانه 👇`,
+  ].join("\n");
+}
+
+/**
+ * پرسشِ «چند نفر؟» پیش از ساختنِ لینکِ دعوت.
+ *
+ * سهمِ ثابتِ هر نفر از همین انتخاب درمی‌آید، پس عمداً ساده و کوتاه است.
+ * گزینهٔ «۱ نفر» یعنی همان یک نفر نصفِ هزینه را می‌دهد و کامل به مالک
+ * برمی‌گردد.
+ */
+export function shareTargetPrompt(costSec: number): string {
+  const { cap } = shareBack(costSec, 1);
+  return [
+    "برای چند نفر دیگه می‌خوای بفرستی؟",
+    "",
+    `<i>سهم هر نفر از همین‌جا معلوم می‌شه. با «۱ نفر»، همون یک نفر نصفِ هزینه ` +
+      `(${fmtCoins(cap)}) رو می‌ده و کامل برمی‌گرده به تو.</i>`,
   ].join("\n");
 }

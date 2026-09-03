@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 /** آزمون‌هایی که به پایگاه‌دادهٔ تازه نیاز دارند. */
-const NEEDS_DB = new Set(["gift", "identity", "archive-routing", "interrupted-recovery"]);
+const NEEDS_DB = new Set(["gift", "identity", "archive-routing", "interrupted-recovery", "sharing"]);
 
 const tests = [
   "keyboards",
@@ -36,6 +36,7 @@ const tests = [
   "admin-platform",
   "gift-parse",
   "platform-neutral",
+  "sharing",
   "gift",
   "identity",
 ];

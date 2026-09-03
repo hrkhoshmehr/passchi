@@ -11,7 +11,6 @@ import { InsufficientCredit } from "../billing/ledger.js";
 import {
   AlreadyMember,
   NotShareable,
-  fairShare,
   joinSession,
   members,
   shareStatus,
@@ -53,7 +52,8 @@ export async function invitationMessage(api: Api, s: SessionRow): Promise<string
   const link = await shareLink(api, s.id);
   const st = shareStatus(s.id);
   const course = s.course_id ? getCourse(s.course_id) : null;
-  const nextShare = st ? st.nextShareSec : Math.round(s.original_ms / 1000);
+  const seat = st ? st.seatSec : Math.round(s.original_ms / 1000);
+  const taken = toFaDigits(st?.memberCount ?? 0);
 
   return [
     `📓 <b>${escapeHtml(s.title ?? "جلسهٔ کلاس")}</b>`,
@@ -61,9 +61,11 @@ export async function invitationMessage(api: Api, s: SessionRow): Promise<string
     "",
     `خلاصهٔ کلاس، نکات امتحانی با عین حرف استاد${s.pdf_path ? "، و جزوهٔ کامل PDF" : ""}.`,
     "",
-    `👥 ${toFaDigits(st?.memberCount ?? 1)} نفر برداشتن · سهم تو: <b>${fmtCost(nextShare)}</b>`,
+    st?.capReached
+      ? `👥 ${taken} نفر برداشتن · <b>رایگان</b> — هزینه‌اش قبلاً حساب شده`
+      : `👥 ${taken} نفر برداشتن · سهم تو: <b>${fmtCost(seat)}</b>`,
     "",
-    "<i>هرچی بیشتر باشیم سهم هرکس کمتر میشه.</i>",
+    "<i>سهم هرکس ثابته. وقتی نصف هزینه برگشت، بقیه رایگان می‌گیرنش.</i>",
     "",
     link,
   ]
@@ -76,6 +78,16 @@ export function shareToggleKeyboard(sessionId: string, enabled: boolean): Inline
     enabled ? "🔗 لینک دعوت" : "👥 تقسیم با هم‌کلاسیا",
     enabled ? `slink:${sessionId}` : `son:${sessionId}`,
   );
+}
+
+/** انتخابِ تعدادِ کلاس — سهمِ ثابتِ هر نفر از همین درمی‌آید. */
+export function shareTargetKeyboard(sessionId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("۱ نفر", `sont:${sessionId}:1`)
+    .text("۵ نفر", `sont:${sessionId}:5`)
+    .row()
+    .text("۱۰ نفر", `sont:${sessionId}:10`)
+    .text("۲۰ نفر", `sont:${sessionId}:20`);
 }
 
 /** پیش‌نمایشی که تازه‌وارد پیش از پرداخت می‌بیند. */
@@ -97,7 +109,9 @@ export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyb
     s.pdf_path ? "• جزوهٔ کامل PDF" : "",
     "• صوت و رونوشت کامل",
     "",
-    `👥 ${toFaDigits(st.memberCount)} نفر برداشتن · سهم تو <b>${fmtCost(st.nextShareSec)}</b>`,
+    st.capReached
+      ? `👥 ${toFaDigits(st.memberCount)} نفر برداشتن · سهم تو <b>رایگان</b> — هزینه‌اش قبلاً حساب شده`
+      : `👥 ${toFaDigits(st.memberCount)} نفر برداشتن · سهم تو <b>${fmtCost(st.seatSec)}</b>`,
   ]
     .filter((l) => l !== "")
     .join("\n");
@@ -105,7 +119,7 @@ export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyb
   return {
     text,
     keyboard: new InlineKeyboard()
-      .text("✅ برش می‌دارم", `jdo:${s.id}`)
+      .text(st.capReached ? "✅ رایگان برش می‌دارم" : "✅ برش می‌دارم", `jdo:${s.id}`)
       .row()
       .text("فعلاً نه", `jno:${s.id}`),
   };
@@ -213,7 +227,7 @@ export interface JoinOutcome {
   session?: SessionRow;
 }
 
-/** پیوستن + تحویل. پیام‌های بازپرداخت به اعضای قبلی هم از اینجا می‌رود. */
+/** برداشتن + تحویل. خبرِ بازگشتِ سهم به مالک هم از اینجا می‌رود. */
 export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinOutcome> {
   const tgId = uid(ctx);
   let result;
@@ -235,15 +249,17 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
   const s = getSession(sessionId)!;
   await deliverSession(ctx, s);
 
-  // به اعضای قبلی خبر بده که سهمشان برگشت — این همان چیزی است که آدم را
-  // ترغیب می‌کند لینک را پخش کند، پس باید دیده شود.
-  for (const rf of result.refunds) {
+  // خبر به مالک که سهمش برگشت — این همان چیزی است که آدم را ترغیب می‌کند
+  // لینک را پخش کند، پس باید دیده شود.
+  if (result.ownerRefundSec > 0) {
+    const tail = result.capJustReached
+      ? `\n\n<b>نصفِ هزینه برگشت.</b> از این به بعد هم‌کلاسی‌ها رایگان برش می‌دارن.`
+      : "";
     await ctx.api
       .sendMessage(
-        rf.tgId,
-        `💰 <b>${fmtCost(rf.amountSec)}</b> برگشت به حسابت!\n\n` +
-          `یکی دیگه «${escapeHtml(s.title ?? "کلاس")}» رو برداشت. ` +
-          `الان ${toFaDigits(result.memberCount)} نفرین و سهم هرکس ${fmtCost(result.shareSec)}ست.`,
+        result.ownerTgId,
+        `💰 <b>${fmtCost(result.ownerRefundSec)}</b> برگشت به حسابت!\n\n` +
+          `یکی «${escapeHtml(s.title ?? "کلاس")}» رو برداشت.${tail}`,
         { parse_mode: "HTML" },
       )
       .catch(() => {});
@@ -251,8 +267,9 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
 
   return {
     ok: true,
-    message:
-      `✅ گرفتیش! <b>${fmtCost(result.chargedSec)}</b> کم شد — سهم ${toFaDigits(result.memberCount)} نفره.`,
+    message: result.free
+      ? "✅ گرفتیش! سهم تو ۰ — هزینهٔ این جلسه قبلاً حساب شده."
+      : `✅ گرفتیش! <b>${fmtCost(result.chargedSec)}</b> کم شد.`,
     session: s,
   };
 }
@@ -264,4 +281,4 @@ export function enableSharing(sessionId: string): void {
   logger.debug({ sessionId, members: list.length }, "sharing enabled");
 }
 
-export { fairShare, shareStatus, config };
+export { shareStatus, config };

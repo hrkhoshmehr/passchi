@@ -13,7 +13,7 @@
  * دو سناریوی سوءاستفاده جدا مدل می‌شوند، چون دفاعشان فرق می‌کند.
  */
 import {
-  COST_PER_COIN_TOMAN, PACKAGES, REFUND_CAP_PCT, SHARE_TARGET, USD_TOMAN, costCoins,
+  COST_PER_COIN_TOMAN, PACKAGES, REFUND_CAP_PCT, SHARE_TARGET, USD_TOMAN, costCoins, shareBack,
 } from "../src/billing/coins.ts";
 import { config } from "../src/config.ts";
 
@@ -27,9 +27,10 @@ const SONIOX_HOUR_USD = 0.1;
 // اجرای رایگان حذف شد؛ هزینهٔ کاربر تازه حالا فقط سکهٔ هدیهٔ ثبت‌نام است.
 const freeRunCost = 0;
 
-const share = Math.ceil(K / SHARE_TARGET);
-const ownerFloor = Math.ceil(K * (1 - REFUND_CAP_PCT));
-const refundPerCycle = K - Math.max(share, ownerFloor);
+// سهمِ ثابتِ هر نفر، و آنچه مالک در بهترین حالت (کلاسِ پر) پس می‌گیرد:
+// دقیقاً سقف، چون بعد از آن برداشتن رایگان است و پلتفرم چیزی برنمی‌دارد.
+const { seat: share } = shareBack(CLASS_MIN * 60, SHARE_TARGET);
+const refundPerCycle = Math.floor(K * REFUND_CAP_PCT);
 
 console.log("فرض‌ها");
 console.log(`  کلاس ${CLASS_MIN} دقیقه‌ای: ${fa(K)} سکه · هزینهٔ پردازش ${fa(sessionCost)} تومان`);

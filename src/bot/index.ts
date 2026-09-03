@@ -11,8 +11,12 @@ import { cancel as cancelJob, enqueue, isBusy, queueDepth } from "../queue.js";
 import * as S from "./strings.js";
 import { downloadLimitFor, downloadTelegramFile, FileTooLargeError } from "./download.js";
 import { commit, InsufficientCredit, grant, refund, reserve, totalShareRefunds } from "../billing/ledger.js";
-import { accessibleSessions, registerOwner, setShareEnabled, shareStatus } from "../billing/sharing.js";
-import { handleJoin, invitationMessage, joinPreview, shareToggleKeyboard } from "./share.js";
+import {
+  accessibleSessions, registerOwner, setShareEnabled, setShareTarget, shareStatus,
+} from "../billing/sharing.js";
+import {
+  handleJoin, invitationMessage, joinPreview, shareTargetKeyboard, shareToggleKeyboard,
+} from "./share.js";
 import {
   BTN, HOW_IT_WORKS, WELCOME, WELCOME_CB, mainKeyboard, menuActionOf, packagesKeyboard,
   packagesMessage, supportKeyboard, supportMessage,
@@ -30,7 +34,7 @@ import {
   mintGift, refusalMessage,
 } from "./gift.js";
 import {
-  RATE_LINE, SHARE_TARGET, coinsAsMinutesIfUseful, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
+  RATE_LINE, coinsAsMinutesIfUseful, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
 } from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
@@ -2062,8 +2066,25 @@ handlers.callbackQuery(/^son:([a-f0-9]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
     return;
   }
+  await ctx.answerCallbackQuery();
+  await ctx.reply(S.shareTargetPrompt(Math.round(s.original_ms / 1000)), {
+    parse_mode: "HTML",
+    reply_markup: shareTargetKeyboard(sessionId),
+  });
+});
+
+handlers.callbackQuery(/^sont:([a-f0-9]+):(\d+)$/, async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  const people = Number(ctx.match![2]);
+  const s = getSession(sessionId);
+  if (!s || s.tg_id !== uid(ctx)) {
+    await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
+    return;
+  }
+  setShareTarget(sessionId, people);
   setShareEnabled(sessionId, true);
   await ctx.answerCallbackQuery({ text: "اشتراک‌گذاری روشن شد" });
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   await sendInvitation(ctx, sessionId);
 });
 
@@ -2085,13 +2106,11 @@ async function sendInvitation(ctx: Context, sessionId: string): Promise<void> {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
   });
-  await ctx.reply(
-    "☝️ این پیام را در گروه درس فوروارد کن.\n\n" +
-      `هر کسی که از این لینک بیاید، <b>سهم تو کمتر می‌شود</b> و مابه‌التفاوت به حسابت ` +
-      `برمی‌گردد — تا ${toFaDigits(SHARE_TARGET)} نفر.\n\n` +
-      `تا الان <b>${fmtCost(st?.ownerRefundedSec ?? 0)}</b> پس گرفته‌ای.`,
-    { parse_mode: "HTML" },
-  );
+  const tail = st?.capReached
+    ? "نصفِ هزینه برگشته و از این به بعد هم‌کلاسی‌ها رایگان برش می‌دارن."
+    : `هر کی از این لینک بیاد <b>${fmtCost(st?.seatSec ?? 0)}</b> می‌ده و همون به حسابت برمی‌گرده، ` +
+      `تا نصفِ هزینه. تا الان <b>${fmtCost(st?.ownerRefundedSec ?? 0)}</b> پس گرفته‌ای.`;
+  await ctx.reply(`☝️ این پیام را در گروه درس فوروارد کن.\n\n${tail}`, { parse_mode: "HTML" });
 }
 
 handlers.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {
@@ -2125,9 +2144,10 @@ handlers.command("shared", async (ctx) => {
     if (!s) continue;
     const st = shareStatus(id);
     const mine = s.tg_id === uid(ctx) ? "فرستادهٔ خودت" : "پیوسته‌ای";
+    const share = st?.capReached ? "رایگان" : `سهم هرکس ${fmtCost(st?.seatSec ?? 0)}`;
     lines.push(
       `• <b>${escapeHtml(s.title ?? "بدون عنوان")}</b> — ${mine}\n` +
-        `  ${toFaDigits(st?.memberCount ?? 1)} نفر · سهم هرکس ${fmtCost(st?.currentShareSec ?? 0)}`,
+        `  ${toFaDigits(st?.memberCount ?? 0)} نفر برداشتن · ${share}`,
     );
   }
   await reply(ctx, lines.join("\n"));

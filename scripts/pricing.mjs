@@ -38,13 +38,14 @@ for (const p of PACKAGES) {
 
 console.log("\nیک کلاس ۹۰ دقیقه‌ای");
 const classCoins = costCoins(90 * 60);
-const { share, pct } = shareBack(90 * 60);
+const { seat, cap } = shareBack(90 * 60, SHARE_TARGET);
 for (const p of PACKAGES) {
   const price = (classCoins * p.price) / p.coins;
-  const each = (share * p.price) / p.coins;
+  const each = (seat * p.price) / p.coins;
+  const back = Math.round((cap / classCoins) * 100);
   console.log(
     `  با پکیج ${p.coins}: ${fa(price)} تومان تنها` +
-      ` — یا ${fa(each)} تومان برای هر نفر وقتی ${SHARE_TARGET} نفر تقسیمش کنند (${pct}٪ برگشت)`,
+      ` — یا ${fa(each)} تومان برای هر یک از ${SHARE_TARGET} نفر (سهمِ ثابت، تا ${back}٪ برگشت به مالک)`,
   );
 }
 

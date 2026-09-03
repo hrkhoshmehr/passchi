@@ -78,6 +78,9 @@ for (const [column, ddl] of [
   // فوری است، و بدون آن لینک‌های زمانی برای او کار نمی‌کنند.
   ["audio_file_id", "ALTER TABLE sessions ADD COLUMN audio_file_id TEXT"],
   ["share_enabled", "ALTER TABLE sessions ADD COLUMN share_enabled INTEGER NOT NULL DEFAULT 0"],
+  // تعداد تقریبیِ کلاس که مالک هنگام روشن‌کردن اشتراک انتخاب می‌کند؛ سهمِ ثابتِ
+  // هر نفر از همین درمی‌آید. NULL یعنی هنوز انتخاب نشده — پیش‌فرض SHARE_TARGET.
+  ["share_target", "ALTER TABLE sessions ADD COLUMN share_target INTEGER"],
   // free_trial | full | free_transcript — حالت اجرای جلسه.
   //
   // `free_transcript` حالت رایگانِ *قدیمی* است: فقط رونوشت، بدون تحلیل. دیگر
@@ -299,6 +302,7 @@ export interface SessionRow {
   download_route: string | null;
   audio_file_id: string | null;
   share_enabled: number;
+  share_target: number | null;
   mode: SessionMode;
   archive_message_id: number | null;
 }
@@ -365,7 +369,7 @@ type Updatable = Partial<
     | "silence_ms" | "time_map_json" | "report_json" | "notes_md" | "transcript_txt"
     | "pdf_path" | "cost_usd" | "error" | "finished_at" | "course_id"
     | "audio_chat_id" | "audio_message_id" | "download_route"
-    | "audio_file_id" | "share_enabled" | "mode" | "archive_message_id"
+    | "audio_file_id" | "share_enabled" | "share_target" | "mode" | "archive_message_id"
   >
 >;
 
