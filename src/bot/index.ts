@@ -1463,9 +1463,30 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
    * بی‌اصطکاک‌ترین جایی است که می‌شود گفت.
    */
   if (effectiveSec > 0 && u.credit_sec < effectiveSec) {
-    await reply(ctx, S.lowBalanceMessage(effectiveSec, u.credit_sec), {
-      reply_markup: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
-    });
+    /**
+     * **فایل دانلود شده و سرجایش است — پس این نباید بن‌بست باشد.**
+     *
+     * پیش از این فقط `return` بود: کاربر فایل ۱۳۰ دقیقه‌ای‌اش را فرستاده
+     * بود، ما کامل گرفته بودیمش، و بعد می‌گفتیم «سکه‌ات کمه». او شارژ
+     * می‌کرد و **هیچ راهی برای ادامه نبود** — نه دکمه‌ای، نه پیامی. مجبور
+     * می‌شد همان فایل را دوباره بفرستد، که روی اینترنت موبایل یعنی دوباره
+     * چند ده مگابایت و چند دقیقه.
+     *
+     * حالا جلسه با وضعیت `awaiting_credit` نگه داشته می‌شود و پس از شارژ
+     * خودش ادامه می‌دهد؛ دکمهٔ ادامه هم همین‌جا هست.
+     */
+    updateSession(sessionId, { status: "awaiting_credit", original_file: audioFile });
+    await reply(
+      ctx,
+      S.lowBalanceMessage(effectiveSec, u.credit_sec) +
+        "\n\n<i>فایلت نگه داشته شد — بعد از شارژ لازم نیست دوباره بفرستی.</i>",
+      {
+        reply_markup: new InlineKeyboard()
+          .text("🪙 شارژ حساب", "topup")
+          .row()
+          .text("▶️ ادامه بده", `resume:${sessionId}`),
+      },
+    );
     return;
   }
 
@@ -1611,6 +1632,54 @@ handlers.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
  * سکه‌ها موقع شکست کامل برگشته‌اند، پس این یک اجرای تازه است و مثل هر اجرای
  * دیگری دوباره رزرو می‌کند — نه رایگان است نه دوبار حساب می‌شود.
  */
+/**
+ * جلسهٔ متوقف‌مانده را از همان فایلِ روی دیسک ادامه بده.
+ *
+ * هم دکمهٔ «ادامه بده» صدایش می‌زند و هم مسیر تأیید شارژ — تا کاربری که
+ * شارژ کرد اصلاً لازم نباشد دکمه‌ای بزند.
+ */
+async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
+  const s = getSession(sessionId);
+  const u = touchUser(ctx);
+  if (!s || !u || s.tg_id !== u.tg_id) return;
+
+  if (!s.original_file || !(await fs.access(s.original_file).then(() => true).catch(() => false))) {
+    await reply(ctx, "فایل صوتی این جلسه دیگر روی سرور نیست 😔 دوباره بفرستش.");
+    return;
+  }
+  if (isBusy(String(uid(ctx)))) {
+    await reply(ctx, "یه کار در جریانه، صبر کن تموم شه 🙏");
+    return;
+  }
+
+  const durationSec = Math.max(0, Math.round(s.original_ms / 1000));
+  if (durationSec > 0 && u.credit_sec < durationSec) {
+    await reply(ctx, S.lowBalanceMessage(durationSec, u.credit_sec), {
+      reply_markup: new InlineKeyboard()
+        .text("🪙 شارژ حساب", "topup")
+        .row()
+        .text("▶️ ادامه بده", `resume:${sessionId}`),
+    });
+    return;
+  }
+
+  updateSession(sessionId, { status: "queued", error: null });
+  await startJob(ctx, {
+    sessionId,
+    audioFile: s.original_file,
+    courseId: s.course_id,
+    declaredDurationSec: durationSec,
+    mode: (s.mode as SessionMode) ?? "full",
+  });
+}
+
+handlers.callbackQuery(/^resume:([a-f0-9]+)$/, async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+  await resumeSession(ctx, sessionId);
+});
+
 handlers.callbackQuery(/^retry:([a-f0-9]+)$/, async (ctx) => {
   const sessionId = ctx.match![1]!;
   const s = getSession(sessionId);

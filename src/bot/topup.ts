@@ -24,7 +24,8 @@ import { isBale } from "./identity.js";
 import { coinsToSec, findPackage, fmtBalance, fmtCoins, fmtToman } from "../billing/coins.js";
 import { grant } from "../billing/ledger.js";
 import {
-  createTopup, getTopup, getUser, openTopup, setTopupStatus, type TopupRow,
+  awaitingCreditSessions, createTopup, getTopup, getUser, openTopup, setTopupStatus,
+  type TopupRow,
 } from "../db/index.js";
 import { uid } from "./identity.js";
 import { notifyUser } from "./notify.js";
@@ -157,10 +158,26 @@ export async function decide(
   if (approved) {
     grant(t.tg_id, coinsToSec(t.coins), "topup");
     const balance = getUser(t.tg_id)?.credit_sec ?? 0;
+
+    /**
+     * اگر فایلی منتظر شارژ مانده، **همان را یادآوری کن** نه «صوتتو بفرست».
+     *
+     * کاربری که فایل ۱۳۰ دقیقه‌ای‌اش را فرستاده و پیام «سکه‌ات کمه» گرفته،
+     * بعد از شارژ همین پیام را می‌دید و گمان می‌کرد باید از نو بفرستد — و
+     * می‌فرستاد. در حالی که فایلش سالم روی دیسک بود.
+     */
+    const waiting = awaitingCreditSessions(t.tg_id);
+    const enough = waiting.find((s) => balance >= Math.round(s.original_ms / 1000));
     await notifyUser(
       t.tg_id,
       `🪙 <b>${fmtCoins(t.coins)}</b> به حسابت اضافه شد!\n\n` +
-        `موجودی جدیدت: <b>${fmtBalance(balance)}</b>\n\nصوت کلاستو بفرست 🎧`,
+        `موجودی جدیدت: <b>${fmtBalance(balance)}</b>\n\n` +
+        (enough
+          ? `<b>فایلی که فرستاده بودی هنوز اینجاست.</b> بزن تا ادامه بدم 👇`
+          : "صوت کلاستو بفرست 🎧"),
+      enough
+        ? { reply_markup: new InlineKeyboard().text("▶️ ادامهٔ همون فایل", `resume:${enough.id}`) }
+        : {},
     );
     logger.info({ topup: topupId, tgId: t.tg_id, coins: t.coins }, "topup approved");
     return { toast: "تأیید شد و سکه واریز شد.", adminNote: `✅ تأیید شد — ${fmtCoins(t.coins)}` };

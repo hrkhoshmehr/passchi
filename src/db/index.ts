@@ -265,8 +265,14 @@ export function mergeCourseTerms(courseId: number, newTerms: string[]): string[]
 
 // ─── sessions ────────────────────────────────────────────────────────────────
 
+/**
+ * `awaiting_credit` یعنی فایل گرفته شده و سالم روی دیسک است، ولی اعتبار
+ * کاربر کفاف نمی‌داد. جلسه زنده می‌ماند تا پس از شارژ ادامه پیدا کند — نه
+ * `error` است (چیزی خراب نشده) نه `queued` (در صفی نیست).
+ */
 export type SessionStatus =
-  | "queued" | "preprocess" | "stt" | "analyze" | "pdf" | "done" | "error" | "cancelled";
+  | "queued" | "awaiting_credit" | "preprocess" | "stt" | "analyze" | "pdf"
+  | "done" | "error" | "cancelled";
 
 export interface SessionRow {
   id: string;
@@ -314,6 +320,22 @@ export function createSession(id: string, tgId: number, courseId: number | null)
   db.prepare(`INSERT INTO sessions (id, tg_id, course_id, status) VALUES (?, ?, ?, 'queued')`).run(
     id, tgId, courseId,
   );
+}
+
+/**
+ * جلسه‌هایی که فایلشان گرفته شده ولی منتظر شارژ مانده‌اند — تازه‌ترین اول.
+ *
+ * پس از تأیید شارژ صدا زده می‌شود تا به کاربر بگوییم فایلش هنوز هست، به‌جای
+ * «صوتتو بفرست» که او را به فرستادن دوبارهٔ همان فایل می‌کشاند.
+ */
+export function awaitingCreditSessions(tgId: number): SessionRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM sessions
+        WHERE tg_id = ? AND status = 'awaiting_credit' AND original_file IS NOT NULL
+        ORDER BY created_at DESC LIMIT 5`,
+    )
+    .all(tgId) as unknown as SessionRow[];
 }
 
 export function getSession(id: string): SessionRow | null {

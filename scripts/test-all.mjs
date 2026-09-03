@@ -27,6 +27,7 @@ const tests = [
   "bale-plain",
   "download-routing",
   "chunked-upload",
+  "awaiting-credit",
   "history-page",
   "app-send",
   "no-external",
