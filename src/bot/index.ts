@@ -1601,6 +1601,47 @@ handlers.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
   });
 });
 
+/**
+ * تلاش دوباره روی جلسه‌ای که پردازشش شکست خورده.
+ *
+ * **بدون این، پیام شکست بن‌بست بود:** کاربر باید همان فایل ۵۰ مگابایتی را
+ * دوباره آپلود می‌کرد، در حالی که فایل تا `KEEP_AUDIO_DAYS` روی سرور هست.
+ * روی اینترنت موبایل ایران، «دوباره بفرست» یعنی «بی‌خیال شو».
+ *
+ * سکه‌ها موقع شکست کامل برگشته‌اند، پس این یک اجرای تازه است و مثل هر اجرای
+ * دیگری دوباره رزرو می‌کند — نه رایگان است نه دوبار حساب می‌شود.
+ */
+handlers.callbackQuery(/^retry:([a-f0-9]+)$/, async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  const s = getSession(sessionId);
+  const u = touchUser(ctx);
+  if (!s || !u || s.tg_id !== u.tg_id) {
+    await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
+    return;
+  }
+  if (!s.original_file || !(await fs.access(s.original_file).then(() => true).catch(() => false))) {
+    await ctx.answerCallbackQuery();
+    await reply(ctx, "فایل صوتی این جلسه دیگر روی سرور نیست 😔 دوباره بفرستش.");
+    return;
+  }
+  if (isBusy(String(uid(ctx)))) {
+    await ctx.answerCallbackQuery({ text: "یه کار در جریانه، صبر کن تموم شه." });
+    return;
+  }
+
+  await ctx.answerCallbackQuery({ text: "دوباره شروع کردم…" });
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+  // خطای قبلی پاک می‌شود تا اگر باز شکست خورد، پیامِ تازه گیج‌کننده نباشد.
+  updateSession(sessionId, { status: "queued", error: null });
+  await startJob(ctx, {
+    sessionId,
+    audioFile: s.original_file,
+    courseId: s.course_id,
+    declaredDurationSec: Math.max(0, Math.round(s.original_ms / 1000)) || 0,
+    mode: (s.mode as SessionMode) ?? "full",
+  });
+});
+
 handlers.callbackQuery(/^txt:([a-f0-9]+)$/, async (ctx) => {
   const s = getSession(ctx.match![1]!);
   await ctx.answerCallbackQuery();
@@ -1696,10 +1737,13 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
   });
 
   let lastText = "";
-  const edit = async (text: string) => {
-    if (text === lastText) return;
+  const edit = async (text: string, extra: { reply_markup?: InlineKeyboard } = {}) => {
+    // با دکمه، متنِ یکسان هم باید دوباره برود: بار اول ممکن است دکمه نداشته باشد.
+    if (text === lastText && !extra.reply_markup) return;
     lastText = text;
-    await ctx.api.editMessageText(chatId, progress.message_id, text, { parse_mode: "HTML" }).catch(() => {});
+    await ctx.api
+      .editMessageText(chatId, progress.message_id, text, { parse_mode: "HTML", ...extra })
+      .catch(() => {});
   };
 
   /**
@@ -1771,9 +1815,30 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
       refund(userId, reservedSec, sessionId, "کار ناموفق بود");
       const failed = getSession(sessionId);
       if (failed) await archiveFailure(failed, message);
+
+      /**
+       * **فایل هنوز روی سرور است — پس دوباره‌فرستادن لازم نیست.**
+       *
+       * پیش از این پیامِ شکست بن‌بست بود: کاربر یا باید همان ۵۰ مگابایت را
+       * دوباره آپلود می‌کرد یا رها می‌کرد. روی اینترنت موبایل ایران، دومی.
+       * در حالی که `original_file` سرجایش است و تا `KEEP_AUDIO_DAYS` می‌ماند.
+       *
+       * دکمه فقط وقتی ساخته می‌شود که فایل واقعاً باشد؛ دکمه‌ای که بزنی و
+       * بگوید «نیست» از نبودنش بدتر است.
+       */
+      const canRetry = failed?.original_file
+        ? await fs
+            .access(failed.original_file)
+            .then(() => true)
+            .catch(() => false)
+        : false;
       await edit(
         `❌ <b>پردازش ناموفق بود</b>\n\n${escapeHtml(message)}\n\n` +
-          "<i>سکه‌های رزروشده کامل برگشت.</i>",
+          "<i>سکه‌های رزروشده کامل برگشت.</i>" +
+          (canRetry ? "\n\n<i>فایلت همین‌جا نگه داشته شده — لازم نیست دوباره بفرستی.</i>" : ""),
+        canRetry
+          ? { reply_markup: new InlineKeyboard().text("🔄 دوباره تلاش کن", `retry:${sessionId}`) }
+          : {},
       );
     }
   });
