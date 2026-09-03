@@ -586,6 +586,9 @@ async function uploadChunk(
   }
 
   const key = uploadKey(userId, id);
+  const part = partPath(userId, id);
+  await fsp.mkdir(config.workDir, { recursive: true });
+
   let prog = uploads.get(key);
   if (!prog) {
     prog = { spans: [], touched: Date.now(), finalAt: null };
@@ -614,9 +617,6 @@ async function uploadChunk(
     uploads.set(key, prog);
   }
   prog.touched = Date.now();
-
-  const part = partPath(userId, id);
-  await fsp.mkdir(config.workDir, { recursive: true });
 
   /**
    * تکه‌ای که قبلاً کامل نشسته: پذیرفته‌شده اعلامش کن، دوباره ننویس.
