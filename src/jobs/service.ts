@@ -15,7 +15,7 @@
 import { logger } from "../util/logger.js";
 import { runPipeline, type Stage } from "../pipeline.js";
 import { enqueue } from "../queue.js";
-import { commit, danglingReservations, refund, reserve, InsufficientCredit } from "../billing/ledger.js";
+import { commit, danglingReservations, orphanedQueued, refund, reserve, InsufficientCredit } from "../billing/ledger.js";
 import { registerOwner } from "../billing/sharing.js";
 import {
   getCourse, getSession, markFreeRunUsed, updateSession,
@@ -122,5 +122,30 @@ export function recoverInterrupted(): number {
       "جلسهٔ نیمه‌کاره جمع شد و سکه برگشت",
     );
   }
-  return dangling.length;
+
+  /**
+   * جلسه‌هایی که **پیش از رزرو** مُرده‌اند.
+   *
+   * `createSession` همان اول وضعیت `queued` می‌نویسد، ولی رزرو اعتبار در
+   * `startJob` و چند گام بعدتر انجام می‌شود. اگر بین این دو چیزی بشکند —
+   * ری‌استارت، خطای دانلود، یا هر پرتابی پیش از `reserve` — سطر برای همیشه
+   * روی `queued` می‌ماند.
+   *
+   * `danglingReservations` این‌ها را **نمی‌بیند**، چون هیچ سطر `reserve`ای
+   * ندارند. `isBusy` هم نمی‌بیند، چون صف در حافظه است نه در پایگاه‌داده. پس
+   * بی‌صدا تلنبار می‌شوند: روی همین سرور دو تا از ۲۸ مرداد مانده بود.
+   *
+   * سکه‌ای در کار نیست (رزروی نشده)، پس فقط وضعیت تصحیح می‌شود تا تاریخچهٔ
+   * کاربر و آمار ما دروغ نگوید.
+   */
+  const orphans = orphanedQueued();
+  for (const o of orphans) {
+    updateSession(o.id, {
+      status: "error",
+      error: "پردازش شروع نشد؛ سکه‌ای کم نشده. دوباره بفرست.",
+    });
+    logger.warn({ sessionId: o.id, tgId: o.tgId }, "جلسهٔ بدون رزرو جمع شد");
+  }
+
+  return dangling.length + orphans.length;
 }

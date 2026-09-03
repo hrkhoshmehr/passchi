@@ -181,6 +181,35 @@ export function totalShareRefunds(tgId: number): number {
  * منبع حقیقت **دفتر** است نه ستون `status`: اگر جایی وضعیت درست به‌روز
  * نشود باز هم پول درست حساب می‌شود، و این همان چیزی است که کاربر می‌بیند.
  */
+/**
+ * جلسه‌هایی که در `queued` مانده‌اند بی‌آنکه هرگز رزروی برایشان ثبت شود.
+ *
+ * `createSession` وضعیت را همان اول `queued` می‌گذارد و رزرو چند گام بعد
+ * انجام می‌شود؛ هر شکستی در این فاصله یک سطر یتیم می‌سازد که
+ * `danglingReservations` نمی‌بیندش (سطر `reserve` ندارد).
+ *
+ * فقط جلسه‌های **کهنه** برگردانده می‌شوند: جلسه‌ای که همین حالا ساخته شده
+ * ممکن است واقعاً در صف باشد، و جمع‌کردنش یعنی کشتنِ کارِ در جریان. این
+ * تابع در راه‌اندازی صدا زده می‌شود که صف حافظه خالی است، ولی مهلت را
+ * نگه می‌داریم تا اگر روزی جای دیگری هم صدا زده شد بی‌خطر بماند.
+ */
+export function orphanedQueued(olderThanMinutes = 30): Array<{ id: string; tgId: number }> {
+  return db
+    .prepare(
+      `SELECT s.id AS id, s.tg_id AS tgId
+         FROM sessions s
+        WHERE s.status = 'queued'
+          AND s.created_at < datetime('now', ?)
+          AND NOT EXISTS (
+            SELECT 1 FROM credit_ledger x WHERE x.session_id = s.id
+          )`,
+    )
+    .all(`-${Math.max(1, Math.round(olderThanMinutes))} minutes`) as unknown as Array<{
+    id: string;
+    tgId: number;
+  }>;
+}
+
 export function danglingReservations(): Array<{
   sessionId: string;
   tgId: number;

@@ -181,8 +181,37 @@ async function viaBotApi(
   }
 
   const url = `${origin.root}/file/bot${origin.token}/${file.file_path}`;
-  const res = await fetch(url);
+  /**
+   * مهلت روی **بی‌حرکتی**، نه روی کل دانلود.
+   *
+   * `fetch` خالی هیچ مهلتی ندارد: اگر سرور اتصال را بپذیرد و بعد ساکت بماند،
+   * این تابع تا ابد معلق می‌ماند و کاربر فقط «⬇️ دارم فایلو می‌گیرم…» را
+   * می‌بیند که تکان نمی‌خورد — همان «صفحهٔ ساکن بدون خطا» که بدترین شکل
+   * شکست است.
+   *
+   * مهلتِ کل غلط بود: دانلودِ سالمِ یک فایل بزرگ روی اتصال کند می‌تواند
+   * دقایقی طول بکشد و بریدنش یعنی کشتنِ کارِ درست. پس شمارنده با **هر تکه
+   * بایت** صفر می‌شود؛ فقط سکوتِ ممتد کشنده است.
+   */
+  const STALL_MS = 45_000;
+  const ac = new AbortController();
+  let stall: NodeJS.Timeout | null = null;
+  const bump = (): void => {
+    if (stall) clearTimeout(stall);
+    stall = setTimeout(() => ac.abort(new Error("سرور وسط دانلود ساکت شد.")), STALL_MS);
+    stall.unref?.();
+  };
+  bump();
+
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: ac.signal });
+  } catch (e) {
+    if (stall) clearTimeout(stall);
+    throw e;
+  }
   if (!res.ok || !res.body) {
+    if (stall) clearTimeout(stall);
     throw new Error(`دانلود فایل ناموفق بود (${res.status}).`);
   }
 
@@ -196,18 +225,34 @@ async function viaBotApi(
   const total = Number(res.headers.get("content-length")) || req.declaredSize || 0;
   let done = 0;
   const body = Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]);
-  if (req.onProgress && total > 0) {
-    body.on("data", (chunk: Buffer) => {
-      done += chunk.length;
-      req.onProgress!(done, total);
-    });
+  // هر تکه‌ای که می‌رسد یعنی اتصال زنده است — شمارندهٔ بی‌حرکتی صفر می‌شود.
+  body.on("data", (chunk: Buffer) => {
+    bump();
+    done += chunk.length;
+    if (req.onProgress && total > 0) req.onProgress(done, total);
+  });
+
+  try {
+    await pipeline(body, fs.createWriteStream(dest));
+  } finally {
+    if (stall) clearTimeout(stall);
   }
-  await pipeline(body, fs.createWriteStream(dest));
 
   const st = await fsp.stat(dest);
   if (st.size === 0) {
     await fsp.unlink(dest).catch(() => {});
     throw new Error("فایل خالی دریافت شد.");
+  }
+
+  /**
+   * ناقص‌بودن باید **همین‌جا** گرفته شود، نه چند مرحله بعد با خطای ffmpeg.
+   *
+   * اتصالی که تمیز بسته شود ولی نصفه، فایلی سالم‌به‌نظر روی دیسک می‌گذارد.
+   * `content-length` تنها جایی است که می‌شود فهمید.
+   */
+  if (total > 0 && st.size < total) {
+    await fsp.unlink(dest).catch(() => {});
+    throw new Error(`فایل ناقص رسید (${st.size} از ${total} بایت).`);
   }
 
   logger.debug(
