@@ -546,32 +546,87 @@ function durationOf(file) {
 }
 
 /**
- * آپلود با گزارش درصد.
+ * آپلود یک تکه با گزارش درصد و **مهلت بی‌حرکتی**.
  *
  * **چرا `XMLHttpRequest` و نه `fetch`:** `fetch` هیچ راهی برای دنبال‌کردن
  * پیشرفتِ *فرستادن* ندارد — `ReadableStream` به‌عنوان بدنه در مرورگرهای
  * موبایل عملاً کار نمی‌کند و `Content-Length` هم که لازم است از بین می‌رود.
  * `xhr.upload.onprogress` تنها راهی است که همه‌جا جواب می‌دهد.
  *
- * کاربر یک فایل ۹۰ دقیقه‌ای را روی اینترنت موبایل می‌فرستد؛ چرخاندنِ یک
- * اسپینر بی‌عدد برای چند دقیقه، بدترین قسمت این مسیر بود.
+ * **چرا مهلتِ بی‌حرکتی و نه `xhr.timeout`:** پیش‌تر `xhr.timeout = 0` بود، با
+ * این استدلال که «فایل ۹۰ دقیقه‌ای وقت می‌خواهد». ولی از وقتی آپلود تکه‌تکه
+ * شد، این تابع دیگر کل فایل را نمی‌فرستد — **یک تکه** می‌فرستد. و آن صفر یک
+ * حفره باز کرد: اگر وب‌ویو اتصال را نیمه‌مرده رها کند (نه `error` بدهد نه
+ * `load`)، آپلود **برای همیشه** آنجا می‌ماند و کاربر فقط یک نوار خشکیده
+ * می‌بیند، بی‌هیچ خطایی و بی‌هیچ راهی جلو.
+ *
+ * پس معیار، **گذشتِ زمان نیست، ایستادنِ بایت‌هاست**: تا وقتی بایت می‌رود
+ * هرقدر بخواهد طول بکشد، ولی اگر `STALL_MS` هیچ پیشرفتی نبود، خودمان
+ * می‌بُریم تا حلقهٔ تلاش دوباره از همان‌جا ادامه دهد. همان قاعدهٔ «کف سرعت»
+ * که در مسیر دانلود هم درست بود.
  *
  * شکل خطا عمداً همان چیزی است که `api.call` می‌دهد (`status` و `data`)، تا
  * صدازننده لازم نباشد دو حالت را جدا کند.
  */
-function uploadWithProgress(path, file, onPercent) {
+const STALL_MS = 20000;
+
+/**
+ * تکهٔ آخر مهلتِ بلندتری می‌گیرد.
+ *
+ * پاسخِ تکهٔ آخر تازه بعد از کار سرور می‌آید: فایل کامل جابه‌جا می‌شود و
+ * ffprobe مدت واقعی را از رویش درمی‌آورد. روی یک فایل چندصد مگابایتی این
+ * می‌تواند از بیست ثانیه رد شود — و آن‌وقت مهلتِ بی‌حرکتی چیزی را می‌بُرد که
+ * **درست دارد کار می‌کند**، آن هم بدترین جای ممکن: فایل کامل رسیده و
+ * `.part` دیگر سر جایش نیست، پس تلاش دوباره از صفر شروع می‌کند.
+ *
+ * سکوت اینجا معنای دیگری دارد، پس سقفش هم باید فرق کند.
+ */
+const STALL_FINAL_MS = 180000;
+
+function uploadWithProgress(path, file, onPercent, stallMs = STALL_MS) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", path);
     if (api.token) xhr.setRequestHeader("authorization", `Bearer ${api.token}`);
 
+    /**
+     * ساعتِ بی‌حرکتی: هر نشانهٔ زندگی آن را از نو می‌اندازد.
+     *
+     * `stalled` جداست تا `onabort` بتواند فرق بگذارد میان بریدنِ خودمان و
+     * لغوِ کاربر — دومی نباید تلاش دوباره بگیرد.
+     */
+    let stalled = false;
+    let waiting = false;
+    let timer = null;
+    const bump = () => {
+      clearTimeout(timer);
+      timer = setTimeout(
+        () => {
+          stalled = true;
+          xhr.abort();
+        },
+        // پیش از رفتنِ آخرین بایت، سکوت یعنی اتصال ایستاده. بعد از آن، یعنی
+        // سرور دارد کار می‌کند — و آن انتظارِ مشروع نباید کشته شود.
+        waiting ? stallMs : STALL_MS,
+      );
+    };
+    const stop = () => clearTimeout(timer);
+
     xhr.upload.onprogress = (e) => {
+      bump();
       // `lengthComputable` روی بعضی پراکسی‌ها نادرست است؛ آنجا درصدی نشان
       // نمی‌دهیم به‌جای اینکه عدد ساختگی بسازیم.
       if (e.lengthComputable && e.total > 0) onPercent(e.loaded / e.total);
     };
+    // آخرین بایت که رفت، نوبت سرور است؛ آن انتظار هم نباید بی‌سقف باشد.
+    xhr.upload.onload = () => {
+      waiting = true;
+      bump();
+    };
+    xhr.onprogress = () => bump();
 
     xhr.onload = () => {
+      stop();
       let data = {};
       try {
         data = xhr.responseText ? JSON.parse(xhr.responseText) : {};
@@ -583,12 +638,24 @@ function uploadWithProgress(path, file, onPercent) {
         Object.assign(new Error(data.error || "آپلود ناموفق بود."), { data, status: xhr.status }),
       );
     };
-    xhr.onerror = () => reject(new Error("ارتباط قطع شد. اینترنتت را بررسی کن."));
-    xhr.onabort = () => reject(new Error("آپلود لغو شد."));
+    xhr.onerror = () => {
+      stop();
+      reject(new Error("اتصال قطع شد."));
+    };
+    xhr.onabort = () => {
+      stop();
+      // بریدنِ خودمان یک شکستِ شبکه است و باید تلاش دوباره بگیرد؛ لغوِ کاربر نه.
+      reject(
+        stalled
+          ? Object.assign(new Error("اتصال از حرکت ایستاد."), { stalled: true })
+          : Object.assign(new Error("آپلود لغو شد."), { canceled: true }),
+      );
+    };
 
-    // بدون مهلت: یک کلاس ۹۰ دقیقه‌ای روی اینترنت موبایل می‌تواند دقایقی
-    // طول بکشد و بریدنش یعنی از دست‌رفتن کل فایل.
+    // مهلتِ کلیِ XHR بی‌استفاده است: کارِ آن را `STALL_MS` دقیق‌تر می‌کند،
+    // چون تکهٔ کند را نمی‌کُشد و تکهٔ ایستاده را زود می‌کُشد.
     xhr.timeout = 0;
+    bump();
     xhr.send(file);
   });
 }
@@ -605,67 +672,146 @@ function uploadWithProgress(path, file, onPercent) {
  * می‌مُرد سه تلاش همان ۲۰ مگابایت را سه بار می‌سوزاند و آخرش هیچ. اینجا هر
  * تکه جدا می‌رود و آنچه رسیده روی سرور می‌ماند؛ شکست یعنی عقب‌گرد به اندازهٔ
  * یک تکه، نه کل فایل.
+ *
+ * **اندازهٔ تکه تطبیقی است، و این هستهٔ ماجراست.** تکهٔ ثابتِ ۴ مگابایتی روی
+ * اینترنت موبایلِ ۲۰۰ کیلوبیت یعنی یک اتصالِ ۱۶۰ ثانیه‌ای — یعنی همان اتصالِ
+ * چنددقیقه‌ای که ثابت شد دوام نمی‌آورد، فقط کمی کوتاه‌تر. کلاینت تلگرام
+ * تکه‌های ۵۱۲ کیلوبایتی می‌فرستد و اصلاً به این مشکل نمی‌خورد.
+ *
+ * پس به‌جای حدس‌زدنِ یک عدد، **زمان را هدف می‌گیریم نه حجم را**: هر تکه باید
+ * حدود `TARGET_MS` طول بکشد. تکه‌ای که کندتر رفت اندازهٔ بعدی را نصف می‌کند و
+ * تکه‌ای که سریع رفت دو برابرش — پس روی وایفای سریع تکه‌ها بزرگ می‌شوند
+ * (رفت‌وبرگشتِ کمتر) و روی موبایلِ کند کوچک، بی‌آنکه لازم باشد سرعت را از
+ * پیش بدانیم.
  */
-const CHUNK_BYTES = 4 * 1024 * 1024;
+const CHUNK_MIN = 256 * 1024;
+const CHUNK_MAX = 4 * 1024 * 1024;
+const CHUNK_START = 1024 * 1024;
+const TARGET_MS = 15000;
+
+/**
+ * سقفِ **درجازدن**، نه سقفِ شکست.
+ *
+ * پیش‌تر هشت شکستِ شمارشی روی کل آپلود بود، و روی فایل بزرگ ناعادلانه
+ * درمی‌آمد: یک فایل ۵۰ مگابایتی ده‌ها تکه است و شبکه‌ای که یک‌درمیان می‌افتد
+ * آن هشت‌تا را زود می‌سوزاند — کاربر با آپلودِ ۸۰٪ کامل بیرون انداخته می‌شد،
+ * که بدترین حالت ممکن است.
+ *
+ * معیارِ درست «چند بار شکست خورد» نیست، **«چقدر شد که هیچ بایتی جلو نرفت»**
+ * است. با این، شبکهٔ بد هرقدر هم بلغزد تا وقتی پیشرفت می‌کند ادامه می‌دهد، و
+ * اتصالِ واقعاً مرده در همان دو دقیقه تسلیم می‌شود.
+ */
+const NO_PROGRESS_MS = 120000;
 
 function uploadChunked(qs, file, onPercent) {
   const uploadId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
   return (async () => {
     let sent = 0;
+    let size = CHUNK_START;
+    let attempt = 0;
+    let lastProgressAt = Date.now();
+
     /**
-     * شمارشِ خطا **روی کل آپلود** است، نه روی هر تکه.
+     * درصد **هرگز عقب نمی‌رود**.
      *
-     * اگر هر تکه شمارندهٔ خودش را داشته باشد، یک اتصالِ بد می‌تواند بی‌نهایت
-     * طول بکشد: هر تکه سه بار تلاش می‌کند و تکهٔ بعدی دوباره از سه شروع
-     * می‌کند. با شمارندهٔ مشترک، پیشرفتِ واقعی آن را صفر می‌کند و
-     * درجازدن بالاخره تسلیم می‌شود.
+     * باگی که کاربر آن را «از اول تلاش می‌کنم» گزارش می‌کرد همین بود: وقتی
+     * تکه‌ای وسط راه می‌مُرد، تلاش دوباره نسبتِ همان تکه را از صفر شروع
+     * می‌کرد و نوار از ۳۰٪ برمی‌گشت به ۲۵٪. کاربر ندید که سرور دارد درست
+     * ادامه می‌دهد؛ دید که کار عقب رفت — و با چند بار تکرار، دید که از اول
+     * شروع شد.
+     *
+     * فایل واقعاً از اول نمی‌رفت. فقط نوار این را می‌گفت.
      */
-    let strikes = 0;
-    const MAX_STRIKES = 8;
+    let shown = 0;
+    const advance = (ratio) => {
+      if (ratio > shown) {
+        shown = ratio;
+        onPercent(ratio);
+      }
+    };
 
     while (sent < file.size) {
+      if (Date.now() - lastProgressAt > NO_PROGRESS_MS) {
+        throw new Error("اتصال پایدار نیست و آپلود جلو نمی‌رود.");
+      }
+
       /**
        * پارامترها **داخل** حلقه ساخته می‌شوند، بعد از هر به‌روزرسانیِ `sent`.
        *
        * باگ قبلی همین بود: `params` یک بار پیش از حلقهٔ تلاش ساخته می‌شد، پس
        * وقتی تلاشِ دوباره `sent` را از `/status` تازه می‌کرد، درخواستِ بعدی
        * همچنان **آفستِ کهنه** را می‌فرستاد — سرور ۴۰۹ می‌داد و آپلود در جا
-       * می‌زد تا تسلیم شود. یعنی همان «از اول رفتن» که گزارش شد.
+       * می‌زد تا تسلیم شود.
        */
-      const end = Math.min(sent + CHUNK_BYTES, file.size);
+      const end = Math.min(sent + size, file.size);
+      const isFinal = end >= file.size;
       const params = new URLSearchParams(qs);
       params.set("id", uploadId);
       params.set("offset", String(sent));
-      if (end >= file.size) params.set("final", "1");
+      if (isFinal) params.set("final", "1");
 
       const from = sent;
+      const startedAt = Date.now();
       try {
         const res = await uploadWithProgress(
           `/api/uploads/chunk?${params}`,
           file.slice(from, end),
-          (ratio) => onPercent((from + (end - from) * ratio) / file.size),
+          (ratio) => advance((from + (end - from) * ratio) / file.size),
+          isFinal ? STALL_FINAL_MS : STALL_MS,
         );
+        const took = Date.now() - startedAt;
         sent = end;
-        strikes = 0; // پیشرفت واقعی — سابقهٔ خطا پاک می‌شود
+        attempt = 0;
+        lastProgressAt = Date.now();
+        advance(sent / file.size);
+
+        /**
+         * اندازهٔ تکهٔ بعدی از سرعتِ همین تکه درمی‌آید.
+         *
+         * دو برابر/نصف است نه محاسبهٔ دقیق، چون هدف ردیابیِ سرعت نیست —
+         * دورماندن از تکه‌های خیلی بلند است. `took` صفر (کش یا تکهٔ تکراری)
+         * نباید اندازه را بترکاند، پس فقط وقتی زمان معنادار است تصمیم
+         * می‌گیریم.
+         */
+        if (took > 0) {
+          if (took > TARGET_MS * 1.5) size = Math.max(CHUNK_MIN, Math.round(size / 2));
+          else if (took < TARGET_MS / 2) size = Math.min(CHUNK_MAX, size * 2);
+        }
+
         if (res && res.sessionId) return res;
         continue;
       } catch (err) {
+        // لغوِ کاربر تلاش دوباره نمی‌گیرد.
+        if (err.canceled) throw err;
+
         // ۴۰۹ یعنی سرور جای دیگری ایستاده؛ از همان‌جا ادامه بده، نه از اول.
         if (err.status === 409 && typeof err.data?.received === "number") {
+          if (err.data.received > sent) lastProgressAt = Date.now();
           sent = err.data.received;
           continue;
         }
         // ۴۰۲ و ۴۱۳ جوابِ درستِ سرورند؛ تکرارشان فقط وقت کاربر را می‌گیرد.
         const retryable = !err.status || err.status >= 500 || err.status === 400;
-        if (!retryable || ++strikes >= MAX_STRIKES) throw err;
+        if (!retryable) throw err;
 
-        await new Promise((r) => setTimeout(r, Math.min(1000 * strikes, 4000)));
+        /**
+         * تکه‌ای که نرسید احتمالاً بزرگ‌تر از توانِ این اتصال بوده — پس پیش از
+         * تلاش دوباره کوچکش کن. بدون این، همان تکهٔ بزرگ دوباره و دوباره
+         * می‌رفت و هربار در همان حوالی می‌مُرد.
+         */
+        size = Math.max(CHUNK_MIN, Math.round(size / 2));
+        attempt++;
+        await new Promise((r) => setTimeout(r, Math.min(1000 * attempt, 5000)));
 
         // سرور تا کجا گرفته؟ تکهٔ نیمه‌رسیده نباید از ابتدای خودش برود.
         try {
           const st = await api.call(`/api/uploads/status?id=${uploadId}`, { method: "GET" });
-          if (typeof st?.received === "number") sent = st.received;
+          if (typeof st?.received === "number") {
+            if (st.received > sent) lastProgressAt = Date.now();
+            sent = st.received;
+            advance(sent / file.size);
+          }
         } catch {
           /* اگر نشد، از همان `sent` فعلی ادامه می‌دهیم */
         }
@@ -748,7 +894,7 @@ async function upload(file) {
   let out;
   try {
     /**
-     * تا سه بار تلاش — چون شکست، **گاه‌به‌گاه** است نه همیشگی.
+     * تلاش دوباره **پایانی ندارد که کاربر بشمارد** — سقفش زمانِ بی‌پیشرفت است.
      *
      * اندازه‌گیری روی سرور نشان داد CDN جلوی دامنه گاهی وسط آپلود
      * `504` می‌سازد **بی‌آنکه درخواست اصلاً به سرور برسد** (لاگ مبدأ هیچ
