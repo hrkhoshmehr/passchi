@@ -51,19 +51,38 @@ function contiguous(p) {
 
 /** سروری که تکه را در جای خودش می‌نویسد، مثل `uploadChunk` واقعی. */
 function makeServer(partFile) {
-  const prog = { spans: [], touched: Date.now(), finalAt: null };
+  const prog = { spans: [], touched: Date.now(), finalAt: null, total: 0 };
   let finished = 0;
+
+  /**
+   * همان `completeIfWhole` سرور — و عمداً **یک** نسخه، نه دو تا.
+   *
+   * نسخهٔ اولِ این جعلی، بررسیِ کامل‌بودن را در شاخهٔ تکراری هم داشت در حالی
+   * که سرور نداشت. یعنی جعلی از خودِ تولید **درست‌تر** بود، پس آزمون سبز
+   * می‌ماند و باگ زنده می‌رفت روی سرور. درسش: جعلی باید شکلِ واقعیت را
+   * تقلید کند، نه شکلِ آرزو را.
+   */
+  function completeIfWhole(duplicate) {
+    const size = prog.finalAt ?? (prog.total > 0 ? prog.total : null);
+    if (size === null || contiguous(prog) < size) {
+      return { status: 200, received: contiguous(prog), ...(duplicate ? { duplicate: true } : {}) };
+    }
+    if (finished > 0) return { status: 200, received: contiguous(prog) };
+    finished++;
+    fs.truncateSync(partFile, size);
+    return { status: 200, sessionId: "s" + finished, received: contiguous(prog) };
+  }
+
   return {
     prog,
-    put(offset, chunk, isFinal) {
+    put(offset, chunk, isFinal, total = 0) {
+      if (total > prog.total) prog.total = total;
       const already = prog.spans.some(([s, e]) => s <= offset && offset + chunk.length <= e);
       if (already && chunk.length > 0) {
-        // تکراری: دوباره نمی‌نویسد — ولی اگر فایل کامل باشد باز هم می‌بندد.
-        if (prog.finalAt !== null && contiguous(prog) >= prog.finalAt && finished === 0) {
-          finished++;
-          return { status: 200, sessionId: "s" + finished, received: contiguous(prog) };
-        }
-        return { status: 200, received: contiguous(prog), duplicate: true };
+        // تکراری یعنی «ننویس»، نه «کاری نکن»: پرچم پایان و بررسیِ کامل‌بودن
+        // اینجا هم باید کار کند، وگرنه تکهٔ پایانیِ دوباره‌فرستاده بن‌بست است.
+        if (isFinal) prog.finalAt = offset + chunk.length;
+        return completeIfWhole(true);
       }
       /**
        * عمداً **همان پرچمی** که سرور می‌زند، نه یک معادلِ راحت.
@@ -79,15 +98,7 @@ function makeServer(partFile) {
       addSpan(prog, offset, offset + chunk.length);
       if (isFinal) prog.finalAt = offset + chunk.length;
 
-      const size = prog.finalAt;
-      if (size === null || contiguous(prog) < size) {
-        return { status: 200, received: contiguous(prog) };
-      }
-      // بستنِ کار فقط یک بار
-      if (finished > 0) return { status: 200, received: contiguous(prog) };
-      finished++;
-      fs.truncateSync(partFile, size);
-      return { status: 200, sessionId: "s" + finished, received: contiguous(prog) };
+      return completeIfWhole(false);
     },
     sessions: () => finished,
   };
@@ -216,6 +227,73 @@ for (let i = 0; i < SIZE; i++) file[i] = (i * 7 + (i >> 11)) % 251;
   );
 }
 
+// ─── پاسخِ تکهٔ پایانی گم می‌شود، کلاینت دوباره می‌فرستد ────────────────────
+//
+// **باگی که این بخش برای آن نوشته شد — کاربر واقعی، فایل ۵۰ مگابایتی.**
+// همهٔ بایت‌ها رسیده بودند و فایل کامل روی دیسک بود، ولی پاسخِ تکهٔ پایانی سرِ
+// راه گم شد. کلاینت همان تکه را دوباره فرستاد، سرور «تکراری» گفت و همان‌جا
+// تمام کرد — بی‌آنکه ببیند فایل کامل است. کاربر «آپلود کامل شد ولی پاسخی
+// نگرفتیم» گرفت و ۵۰ مگابایتِ سالم بی‌مصرف ماند.
+{
+  const part = path.join(dir, "lost-final.part");
+  const srv = makeServer(part);
+  const CH = 1024 * 1024;
+
+  let at = 0;
+  while (at < SIZE) {
+    const end = Math.min(at + CH, SIZE);
+    srv.put(at, file.subarray(at, end), end >= SIZE, SIZE);
+    at = end;
+  }
+  ok("فایل کامل رسید و جلسه ساخته شد", srv.sessions() === 1);
+
+  // حالا همان سناریو ولی روی آپلودی که جلسه‌اش هنوز ساخته نشده:
+  // تکهٔ پایانی می‌رسد و پاسخش گم می‌شود؛ کلاینت دوباره می‌فرستد.
+  const part2 = path.join(dir, "lost-final-2.part");
+  const srv2 = makeServer(part2);
+  let a2 = 0;
+  const lastFrom = Math.floor((SIZE - 1) / CH) * CH;
+  while (a2 < lastFrom) {
+    const end = Math.min(a2 + CH, lastFrom);
+    srv2.put(a2, file.subarray(a2, end), false, SIZE);
+    a2 = end;
+  }
+  // تکهٔ پایانی — پاسخش «گم می‌شود» (نتیجه را دور می‌ریزیم)
+  srv2.put(lastFrom, file.subarray(lastFrom, SIZE), true, SIZE);
+  const before = srv2.sessions();
+
+  // کلاینت دوباره همان تکهٔ پایانی را می‌فرستد
+  const again = srv2.put(lastFrom, file.subarray(lastFrom, SIZE), true, SIZE);
+  ok(
+    "تکهٔ پایانیِ دوباره‌فرستاده بن‌بست نیست",
+    before === 1 || Boolean(again.sessionId),
+    JSON.stringify(again),
+  );
+}
+
+// ─── پرچمِ پایان هرگز نمی‌رسد، ولی همهٔ بایت‌ها می‌رسند ─────────────────────
+//
+// حالتِ بدترِ همان باگ: درخواستی که `final=1` داشت وسط راه مُرد. بایت‌هایش
+// نوشته و ثبت شد ولی پرچمش هرگز ثبت نشد، پس سرور تا ابد فکر می‌کرد فایل
+// ناتمام است. `total` — که روی **هر** درخواست می‌آید — این بن‌بست را باز
+// می‌کند.
+{
+  const part = path.join(dir, "no-final-flag.part");
+  const srv = makeServer(part);
+  const CH = 1024 * 1024;
+
+  let at = 0;
+  while (at < SIZE) {
+    const end = Math.min(at + CH, SIZE);
+    // هیچ‌کدام `final` ندارند — پرچم گم شده است
+    srv.put(at, file.subarray(at, end), false, SIZE);
+    at = end;
+  }
+
+  ok("بدون پرچمِ پایان هم، با total کار بسته می‌شود", srv.sessions() === 1);
+  ok("و فایل سالم است", fs.readFileSync(part).equals(file));
+}
+
 // ─── ادعاها روی کد واقعی ────────────────────────────────────────────────────
 {
   const srvTs = fs.readFileSync(new URL("../src/web/server.ts", import.meta.url), "utf8");
@@ -252,11 +330,20 @@ for (let i = 0; i < SIZE; i++) file[i] = (i * 7 + (i >> 11)) % 251;
    */
   ok("status از بازه‌ها می‌آید نه اندازهٔ فایل", /received: prog \? contiguous\(prog\) : 0/.test(srvTs));
 
-  ok("پایان یعنی پرشدنِ سوراخ‌ها", /contiguous\(prog\) >= size/.test(srvTs));
+  ok("پایان یعنی پرشدنِ سوراخ‌ها", /contiguous\(prog\) < size/.test(srvTs));
   ok("بستنِ کار یک‌بار قفل می‌شود", /if \(!uploads\.delete\(key\)\)/.test(srvTs));
   ok("فایل به اندازهٔ اعلام‌شده بریده می‌شود", /fsp\.truncate\(part, size\)/.test(srvTs));
   ok("آپلودهای رهاشده جارو می‌شوند", /sweepUploads\(\)/.test(srvTs) && /UPLOAD_TTL_MS/.test(srvTs));
   ok("پس از ری‌استارت از دیسک بازیابی می‌شود", /آپلود نیمه‌کاره از دیسک بازیابی شد/.test(srvTs));
+
+  /**
+   * پایان نباید فقط به پرچمِ `final` وابسته باشد؛ `total` که روی هر درخواست
+   * می‌آید هم باید بتواند کار را ببندد. بدون این، گم‌شدنِ تنها درخواستِ
+   * `final=1` کل آپلود را زمین‌گیر می‌کرد.
+   */
+  ok("اندازهٔ کل روی هر تکه ثبت می‌شود", /if \(total > prog\.total\)/.test(srvTs));
+  ok("و پایان از finalAt یا total می‌آید", /prog\.finalAt \?\? \(prog\.total > 0/.test(srvTs));
+  ok("تکهٔ تکراری هم می‌تواند کار را ببندد", /completeIfWhole\(res, \{ prog, key, userId, url, part, duplicate: true \}\)/.test(srvTs));
 
   ok("کلاینت موازی می‌فرستد", /const PARALLEL = \d+/.test(appJs));
   ok("و اندازهٔ کل را به سرور می‌گوید", /params\.set\("total"/.test(appJs));

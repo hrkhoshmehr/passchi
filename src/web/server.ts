@@ -488,6 +488,20 @@ type UploadProgress = {
   touched: number;
   /** آفستِ پایانِ تکهٔ پایانی — یعنی اندازهٔ واقعی فایل، وقتی رسیده باشد. */
   finalAt: number | null;
+  /**
+   * اندازهٔ کلِ فایل، آن‌طور که کلاینت روی **هر** درخواست اعلام می‌کند.
+   *
+   * **چرا جدا از `finalAt`:** تکیه‌کردن فقط به تکهٔ `final=1` یک بن‌بست
+   * می‌ساخت — اگر همان یک درخواست وسط راه می‌مُرد، بایت‌هایش نوشته و ثبت
+   * می‌شد ولی پرچمش هرگز نمی‌رسید، و از آن به بعد سرور تا ابد فکر می‌کرد
+   * فایل ناتمام است؛ حتی وقتی همهٔ بایت‌ها رسیده بودند. کاربر پیام
+   * «آپلود کامل شد ولی پاسخی نگرفتیم» می‌گرفت و ۵۰ مگابایتِ کاملْ بی‌مصرف
+   * روی دیسک می‌ماند.
+   *
+   * `total` روی هر تکه می‌آید، پس گم‌شدنِ یک درخواست دیگر کارِ کل آپلود را
+   * خراب نمی‌کند.
+   */
+  total: number;
 };
 
 const uploads = new Map<string, UploadProgress>();
@@ -591,7 +605,7 @@ async function uploadChunk(
 
   let prog = uploads.get(key);
   if (!prog) {
-    prog = { spans: [], touched: Date.now(), finalAt: null };
+    prog = { spans: [], touched: Date.now(), finalAt: null, total: 0 };
     /**
      * **پس از ری‌استارت، آنچه روی دیسک است از دست نرود.**
      *
@@ -617,6 +631,9 @@ async function uploadChunk(
     uploads.set(key, prog);
   }
   prog.touched = Date.now();
+  // بزرگ‌ترین مقدارِ اعلام‌شده برنده است تا یک درخواستِ ناقص یا دست‌کاری‌شده
+  // نتواند اندازه را کوچک جا بزند و آپلود را زودتر از موعد «کامل» کند.
+  if (total > prog.total) prog.total = total;
 
   /**
    * تکه‌ای که قبلاً کامل نشسته: پذیرفته‌شده اعلامش کن، دوباره ننویس.
@@ -628,7 +645,20 @@ async function uploadChunk(
   const already = len > 0 && prog.spans.some(([s, e]) => s <= offset && offset + len <= e);
   if (already) {
     req.resume(); // بدنه را مصرف کن وگرنه اتصال معلق می‌ماند
-    return json(res, 200, { received: contiguous(prog), duplicate: true });
+    /**
+     * **تکراری یعنی «ننویس»، نه «کاری نکن».**
+     *
+     * این شاخه پیش‌تر همین‌جا تمام می‌شد و همان بن‌بستی بود که کاربر را به
+     * «آپلود کامل شد ولی پاسخی نگرفتیم» می‌رساند: وقتی تکهٔ پایانی یک بار
+     * می‌رفت و پاسخش گم می‌شد، کلاینت همان تکه را دوباره می‌فرستاد، سرور
+     * «تکراری» می‌گفت و **هرگز** کار را نمی‌بست — با اینکه همهٔ بایت‌ها روی
+     * دیسک بود.
+     *
+     * پس پرچمِ پایان اینجا هم به‌رسمیت شناخته می‌شود و همان بررسیِ کامل‌بودن
+     * اجرا می‌شود که مسیر عادی دارد.
+     */
+    if (isFinal) prog.finalAt = offset + len;
+    return completeIfWhole(res, { prog, key, userId, url, part, duplicate: true });
   }
 
   let written = 0;
@@ -731,7 +761,30 @@ async function uploadChunk(
   addSpan(prog, offset, offset + written);
   if (isFinal) prog.finalAt = offset + written;
 
-  const size = prog.finalAt;
+  return completeIfWhole(res, { prog, key, userId, url, part, duplicate: false });
+}
+
+/**
+ * اگر همهٔ بایت‌ها رسیده‌اند کار را ببند، وگرنه فقط بگو تا کجا رسیده.
+ *
+ * **چرا مشترک بین مسیر عادی و مسیر تکراری:** هر درخواستی که تمام می‌شود —
+ * چه بایت تازه‌ای نوشته باشد چه نه — باید بتواند آخرین سوراخ را «ببیند» و
+ * کار را ببندد. وقتی این بررسی فقط در مسیر عادی بود، تکهٔ پایانیِ تکراری
+ * (یعنی همان چیزی که کلاینت موقع گم‌شدنِ پاسخ دوباره می‌فرستد) به بن‌بست
+ * می‌خورد.
+ */
+async function completeIfWhole(
+  res: Res,
+  o: {
+    prog: UploadProgress;
+    key: string;
+    userId: number;
+    url: URL;
+    part: string;
+    duplicate: boolean;
+  },
+): Promise<void> {
+  const { prog, key, userId, url, part, duplicate } = o;
 
   /**
    * **پایان یعنی پرشدنِ همهٔ سوراخ‌ها، نه رسیدنِ تکهٔ آخر.**
@@ -740,11 +793,16 @@ async function uploadChunk(
    * همان‌جا فایل را ببندیم و به ffprobe بدهیم، فایلی با سوراخ تحویل داده‌ایم
    * که یا خطای مبهم می‌دهد یا — بدتر — صوتی ناقص را کامل جا می‌زند.
    *
-   * پس هر تکه‌ای که تمام می‌شود می‌پرسد «حالا کامل شد؟» و فقط آخرین نفر —
-   * هرکدام که باشد — کار را می‌بندد.
+   * `finalAt` مقدمِ `total` است چون دقیق‌تر است (بایتِ واقعیِ پایان)، ولی
+   * نبودنش دیگر بن‌بست نیست: `total` روی هر درخواست می‌آید، پس گم‌شدنِ
+   * تکهٔ `final=1` کل آپلود را زمین‌گیر نمی‌کند.
    */
-  if (size === null || !(contiguous(prog) >= size)) {
-    return json(res, 200, { received: contiguous(prog) });
+  const size = prog.finalAt ?? (prog.total > 0 ? prog.total : null);
+  if (size === null || contiguous(prog) < size) {
+    return json(res, 200, {
+      received: contiguous(prog),
+      ...(duplicate ? { duplicate: true } : {}),
+    });
   }
 
   /**
