@@ -1,5 +1,6 @@
+import fs from "node:fs";
 import { InlineKeyboard, type Api, type Context } from "grammy";
-import { sendDoc } from "./bale-upload.js";
+import { sendDoc, sendFileTo } from "./bale-upload.js";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml } from "../util/text.js";
@@ -16,7 +17,7 @@ import {
   shareStatus,
 } from "../billing/sharing.js";
 import * as S from "./strings.js";
-import { isBale, uid } from "./identity.js";
+import { isBale, platformOf, uid } from "./identity.js";
 
 /**
  * نام کاربری ربات، **به تفکیک سکو**.
@@ -113,27 +114,58 @@ export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyb
 /**
  * تحویل کامل یک جلسه به کسی که تازه پیوسته.
  *
- * صوت با `file_id` دوباره فرستاده می‌شود — تلگرام فایل را نگه داشته، پس نه
+ * صوت با `file_id` دوباره فرستاده می‌شود — سکو فایل را نگه داشته، پس نه
  * آپلودی لازم است نه فضایی. بدون این کار، زمان‌های داخل پیام‌ها برای او لینک
  * پخش نمی‌شوند، چون لینک‌شدن به ریپلای‌بودن روی صوتِ *همان چت* وابسته است.
+ *
+ * **`file_id` بین دو سکو قابل حمل نیست.** جلسه‌ای که در تلگرام ساخته شده
+ * `file_id` تلگرامی دارد و بله آن را نمی‌شناسد (و برعکس) — و لینک دعوت
+ * می‌تواند از هر سکویی باز شود. پیش از این فقط یک `warn` در لاگ می‌نشست و
+ * کاربر بی‌صدا هم صوت را از دست می‌داد و هم لینک‌شدن زمان‌ها را؛ یعنی
+ * مهم‌ترین قابلیت گزارش، بدون هیچ نشانه‌ای برای او خاموش می‌شد.
+ *
+ * پس اگر `file_id` نگرفت، از فایل روی دیسک آپلود می‌شود و `file_id` تازه
+ * جایگزین می‌شود. فایل تا `KEEP_AUDIO_DAYS` می‌ماند؛ بعد از آن دیگر کاری
+ * نمی‌شود کرد و بدون صوت جلو می‌رویم.
  */
 export async function deliverSession(ctx: Context, s: SessionRow): Promise<void> {
   const r = sessionReport(s);
   if (!r) throw new Error("تحلیل این جلسه در دسترس نیست.");
   const course = s.course_id ? getCourse(s.course_id) : null;
 
+  const caption = `🎧 ${escapeHtml(s.title ?? "صوت جلسه")}`;
   let audioMessageId: number | null = null;
+
   if (s.audio_file_id) {
     const sent = await ctx
-      .replyWithAudio(s.audio_file_id, {
-        caption: `🎧 ${escapeHtml(s.title ?? "صوت جلسه")}`,
-        parse_mode: "HTML",
-      })
+      .replyWithAudio(s.audio_file_id, { caption, parse_mode: "HTML" })
       .catch((e: unknown) => {
-        logger.warn({ err: String(e) }, "resend audio failed");
+        logger.warn(
+          { sessionId: s.id, err: String(e) },
+          "resend audio by file_id failed — will try the file on disk",
+        );
         return null;
       });
     audioMessageId = sent?.message_id ?? null;
+  }
+
+  // فایل روی دیسک، وقتی `file_id` کار نکرد یا اصلاً نبود
+  if (audioMessageId === null && s.original_file && fs.existsSync(s.original_file)) {
+    try {
+      const sent = await sendFileTo(
+        ctx.api,
+        ctx.chat!.id,
+        platformOf(ctx),
+        "sendAudio",
+        { path: s.original_file, filename: `${s.title ?? "جلسه"}.mp3` },
+        { caption, ...(s.title ? { title: s.title } : {}) },
+      );
+      audioMessageId = sent?.message_id ?? null;
+      // `file_id` تازه مالِ سکوی همین کاربر است و دفعهٔ بعد کار می‌کند.
+      if (sent?.fileId) updateSession(s.id, { audio_file_id: sent.fileId });
+    } catch (e) {
+      logger.warn({ sessionId: s.id, err: String(e) }, "resend audio from disk failed");
+    }
   }
 
   const asReply = audioMessageId

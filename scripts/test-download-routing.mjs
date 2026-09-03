@@ -18,6 +18,15 @@
  *
  * اجرا: npx tsx scripts/test-download-routing.mjs
  */
+/**
+ * `.env` **پیش از** مقادیر جایگزین بار می‌شود.
+ *
+ * `dotenv` متغیری را که از قبل ست باشد بازنویسی نمی‌کند، پس اگر اول
+ * `BALE_BOT_TOKEN` را روی مقدار ساختگی بگذاریم، توکن واقعی دیگر خوانده
+ * نمی‌شود و بخش زنده **همیشه** بی‌صدا رد می‌شود — یعنی آزمونی که برای گرفتن
+ * این باگ نوشته شده، روی سرور هرگز اجرا نمی‌شود و سبزیِ آن بی‌معنی است.
+ */
+await import("dotenv/config");
 process.env.BOT_TOKEN ||= "telegram-token-for-test";
 process.env.BALE_BOT_TOKEN ||= "bale-token-for-test";
 
