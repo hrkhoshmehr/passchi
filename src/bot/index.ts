@@ -9,7 +9,7 @@ import { extractClip, probe, TimeMap } from "../audio/ffmpeg.js";
 import { runPipeline } from "../pipeline.js";
 import { cancel as cancelJob, enqueue, isBusy, queueDepth } from "../queue.js";
 import * as S from "./strings.js";
-import { downloadTelegramFile, FileTooLargeError } from "./download.js";
+import { downloadLimitFor, downloadTelegramFile, FileTooLargeError } from "./download.js";
 import { commit, InsufficientCredit, grant, refund, reserve, totalShareRefunds } from "../billing/ledger.js";
 import { accessibleSessions, registerOwner, setShareEnabled, shareStatus } from "../billing/sharing.js";
 import { handleJoin, invitationMessage, joinPreview, shareToggleKeyboard } from "./share.js";
@@ -317,7 +317,7 @@ async function historyScreen(ctx: Context, page = 0, edit = false): Promise<void
     await reply(
       ctx,
       "هنوز جلسه‌ای نفرستادی 📭\n\nیه فایل صوتی، ویس یا ویدیو بفرست تا شروع کنیم 🎧\n\n" +
-        "<i>کلاست آنلاین بوده؟ لینک ضبطشو بفرست.</i>",
+        "<i>کلاست آنلاین بوده؟ ویدیوش هم قبوله.</i>",
     );
     return;
   }
@@ -433,35 +433,40 @@ async function sendPrompt(ctx: Context): Promise<void> {
     kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
   }
 
+  /**
+   * کوتاه، چون این صفحه سرِ راهِ کار است نه خودِ کار.
+   *
+   * نسخهٔ قبلی سه بند توضیح داشت و یکی از آن‌ها هم **دروغ** بود: «لینک ضبط
+   * جلسه رو بفرست» در حالی که `fetch-url` فقط لینکِ مستقیمِ فایل را می‌گیرد
+   * و صفحهٔ اسکای‌روم و ریلاین و امثالشان HTML برمی‌گردانند و رد می‌شوند.
+   *
+   * حجم هم **پیش از** تلاش گفته می‌شود: سقف بله ۵۰ مگابایت است و یک کلاس
+   * ۹۰ دقیقه‌ای معمولاً از آن رد می‌شود، پس کاربر باید همین‌جا بداند نه بعد
+   * از اینکه فایل را فرستاد و پیام خطا گرفت.
+   */
+  /**
+   * روی تلگرام با MTProto سقفی در کار نیست و `downloadLimitFor` بی‌نهایت
+   * می‌دهد — که اگر مستقیم چاپ شود «Infinity مگ» به کاربر نشان داده می‌شود.
+   */
+  const limit = downloadLimitFor(ctx.api);
+  const forwardLine = Number.isFinite(limit)
+    ? `تا ${toFaDigits(Math.floor(limit / 1024 / 1024))} مگ.`
+    : "هر حجمی.";
   await ctx.reply(
     [
       "🎧 <b>صوت کلاستو برسون</b>",
       "",
-      "<b>۱. اگه صوت تو همین پیام‌رسانه</b>",
-      "فورواردش کن همین‌جا — سریع‌ترین راه، چون فایل اصلاً از گوشیت آپلود نمی‌شه.",
+      `• <b>تو همین پیام‌رسان داریش؟</b> فورواردش کن همین‌جا — ${forwardLine}`,
+      "• <b>تو گوشیته یا بزرگ‌تره؟</b> دکمهٔ پایین — تا ۵۰۰ مگ.",
+      "• <b>لینک؟</b> فقط لینک مستقیم فایل. صفحهٔ ضبط جلسه و یوتیوب نمیشه.",
       "",
-      "<b>۲. اگه صوت تو گوشیته</b>",
-      "دکمهٔ <b>📤 آپلود فایل</b> پایین رو بزن. یه صفحه باز می‌شه که همون‌جا فایلو انتخاب" +
-        " می‌کنی و آپلود می‌شه — با اینترنت ملی و بدون محدودیت حجم.",
+      "ویدیو هم قبوله؛ فقط صداشو برمی‌دارم و بابت تصویر سکه نمی‌گیرم.",
       "",
-      "<b>۳. اگه کلاست آنلاین بوده</b>",
-      "لینک ضبط جلسه رو همین‌جا بفرست — خودم دانلودش می‌کنم. ویدیو هم اشکالی نداره،" +
-        " فقط صداشو برمی‌دارم و بابت تصویر سکه‌ای نمی‌دی.",
-      "<i>لینک باید بدون ورود به حساب باز شه. اگه رمز می‌خواد، از مرورگر" +
-        " دانلودش کن و خود فایلو بفرست.</i>",
-      "",
-      "<i>هر سه راه، نتیجه همین‌جا تو ربات برات میاد.</i>",
-      "",
-      // موجودی و نرخ **پیش از** آپلود گفته می‌شود. پیش‌تر اینجا هیچ عددی
-      // نبود: کاربر تازه صوت ۹۰ دقیقه‌ای را می‌فرستاد، منتظر می‌ماند، و
-      // آن‌سرِ کار «سکه‌هات کم میاد» می‌گرفت — یعنی هزینهٔ آپلود را داده
-      // بود و دست خالی برمی‌گشت. گفتنِ نرخ در همین صفحه آن بن‌بست را
-      // از اول برمی‌دارد.
+      // موجودی و نرخ **پیش از** آپلود گفته می‌شود، وگرنه کاربر صوت ۹۰
+      // دقیقه‌ای را می‌فرستد و آن‌سرِ کار «سکه‌هات کم میاد» می‌گیرد.
       `💰 موجودیت: <b>${fmtBalance(balanceSec)}</b> — ${RATE_LINE}.`,
       "",
-      "<b>دو نکته که کیفیتو بالا می‌بره:</b>",
-      "• گوشی رو بذار رو میز، نه تو کیف",
-      "• هرچی به استاد نزدیک‌تر، بهتر",
+      "<i>گوشی رو بذار رو میز نه تو کیف، و هرچی به استاد نزدیک‌تر بهتر.</i>",
     ].join("\n"),
     { parse_mode: "HTML", reply_markup: withBack(kb) },
   );
@@ -1076,7 +1081,7 @@ handlers.on("message:text", async (ctx) => {
     await reply(
       ctx,
       "یه فایل صوتی بفرست تا شروع کنم 🎧\n\n" +
-        "<i>اگه کلاست آنلاین بوده، لینک ضبطشو بفرست — خودم دانلودش می‌کنم.</i>",
+        "<i>ویدیو هم قبوله — صداشو خودم برمی‌دارم.</i>",
       { reply_markup: mainKeyboard },
     );
     return;
@@ -1096,7 +1101,7 @@ handlers.on("message:text", async (ctx) => {
       ctx,
       `✅ <b>${escapeHtml(c.name)}</b> ثبت شد.\n\n` +
         "<i>اصطلاحای تخصصی این درسو یاد می‌گیرم، پس هر جلسه دقیق‌تر میشم.</i>\n\n" +
-        "حالا صوت کلاسو بفرست 🎧\n\n<i>ویدیو و لینک ضبط جلسه هم قبوله.</i>",
+        "حالا صوت کلاسو بفرست 🎧\n\n<i>ویدیو هم قبوله.</i>",
     );
   }
 });
@@ -1260,25 +1265,40 @@ handlers.on(
        */
       const limitMb = Math.floor(e.limitBytes / 1024 / 1024);
       const gotMb = Math.round(e.sizeBytes / 1024 / 1024);
+      /**
+       * دکمه **ضمیمه** می‌شود، نه فقط نامش در متن.
+       *
+       * پیش از این متن می‌گفت «از دکمهٔ آپلود فایل استفاده کن» ولی دکمه‌ای
+       * همان‌جا نبود؛ کاربر باید برمی‌گشت به منو و پیدایش می‌کرد — یعنی
+       * همان‌جایی که آدم‌ها رها می‌کنند. اشارهٔ قبلی به «لینک ضبط آنلاین» هم
+       * برداشته شد: مسیر لینک فقط فایلِ مستقیم می‌گیرد و صفحهٔ ضبط جلسه رد
+       * می‌شود، پس آن پیشنهاد کاربر را به بن‌بست دوم می‌فرستاد.
+       */
+      const kb = new InlineKeyboard();
+      if (config.PUBLIC_URL.startsWith("https://")) {
+        kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
+      }
       await ctx.api.editMessageText(
         ctx.chat!.id,
         statusMsg.message_id,
-        `❌ این فایل ${toFaDigits(gotMb)} مگه و از سقف ${toFaDigits(limitMb)} مگابایتیِ ` +
-          `${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} رد شده.\n\n` +
-          `<b>راه‌حل:</b> از دکمهٔ «${BTN.app}» فایلو بفرست — اونجا تا ۵۰۰ مگابایت می‌گیرم.\n` +
-          `<i>یا اگه کلاست ضبط آنلاین داره، لینکشو بفرست.</i>`,
-        { parse_mode: "HTML" },
+        `❌ این فایل ${toFaDigits(gotMb)} مگه و ${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} ` +
+          `بیشتر از ${toFaDigits(limitMb)} مگ رو به ربات نمی‌ده.\n\n` +
+          `<b>از دکمهٔ پایین بفرستش</b> — اونجا تا ۵۰۰ مگ می‌گیرم.`,
+        { parse_mode: "HTML", ...(kb.inline_keyboard.length ? { reply_markup: kb } : {}) },
       );
       return;
     }
     logger.error({ err: String(e), platform: platformOf(ctx) }, "download failed");
+    const kb = new InlineKeyboard();
+    if (config.PUBLIC_URL.startsWith("https://")) {
+      kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
+    }
     await ctx.api.editMessageText(
       ctx.chat!.id,
       statusMsg.message_id,
-      `❌ چند بار تلاش کردم ولی نشد فایلو از سرور ${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} بگیرم.\n\n` +
-        `<b>این مشکل از سمت منه، نه تو.</b> از دکمهٔ «${BTN.app}» امتحان کن — ` +
-        `اون مسیر جداست و معمولاً کار می‌کنه.`,
-      { parse_mode: "HTML" },
+      `❌ چند بار تلاش کردم ولی سرور ${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} فایلو نداد.\n\n` +
+        `<b>مشکل از سمت منه نه تو.</b> از دکمهٔ پایین امتحان کن — مسیرش جداست.`,
+      { parse_mode: "HTML", ...(kb.inline_keyboard.length ? { reply_markup: kb } : {}) },
     );
     return;
   }
