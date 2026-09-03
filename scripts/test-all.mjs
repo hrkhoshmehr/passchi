@@ -26,6 +26,7 @@ const tests = [
   "miniapp-detect",
   "bale-plain",
   "download-routing",
+  "chunked-upload",
   "history-page",
   "app-send",
   "no-external",

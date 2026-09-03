@@ -352,6 +352,39 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
       if (uid === null) return;
       return uploadAudio(req, res, uid, url);
     }
+
+    /**
+     * آپلود تکه‌تکه — برای وب‌ویویی که یک اتصال طولانی را نگه نمی‌دارد.
+     *
+     * **چرا لازم شد:** لاگ nginx نشان داد وب‌ویوی اندرویدِ بله آپلود را وسط
+     * راه **خودش** می‌بُرد؛ هشت بار پشت سر هم، هربار در نقطه‌ای متفاوت
+     * (۰٫۹ و ۱۶ و ۲۳ و ۲۵ و ۳۴ مگابایت از ۵۰). نه سقف بود نه مهلت: آزمون با
+     * نرخ ۲۰۰ کیلوبیت در ثانیه همان ۵۰ مگابایت را در ۲۵۶ ثانیه از همان CDN
+     * سالم رساند. یعنی مسیر سالم است و فقط وب‌ویو اتصال طولانی را نمی‌کشد.
+     *
+     * تلاش دوبارهٔ قبلی از **صفر** شروع می‌کرد، پس روی اتصالی که سرِ ۲۰
+     * مگابایت می‌مُرد، سه تلاش فقط سه بار همان ۲۰ مگابایت را می‌سوزاند و
+     * کاربر آخرش هیچ. اینجا هر تکه جدا می‌رود و آنچه رسیده می‌ماند.
+     *
+     * `offset` صریح گرفته می‌شود تا تکهٔ تکراری دوباره نوشته نشود و ترتیب
+     * هم تضمین شود؛ کلاینت می‌تواند با `GET` بپرسد تا کجا رسیده و از همان‌جا
+     * ادامه دهد.
+     */
+    case "POST /api/uploads/chunk": {
+      const uid = requireUser(req, res);
+      if (uid === null) return;
+      return uploadChunk(req, res, uid, url);
+    }
+  }
+
+  if (url.pathname === "/api/uploads/status" && req.method === "GET") {
+    const uid = requireUser(req, res);
+    if (uid === null) return;
+    const id = (url.searchParams.get("id") ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+    if (!id) return json(res, 400, { error: "شناسهٔ آپلود نامعتبر است." });
+    const part = partPath(uid, id);
+    const received = await fsp.stat(part).then((s) => s.size).catch(() => 0);
+    return json(res, 200, { received });
   }
 
   // مسیرهای پارامتردار
@@ -418,6 +451,103 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
  * نتیجه‌اش هم جریانی است: فایل مستقیم روی دیسک می‌رود و هرگز کامل در حافظه
  * نمی‌نشیند.
  */
+/**
+ * مسیر فایلِ نیمه‌کارهٔ یک آپلود تکه‌تکه.
+ *
+ * `userId` در نام هست تا آپلودِ نیمه‌کارهٔ یک کاربر با شناسه‌ای حدس‌زده به
+ * دست کاربر دیگری ادامه پیدا نکند یا خوانده نشود.
+ */
+function partPath(userId: number, uploadId: string): string {
+  return path.join(config.workDir, `up-${userId}-${uploadId}.part`);
+}
+
+/**
+ * یک تکه از آپلود را می‌گیرد و به انتهای فایل نیمه‌کاره اضافه می‌کند.
+ *
+ * پارامترها در آدرس‌اند: `id` (شناسهٔ آپلود)، `offset` (چند بایت از قبل
+ * نوشته شده)، و در تکهٔ آخر `final=1` به‌همراه همان `duration`/`ext`/`courseId`
+ * که مسیر یک‌تکه می‌گیرد.
+ *
+ * `offset` صریح است تا تکهٔ تکراری — که با تلاش دوبارهٔ کلاینت کاملاً محتمل
+ * است — دوباره نوشته نشود و فایل خراب نشود.
+ */
+async function uploadChunk(
+  req: http.IncomingMessage,
+  res: Res,
+  userId: number,
+  url: URL,
+): Promise<void> {
+  const id = (url.searchParams.get("id") ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+  if (!id) return json(res, 400, { error: "شناسهٔ آپلود نامعتبر است." });
+
+  const offset = Math.max(0, Number(url.searchParams.get("offset") ?? 0));
+  const isFinal = url.searchParams.get("final") === "1";
+  const part = partPath(userId, id);
+  await fsp.mkdir(config.workDir, { recursive: true });
+
+  const have = await fsp.stat(part).then((s) => s.size).catch(() => 0);
+
+  // تکه‌ای که قبلاً کامل نوشته شده: پذیرفته‌شده اعلامش کن، دوباره ننویس.
+  if (offset < have) return json(res, 200, { received: have, duplicate: true });
+  if (offset > have) {
+    // شکاف یعنی تکه‌ای گم شده؛ کلاینت باید از `have` ادامه دهد نه جلوتر.
+    return json(res, 409, { received: have, error: "ترتیب تکه‌ها به هم خورده." });
+  }
+
+  let written = have;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const out = fs.createWriteStream(part, { flags: "a" });
+      req.on("data", (c: Buffer) => {
+        written += c.length;
+        if (written > MAX_UPLOAD_BYTES) {
+          reject(new Error("فایل خیلی بزرگ است."));
+          req.destroy();
+          out.destroy();
+        }
+      });
+      req.pipe(out);
+      out.on("finish", () => resolve());
+      out.on("error", reject);
+      // قطع‌شدن وسط یک تکه فاجعه نیست: آنچه نوشته شده می‌ماند و کلاینت از
+      // همان‌جا ادامه می‌دهد. فقط لاگ می‌شود تا الگویش دیده شود.
+      req.on("error", (err: Error) => {
+        logger.warn({ uploadId: id, written, err: err.message }, "تکهٔ آپلود قطع شد");
+        reject(new Error("ارتباط وسط تکه قطع شد."));
+      });
+      req.on("aborted", () => {
+        logger.warn({ uploadId: id, written }, "کلاینت تکه را رها کرد");
+        reject(new Error("ارتباط وسط تکه قطع شد."));
+      });
+    });
+  } catch (e) {
+    // فایل نیمه‌کاره **پاک نمی‌شود** — همان چیزی است که ادامه را ممکن می‌کند.
+    const now = await fsp.stat(part).then((s) => s.size).catch(() => 0);
+    if (written > MAX_UPLOAD_BYTES) {
+      await fsp.unlink(part).catch(() => {});
+      return json(res, 413, { error: "فایل خیلی بزرگ است." });
+    }
+    return json(res, 400, { received: now, error: e instanceof Error ? e.message : "تکه نرسید." });
+  }
+
+  if (!isFinal) return json(res, 200, { received: written });
+
+  // تکهٔ آخر: فایل کامل است، ببرش به مسیر صوت و مثل آپلود یک‌تکه ادامه بده.
+  const sessionId = shortId();
+  const ext = (url.searchParams.get("ext") ?? "ogg").replace(/[^a-z0-9]/gi, "").slice(0, 5) || "ogg";
+  const dest = path.join(config.audioDir, `${sessionId}.${ext}`);
+  await fsp.mkdir(config.audioDir, { recursive: true });
+  await fsp.rename(part, dest);
+
+  return finishUpload(res, {
+    userId,
+    sessionId,
+    dest,
+    declaredSec: Math.max(0, Number(url.searchParams.get("duration") ?? 0)),
+    courseId: Number(url.searchParams.get("courseId") ?? 0) || null,
+  });
+}
+
 async function uploadAudio(
   req: http.IncomingMessage,
   res: Res,
@@ -501,6 +631,23 @@ async function uploadAudio(
       error: "فایل ناقص رسید. احتمالاً ارتباط قطع شده — دوباره بفرست.",
     });
   }
+
+  return finishUpload(res, { userId, sessionId, dest, declaredSec, courseId });
+}
+
+/**
+ * از «فایل کامل روی دیسک است» تا پاسخِ قیمت — مشترک بین آپلود یک‌تکه و تکه‌تکه.
+ *
+ * جدا شد تا مسیر تازهٔ تکه‌تکه همان راستی‌آزمایی‌ها و همان محاسبهٔ قیمت را
+ * بگیرد؛ دو نسخه از این منطق یعنی روزی یکی از دو مسیر بی‌صدا از دیگری عقب
+ * می‌ماند و قیمتی که کاربر می‌بیند با آنچه کم می‌شود فرق می‌کند.
+ */
+async function finishUpload(
+  res: Res,
+  o: { userId: number; sessionId: string; dest: string; declaredSec: number; courseId: number | null },
+): Promise<void> {
+  const { userId, sessionId, dest, declaredSec, courseId } = o;
+  const u = getUser(userId)!;
 
   const stat = await fsp.stat(dest);
   if (stat.size === 0) {

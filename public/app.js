@@ -593,6 +593,71 @@ function uploadWithProgress(path, file, onPercent) {
   });
 }
 
+/**
+ * آپلود تکه‌تکه، برای وب‌ویویی که اتصال طولانی را نمی‌کشد.
+ *
+ * **چرا:** لاگ سرور نشان داد وب‌ویوی اندرویدِ بله آپلود را وسط راه خودش
+ * می‌بُرد — هشت بار پیاپی، هربار در نقطه‌ای متفاوت (۰٫۹ تا ۳۴ مگابایت از
+ * ۵۰). مسیر سالم است: همان ۵۰ مگابایت با نرخ ۲۰۰ کیلوبیت در ۲۵۶ ثانیه از
+ * همان CDN رد شد. فقط یک اتصالِ چنددقیقه‌ای دوام نمی‌آورد.
+ *
+ * تلاش دوبارهٔ قبلی از صفر شروع می‌کرد، پس روی اتصالی که سرِ ۲۰ مگابایت
+ * می‌مُرد سه تلاش همان ۲۰ مگابایت را سه بار می‌سوزاند و آخرش هیچ. اینجا هر
+ * تکه جدا می‌رود و آنچه رسیده روی سرور می‌ماند؛ شکست یعنی عقب‌گرد به اندازهٔ
+ * یک تکه، نه کل فایل.
+ */
+const CHUNK_BYTES = 4 * 1024 * 1024;
+
+function uploadChunked(qs, file, onPercent) {
+  const uploadId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+  return (async () => {
+    let sent = 0;
+    while (sent < file.size) {
+      const end = Math.min(sent + CHUNK_BYTES, file.size);
+      const isFinal = end >= file.size;
+      const params = new URLSearchParams(qs);
+      params.set("id", uploadId);
+      params.set("offset", String(sent));
+      if (isFinal) params.set("final", "1");
+
+      let res;
+      // هر تکه تا سه بار؛ شکستِ یک تکه کل فایل را از دست نمی‌دهد.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          res = await uploadWithProgress(
+            `/api/uploads/chunk?${params}`,
+            file.slice(sent, end),
+            (ratio) => onPercent((sent + (end - sent) * ratio) / file.size),
+          );
+          break;
+        } catch (err) {
+          // ۴۰۹ یعنی سرور جای دیگری است؛ از همان‌جا ادامه بده نه از اول.
+          if (err.status === 409 && typeof err.data?.received === "number") {
+            sent = err.data.received;
+            break;
+          }
+          const retryable = !err.status || err.status >= 500 || err.status === 400;
+          if (!retryable || attempt >= 3) throw err;
+          await new Promise((r) => setTimeout(r, 1000 * attempt));
+
+          // پیش از تلاش دوباره بپرس سرور تا کجا گرفته — تکهٔ نیمه‌رسیده
+          // نباید دوباره از ابتدای خودش فرستاده شود.
+          try {
+            const st = await api.call(`/api/uploads/status?id=${uploadId}`, { method: "GET" });
+            if (typeof st?.received === "number") sent = st.received;
+          } catch {
+            /* اگر نشد، از همان `sent` فعلی ادامه می‌دهیم */
+          }
+        }
+      }
+      if (res) sent = end;
+      if (res && res.sessionId) return res;
+    }
+    throw new Error("آپلود کامل شد ولی پاسخی نگرفتیم.");
+  })();
+}
+
 async function upload(file) {
   fail($("send-err"), "");
   const seconds = await durationOf(file);
@@ -676,28 +741,23 @@ async function upload(file) {
      * فقط خطای شبکه و ۵xx دوباره امتحان می‌شوند: ۴۰۲ و ۴۰۰ جوابِ درستِ
      * سرورند و تکرارشان فقط وقت کاربر را می‌گیرد.
      */
-    const MAX_TRIES = 3;
-    for (let attempt = 1; ; attempt++) {
-      try {
-        out = await uploadWithProgress(`/api/sessions/upload?${qs}`, file, (ratio) => {
-          const pct = Math.min(99, Math.round(ratio * 100));
-          $("up-fill").style.width = `${pct}%`;
-          $("up-title").textContent = `${fa(pct)}٪ فرستاده شد`;
-          $("up-note").textContent =
-            `${fa(mb(file.size * ratio))} از ${fa(total)} مگابایت` +
-            (attempt > 1 ? ` — تلاش ${fa(attempt)}` : "");
-        });
-        break;
-      } catch (err) {
-        const retryable = !err.status || err.status >= 500;
-        if (!retryable || attempt >= MAX_TRIES) throw err;
+    const show = (ratio) => {
+      const pct = Math.min(99, Math.round(ratio * 100));
+      $("up-fill").style.width = `${pct}%`;
+      $("up-title").textContent = `${fa(pct)}٪ فرستاده شد`;
+      $("up-note").textContent = `${fa(mb(file.size * ratio))} از ${fa(total)} مگابایت`;
+    };
 
-        $("up-fill").style.width = "0%";
-        $("up-title").textContent = "ارتباط قطع شد، دوباره تلاش می‌کنم…";
-        $("up-note").textContent = `تلاش ${fa(attempt + 1)} از ${fa(MAX_TRIES)}`;
-        await new Promise((r) => setTimeout(r, 1500 * attempt));
-      }
-    }
+    /**
+     * فایل بزرگ تکه‌تکه می‌رود، کوچک یک‌تکه.
+     *
+     * زیر یک تکه، تقسیم‌کردن فقط یک رفت‌وبرگشت اضافه می‌سازد بی‌آنکه چیزی
+     * را امن‌تر کند — شکست در آن اندازه به‌هرحال یعنی از اول.
+     */
+    out =
+      file.size > CHUNK_BYTES
+        ? await uploadChunked(qs.toString(), file, show)
+        : await uploadWithProgress(`/api/sessions/upload?${qs}`, file, show);
 
     /**
      * رسیدنِ آخرین بایت پایانِ کار نیست.
