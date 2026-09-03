@@ -1195,22 +1195,52 @@ handlers.on(
      * او خواسته بودیم. فایل که همان‌جاست و `file_id` معتبر است؛ اگر شکست
      * گذرا باشد (شبکه، ۵xx) خودمان باید دوباره بزنیم.
      *
+     * **چرا شش تلاش و نه سه:** اندازه‌گیری روی بله نشان داد سرورِ فایل حدود
+     * یک‌سومِ مواقع اصلاً جواب نمی‌دهد، و این شکست **مستقل** است نه پایدار —
+     * در همان دوازده آزمون، هر شکست با تلاش بعدی جبران شد. با مهلت هشت
+     * ثانیه‌ایِ سرآیند، هر تلاشِ ناموفق ارزان است، پس تعداد بیشتر بهتر از
+     * تسلیم‌شدن زودهنگام است: با نرخ شکست یک‌سوم، سه تلاش یعنی ۳٫۷٪ شکستِ
+     * کامل ولی شش تلاش یعنی ۰٫۱۴٪ — بیست‌وشش برابر بهتر، به قیمت بدترین
+     * حالتِ حدود ۵۳ ثانیه به‌جای ۲۶.
+     *
+     * تأخیر هم کوتاه و ثابت است. عقب‌نشینیِ نمایی برای سروری است که زیر بار
+     * است؛ اینجا شکست تصادفی است نه ازدحام، پس صبرِ بیشتر چیزی را بهتر
+     * نمی‌کند و فقط کاربر را پشت پیامِ ساکن نگه می‌دارد.
+     *
      * `FileTooLargeError` استثناست: تکرارش قطعاً به همان نتیجه می‌رسد، پس
      * بلافاصله بالا می‌رود.
      */
+    const MAX_TRIES = 6;
     let lastErr: unknown;
     let dl: Awaited<ReturnType<typeof downloadTelegramFile>> | null = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
       try {
         dl = await downloadTelegramFile(ctx.api, req);
+        if (attempt > 1) logger.info({ attempt }, "download succeeded after retry");
         break;
       } catch (e) {
         if (e instanceof FileTooLargeError) throw e;
         lastErr = e;
         logger.warn({ err: String(e), attempt }, "download attempt failed");
-        if (attempt < 3) {
+        if (attempt < MAX_TRIES) {
           lastShown = 0;
-          await new Promise((r) => setTimeout(r, attempt * 1500));
+          /**
+           * پیام باید **تکان بخورد**.
+           *
+           * سرور بله یک‌سوم مواقع جواب نمی‌دهد و تلاش دوباره می‌تواند تا
+           * حدود یک دقیقه طول بکشد. پیامِ ساکنِ «دارم فایلو می‌گیرم…» در آن
+           * مدت دقیقاً همان چیزی است که کاربر «گیر کرده» می‌خواندش و فایل را
+           * دوباره می‌فرستد — که کار را بدتر می‌کند.
+           */
+          void ctx.api
+            .editMessageText(
+              ctx.chat!.id,
+              statusMsg.message_id,
+              `⬇️ سرور ${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} جواب نداد، ` +
+                `دارم دوباره تلاش می‌کنم… (${toFaDigits(attempt + 1)} از ${toFaDigits(MAX_TRIES)})`,
+            )
+            .catch(() => {});
+          await new Promise((r) => setTimeout(r, 800));
         }
       }
     }
