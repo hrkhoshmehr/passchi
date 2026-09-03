@@ -51,10 +51,16 @@ function httpError(status: number, body: unknown): Error {
   });
 }
 
-export function createTusServer(deps: TusDeps): Server {
-  const store = new FileStore({ directory: deps.uploadDir });
+/** آپلودِ رهاشده پس از این مدت منقضی و جارو می‌شود — هم‌تراز با سقفِ `.part`. */
+const TUS_EXPIRE_MS = 60 * 60 * 1000;
 
-  return new Server({
+export function createTusServer(deps: TusDeps): Server {
+  const store = new FileStore({
+    directory: deps.uploadDir,
+    expirationPeriodInMilliseconds: TUS_EXPIRE_MS,
+  });
+
+  const server = new Server({
     path: "/api/tus",
     datastore: store,
     maxSize: deps.maxSize,
@@ -129,4 +135,17 @@ export function createTusServer(deps: TusDeps): Server {
       };
     },
   });
+
+  /**
+   * آپلودهای نیمه‌کارهٔ رهاشده را دوره‌ای جارو کن.
+   *
+   * آپلودِ کامل را `onUploadFinish` از store بیرون می‌برد؛ ولی آپلودی که
+   * کاربر وسطِ راه رها کرد (POST زد، تمام نکرد) در پوشه می‌ماند. بی این، مثل
+   * `.part`های مسیرِ دست‌ساز تلنبار می‌شوند.
+   */
+  setInterval(() => {
+    server.cleanUpExpiredUploads().catch((e: unknown) => deps.log({ err: String(e) }, "tus: جاروی انقضا شکست"));
+  }, 15 * 60_000).unref();
+
+  return server;
 }
