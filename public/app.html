@@ -451,6 +451,12 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
   </div>
 </nav>
 
+<!--
+  کتابخانهٔ tus (آپلودِ ازسرگیری‌پذیر) از سرورِ **خودمان**، نه CDN — چون
+  اینترنتِ ایران CDNهای خارجی را می‌بندد. اسکریپتِ کلاسیک است، پس پیش از
+  ماژولِ به‌تعویق‌افتادهٔ `app.js` اجرا می‌شود و `window.tus` آماده است.
+-->
+<script src="/tus.min.js"></script>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

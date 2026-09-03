@@ -978,6 +978,80 @@ function uploadChunked(qs, file, onPercent) {
   })();
 }
 
+/**
+ * اندازهٔ تکهٔ tus.
+ *
+ * tus حتی وسطِ یک PATCH هم offset را نگه می‌دارد، پس قطعی فاجعه نیست؛ ولی
+ * تکهٔ کوچک‌تر یعنی هر درخواست کوتاه‌تر و کمتر به سقفِ زمانیِ تونل می‌خورد.
+ * روی ~۲۲ کیلوبایت‌برثانیه، ۲ مگابایت حدودِ ۹۰ ثانیه است — زیرِ سقفِ ۱۲۰
+ * ثانیه‌ایِ تونل. قابلِ تنظیم با localStorage برای آزمونِ مقایسه.
+ */
+const TUS_CHUNK = (Number(localStorage.getItem("tus_chunk_mb")) || 2) * 1024 * 1024;
+
+/**
+ * آپلود با پروتکل **tus** (ترتیبی، ازسرگیری‌پذیر).
+ *
+ * برخلافِ مسیرِ دست‌سازِ موازی، اینجا offset و ازسرگیری و بازیابیِ پاسخِ
+ * گم‌شده در خودِ پروتکل است: اگر اتصال بیفتد، کتابخانه با `HEAD` می‌پرسد تا
+ * کجا رسیده و از همان‌جا ادامه می‌دهد. `findPreviousUploads` هم یعنی اگر
+ * کاربر همان فایل را دوباره بفرستد، از جایی که مانده جلو می‌رود نه از صفر.
+ *
+ * شکلِ خطا و نتیجه عمداً همان چیزی است که `uploadChunked` می‌دهد (`status`،
+ * `data`، و `out` با `sessionId`)، تا `upload()` لازم نباشد دو حالت را جدا کند.
+ */
+function uploadViaTus(file, meta, onPercent) {
+  return new Promise((resolve, reject) => {
+    if (!window.tus) {
+      reject(new Error("کتابخانهٔ آپلود بار نشد. صفحه را تازه کن."));
+      return;
+    }
+    const md = { ext: meta.ext, duration: String(meta.seconds), filename: file.name };
+    if (meta.courseId) md.courseId = String(meta.courseId);
+
+    const upload = new tus.Upload(file, {
+      endpoint: "/api/tus",
+      chunkSize: TUS_CHUNK,
+      metadata: md,
+      headers: api.token ? { Authorization: `Bearer ${api.token}` } : {},
+      // صفرِ اول یعنی «فوراً یک بار دوباره»، بعد فاصله‌ها بازتر می‌شوند.
+      retryDelays: [0, 1000, 3000, 6000, 10000, 15000],
+      removeFingerprintOnSuccess: true,
+      onProgress: (sent, tot) => {
+        if (tot > 0) onPercent(sent / tot);
+      },
+      onError: (err) => {
+        const resp = err && err.originalResponse;
+        const status = resp ? resp.getStatus() : 0;
+        let data = {};
+        try {
+          data = resp ? JSON.parse(resp.getBody() || "{}") : {};
+        } catch {
+          /* بدنهٔ غیرJSON یعنی خطای پراکسی */
+        }
+        reject(
+          Object.assign(new Error(data.error || err.message || "آپلود ناموفق بود."), { status, data }),
+        );
+      },
+      onSuccess: (payload) => {
+        let data = {};
+        try {
+          data = JSON.parse(payload.lastResponse.getBody() || "{}");
+        } catch {
+          /* نباید بیفتد؛ سرور JSON می‌دهد */
+        }
+        if (data && data.sessionId) resolve(data);
+        else reject(new Error("آپلود کامل شد ولی پاسخی نگرفتیم."));
+      },
+    });
+
+    // اگر همان فایل قبلاً نیمه‌کاره مانده، از همان‌جا ادامه بده نه از صفر.
+    upload.findPreviousUploads().then((prev) => {
+      if (prev.length > 0) upload.resumeFromPreviousUpload(prev[0]);
+      upload.start();
+    });
+  });
+}
+
 async function upload(file) {
   fail($("send-err"), "");
   const seconds = await durationOf(file);
@@ -1082,7 +1156,18 @@ async function upload(file) {
      *
      * یک مسیر یعنی یک رفتار: هرچه رسید می‌ماند و از همان‌جا ادامه پیدا می‌کند.
      */
-    out = await uploadChunked(qs.toString(), file, show);
+    /**
+     * **پیش‌فرض tus است؛ مسیرِ دست‌سازِ موازی برای مقایسه می‌ماند.**
+     *
+     * `localStorage.upload_mode = "chunked"` مسیرِ قدیمیِ موازی را برمی‌گرداند
+     * تا بشود سرعت و پایداریِ دو روش را روی همین اتصال سنجید. پیش‌فرض tus است
+     * چون ازسرگیری و بازیابیِ پاسخِ گم‌شده‌اش را دست‌ساز نداریم.
+     */
+    if (localStorage.getItem("upload_mode") === "chunked") {
+      out = await uploadChunked(qs.toString(), file, show);
+    } else {
+      out = await uploadViaTus(file, { seconds, ext, courseId }, show);
+    }
 
     /**
      * رسیدنِ آخرین بایت پایانِ کار نیست.

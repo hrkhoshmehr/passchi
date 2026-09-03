@@ -37,7 +37,7 @@ const uploadFn = server.slice(
 );
 check("تابع confirmSession وجود دارد", server.includes("async function confirmSession"));
 check("آپلود دیگر startJob نمی‌زند", !uploadFn.includes("startJob("));
-check("آپلود مدت را خودش اندازه می‌گیرد", /await probe\(dest\)/.test(uploadFn));
+check("آپلود مدت را خودش اندازه می‌گیرد", /await probe\(srcFile\)/.test(server));
 check("آپلود قیمت را برمی‌گرداند", /costCoins: costCoins\(sec\)/.test(uploadFn));
 check("فایلِ بی‌مدت رد می‌شود", /if \(sec <= 0\)/.test(uploadFn));
 

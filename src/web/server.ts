@@ -28,6 +28,8 @@ import { deliverToBot } from "../bot/deliver.js";
 import { archiveAudio, archiveFailure, archiveReport, audioCaption } from "../bot/archive.js";
 import { liveMessage, notifyUser } from "../bot/notify.js";
 import { progressMessage } from "../bot/strings.js";
+import { createTusServer } from "./tus.js";
+import type { Server as TusServer } from "@tus/server";
 import { probe } from "../audio/ffmpeg.js";
 import { getProgress, setProgress } from "./progress.js";
 import { startJob } from "../jobs/service.js";
@@ -829,12 +831,6 @@ async function completeIfWhole(
     return json(res, 200, { received: contiguous(prog) });
   }
 
-  // فایل کامل است، ببرش به مسیر صوت و مثل آپلود یک‌تکه ادامه بده.
-  const sessionId = shortId();
-  const ext = (url.searchParams.get("ext") ?? "ogg").replace(/[^a-z0-9]/gi, "").slice(0, 5) || "ogg";
-  const dest = path.join(config.audioDir, `${sessionId}.${ext}`);
-  await fsp.mkdir(config.audioDir, { recursive: true });
-
   /**
    * فایل دقیقاً به اندازهٔ اعلام‌شده بریده می‌شود.
    *
@@ -843,12 +839,12 @@ async function completeIfWhole(
    * بی‌معنا ته صوت، که ffprobe را گیج می‌کند.
    */
   await fsp.truncate(part, size).catch(() => {});
-  await fsp.rename(part, dest);
 
+  // نامِ نهایی و ساختِ جلسه داخلِ `finishUpload`؛ اینجا فقط فایلِ کامل را می‌دهیم.
   return finishUpload(res, {
     userId,
-    sessionId,
-    dest,
+    dest: part,
+    ext: (url.searchParams.get("ext") ?? "ogg").replace(/[^a-z0-9]/gi, "").slice(0, 5) || "ogg",
     declaredSec: Math.max(0, Number(url.searchParams.get("duration") ?? 0)),
     courseId: Number(url.searchParams.get("courseId") ?? 0) || null,
   });
@@ -938,7 +934,7 @@ async function uploadAudio(
     });
   }
 
-  return finishUpload(res, { userId, sessionId, dest, declaredSec, courseId });
+  return finishUpload(res, { userId, dest, ext, declaredSec, courseId });
 }
 
 /**
@@ -948,57 +944,95 @@ async function uploadAudio(
  * بگیرد؛ دو نسخه از این منطق یعنی روزی یکی از دو مسیر بی‌صدا از دیگری عقب
  * می‌ماند و قیمتی که کاربر می‌بیند با آنچه کم می‌شود فرق می‌کند.
  */
-async function finishUpload(
-  res: Res,
-  o: { userId: number; sessionId: string; dest: string; declaredSec: number; courseId: number | null },
-): Promise<void> {
-  const { userId, sessionId, dest, declaredSec, courseId } = o;
+/**
+ * قیمتی که پس از آپلود به کاربر نشان داده می‌شود.
+ *
+ * جدا شد تا مسیرِ دست‌سازِ تکه‌تکه و tus هر دو **یک** منطقِ ساختِ جلسه را
+ * بگیرند، بی‌آنکه به `res` وابسته باشند — tus خودش پاسخ را می‌سازد.
+ */
+type UploadResult =
+  | { status: 200; body: { sessionId: string; durationSec: number; costCoins: number; haveCoins: number; enough: boolean } }
+  | { status: 400 | 402; body: { error: string } };
+
+/**
+ * فایلِ کاملِ روی دیسک را به یک جلسهٔ `queued` تبدیل می‌کند: مدت را می‌سنجد،
+ * فایل را به مسیرِ صوت می‌برد، و قیمت را برمی‌گرداند. **هیچ سکه‌ای کم نمی‌شود**؛
+ * آن منتظرِ `confirm` می‌ماند.
+ *
+ * `srcFile` می‌تواند هرجایی باشد (تکه‌تکه در `audioDir` می‌سازد، tus در پوشهٔ
+ * خودش)؛ اینجا با `rename` به نامِ نهایی برده می‌شود.
+ */
+async function finalizeUpload(o: {
+  userId: number;
+  srcFile: string;
+  ext: string;
+  declaredSec: number;
+  courseId: number | null;
+}): Promise<UploadResult> {
+  const { userId, srcFile, ext, declaredSec, courseId } = o;
   const u = getUser(userId)!;
 
-  const stat = await fsp.stat(dest);
-  if (stat.size === 0) {
-    await fsp.unlink(dest).catch(() => {});
-    return json(res, 400, { error: "فایل خالی است." });
+  const stat = await fsp.stat(srcFile).catch(() => null);
+  if (!stat || stat.size === 0) {
+    await fsp.unlink(srcFile).catch(() => {});
+    return { status: 400, body: { error: "فایل خالی است." } };
   }
 
   /**
-   * مدت واقعی را **خودمان** اندازه می‌گیریم، نه از مرورگر.
-   *
-   * `duration` که اپ می‌فرستد از `<audio>` مرورگر می‌آید و برای بعضی قالب‌ها
-   * (به‌ویژه فایلی که کامل بافر نشده) صفر یا غلط است. رزرو اعتبار روی همین
-   * عدد انجام می‌شود، پس غلط‌بودنش یعنی جلسه‌ای که هزینه‌اش درست کسر نمی‌شود
-   * — و مهم‌تر، عددی که به کاربر برای تأیید نشان می‌دهیم باید همانی باشد که
-   * واقعاً از او کم می‌شود.
+   * مدت واقعی را **خودمان** اندازه می‌گیریم، نه از مرورگر: `duration`ِ مرورگر
+   * برای فایلی که کامل بافر نشده صفر یا غلط است، و قیمت روی همین عدد است.
    */
   let sec = declaredSec;
   try {
-    sec = Math.round((await probe(dest)).durationMs / 1000);
+    sec = Math.round((await probe(srcFile)).durationMs / 1000);
   } catch (e) {
-    logger.warn({ sessionId, err: String(e) }, "probe for duration failed");
+    logger.warn({ srcFile, err: String(e) }, "probe for duration failed");
   }
   if (sec <= 0) {
-    await fsp.unlink(dest).catch(() => {});
-    return json(res, 400, { error: "مدت این فایل خوانده نشد. فایل صوتی سالم بفرست." });
+    await fsp.unlink(srcFile).catch(() => {});
+    return { status: 400, body: { error: "مدت این فایل خوانده نشد. فایل صوتی سالم بفرست." } };
   }
+
+  const sessionId = shortId();
+  const safeExt = ext.replace(/[^a-z0-9]/gi, "").slice(0, 5) || "ogg";
+  const dest = path.join(config.audioDir, `${sessionId}.${safeExt}`);
+  await fsp.mkdir(config.audioDir, { recursive: true });
+  await fsp.rename(srcFile, dest);
 
   createSession(sessionId, userId, courseId);
   updateSession(sessionId, { mode: "full", download_route: "web", original_file: dest });
 
-  /**
-   * اینجا **هیچ کاری شروع نمی‌شود.**
-   *
-   * پیش‌تر آپلود مستقیم تحلیل را راه می‌انداخت: کاربر فایلش را می‌گذاشت و
-   * بی‌آنکه بداند چقدر خرج برمی‌دارد، سکه‌هایش کم می‌شد. حالا قیمت بر اساس
-   * مدتِ **اندازه‌گیری‌شده** برمی‌گردد و شروعِ کار منتظر تأیید صریح در
-   * `POST /api/sessions/:id/confirm` می‌ماند.
-   */
-  json(res, 200, {
-    sessionId,
-    durationSec: sec,
-    costCoins: costCoins(sec),
-    haveCoins: balanceCoins(u.credit_sec),
-    enough: u.credit_sec >= sec,
+  return {
+    status: 200,
+    body: {
+      sessionId,
+      durationSec: sec,
+      costCoins: costCoins(sec),
+      haveCoins: balanceCoins(u.credit_sec),
+      enough: u.credit_sec >= sec,
+    },
+  };
+}
+
+/**
+ * نسخهٔ HTTPِ `finalizeUpload` برای مسیرِ دست‌سازِ تکه‌تکه.
+ *
+ * فایل از قبل در `audioDir` است ولی با نامِ موقت؛ `finalizeUpload` آن را به
+ * نامِ نهایی `rename` می‌کند. `dest` و `sessionId`ِ ورودی دیگر لازم نیست —
+ * شناسه داخلِ `finalizeUpload` ساخته می‌شود تا با tus یکی باشد.
+ */
+async function finishUpload(
+  res: Res,
+  o: { userId: number; dest: string; ext: string; declaredSec: number; courseId: number | null },
+): Promise<void> {
+  const r = await finalizeUpload({
+    userId: o.userId,
+    srcFile: o.dest,
+    ext: o.ext,
+    declaredSec: o.declaredSec,
+    courseId: o.courseId,
   });
+  json(res, r.status, r.body);
 }
 
 /**
@@ -1326,6 +1360,26 @@ async function stampAssets(html: string): Promise<string> {
 
 // ─── راه‌اندازی ─────────────────────────────────────────────────────────────
 
+/**
+ * سرورِ tus، یک‌بار ساخته می‌شود.
+ *
+ * تنبل است چون `finalizeUpload` را می‌گیرد که پایین‌تر در همین فایل تعریف
+ * شده؛ ساختِ آنی هنگامِ بارگذاریِ ماژول ترتیبِ اعلان را حساس می‌کرد.
+ */
+let _tus: TusServer | null = null;
+function getTusServer(): TusServer {
+  if (!_tus) {
+    _tus = createTusServer({
+      uploadDir: path.join(config.workDir, "tus"),
+      maxSize: MAX_UPLOAD_BYTES,
+      tokenToUserId: (h) => (h?.startsWith("Bearer ") ? userIdFromToken(h.slice(7).trim()) : null),
+      finalize: finalizeUpload,
+      log: (o, msg) => logger.info(o, msg),
+    });
+  }
+  return _tus;
+}
+
 export function createWebServer(): http.Server {
   return http.createServer((req, res) => {
     /**
@@ -1354,6 +1408,23 @@ export function createWebServer(): http.Server {
      */
     res.setHeader("x-content-type-options", "nosniff");
     res.setHeader("referrer-policy", "same-origin");
+
+    /**
+     * tus **پیش از** مدیریتِ عمومیِ OPTIONS/CORS مسیریابی می‌شود.
+     *
+     * tus خودش OPTIONS و CORS و متدهای PATCH/HEAD/DELETE را مدیریت می‌کند؛
+     * اگر به بلوکِ عمومیِ زیر می‌رسید، آن فقط GET/POST/OPTIONS را مجاز
+     * می‌کرد و preflightِ tus (که PATCH می‌خواهد) می‌شکست.
+     */
+    if (url.pathname === "/api/tus" || url.pathname.startsWith("/api/tus/")) {
+      getTusServer()
+        .handle(req, res)
+        .catch((e: unknown) => {
+          logger.error({ err: String(e) }, "tus handler error");
+          if (!res.headersSent) res.writeHead(500).end();
+        });
+      return;
+    }
 
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
