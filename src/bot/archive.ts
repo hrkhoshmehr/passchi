@@ -109,6 +109,14 @@ export function audioCaption(i: {
   courseName: string | null;
   /** از کجا آمده — حالا که هر سه مسیر به یک کانال می‌ریزند، لازم است. */
   origin?: Platform;
+  /**
+   * اگر کاربر لینک فرستاده، خودِ آدرس.
+   *
+   * وقتی رونویسی یک جلسه بد در می‌آید، اولین سؤال این است که منبع چه بوده.
+   * برای فایل، خودِ صوتِ بایگانی‌شده جواب می‌دهد؛ برای لینک، آدرس هم لازم
+   * است تا بشود همان منبع را دوباره گرفت.
+   */
+  sourceUrl?: string;
 }): string {
   const out = [
     MODE_LABEL[i.mode] ?? i.mode,
@@ -117,6 +125,7 @@ export function audioCaption(i: {
     `⏱ ${fmtDuration(i.durationMs)}`,
   ];
   if (i.origin && i.origin !== "telegram") out.push(ORIGIN_LABEL[i.origin]);
+  if (i.sourceUrl) out.push(`🔗 ${escapeHtml(i.sourceUrl)}`);
   if (i.courseName) out.push(`📘 ${escapeHtml(i.courseName)}`);
   if (i.mode === "full") {
     out.push(`💸 ${fmtCost(Math.round(i.durationMs / 1000))}`);

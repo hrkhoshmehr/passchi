@@ -76,6 +76,13 @@ export interface AudioInfo {
   codec: string;
   formatName: string;
   sizeBytes: number;
+  /**
+   * فایل جریان ویدیوی واقعی دارد (نه فقط جلد آلبوم).
+   *
+   * `codec` بالا صوتِ داخل ظرف است، پس به‌تنهایی نمی‌گوید ورودی یک mp3 است
+   * یا ضبط تصویریِ یک کلاس آنلاین. این پرچم آن تفاوت را نگه می‌دارد.
+   */
+  hasVideo: boolean;
 }
 
 export async function probe(file: string): Promise<AudioInfo> {
@@ -85,18 +92,32 @@ export async function probe(file: string): Promise<AudioInfo> {
       "-v", "error",
       "-print_format", "json",
       "-show_format", "-show_streams",
-      "-select_streams", "a:0",
+      // همهٔ جریان‌ها خوانده می‌شوند نه فقط `a:0`: باید بدانیم فایل جریان
+      // ویدیو هم دارد یا نه. جریان صوتی در ادامه از میان همین‌ها جدا می‌شود.
       file,
     ],
     120_000,
   );
   if (code !== 0) throw new Error(`ffprobe failed: ${stderr.slice(-500)}`);
+  type Stream = Record<string, string> & { disposition?: Record<string, number> };
   const j = JSON.parse(stdout) as {
-    streams?: Array<Record<string, string>>;
+    streams?: Stream[];
     format?: Record<string, string>;
   };
-  const st = j.streams?.[0];
+  const streams = j.streams ?? [];
+  const st = streams.find((s) => s.codec_type === "audio");
   if (!st) throw new Error("هیچ جریان صوتی در فایل پیدا نشد.");
+
+  /**
+   * جلد آلبوم ویدیو نیست.
+   *
+   * خیلی از mp3ها یک جریان «ویدیو» دارند که در واقع یک عکسِ تک‌فریم است.
+   * اگر آن را ویدیو حساب کنیم، هر mp3 دارای کاور بی‌دلیل ترنسکد می‌شود.
+   * ffprobe خودش این‌ها را با `attached_pic` علامت می‌زند.
+   */
+  const hasVideo = streams.some(
+    (s) => s.codec_type === "video" && s.disposition?.attached_pic !== 1,
+  );
   const fmt = j.format ?? {};
   const durationSec = Number(st.duration || fmt.duration || 0);
   return {
@@ -107,6 +128,7 @@ export async function probe(file: string): Promise<AudioInfo> {
     codec: st.codec_name ?? "unknown",
     formatName: fmt.format_name ?? "unknown",
     sizeBytes: Number(fmt.size || 0),
+    hasVideo,
   };
 }
 

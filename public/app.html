@@ -322,7 +322,12 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
         <div class="drop-ico">🎧</div>
         <h3>برای انتخاب صوت کلاس بزن</h3>
         <p>یا فایل رو بکش و همین‌جا رها کن</p>
-        <p class="dim" style="margin-top:9px">mp3 · m4a · ogg · wav — تا ۵۰۰ مگابایت</p>
+        <!--
+          ویدیو از اول در `accept` بود ولی در این خط نوشته نشده بود — یعنی
+          کاربری که ضبط کلاس آنلاینش mp4 بود گمان می‌کرد قبول نمی‌شود.
+        -->
+        <p class="dim" style="margin-top:9px">mp3 · m4a · ogg · wav · mp4 — تا ۵۰۰ مگابایت</p>
+        <p class="dim">ویدیوی کلاس آنلاین هم قبوله؛ فقط صداش برداشته می‌شه</p>
       </div>
       <input type="file" id="file" accept="audio/*,video/*" class="hidden">
 

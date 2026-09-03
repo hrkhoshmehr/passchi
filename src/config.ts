@@ -242,8 +242,6 @@ export const config = {
   workDir: path.resolve(raw.DATA_DIR, "work"),
   outDir: path.resolve(raw.DATA_DIR, "out"),
   dbPath: path.resolve(raw.DATA_DIR, "kharkhoon.db"),
-  /** سقف دانلود Bot API عمومی: ۲۰ مگابایت. با local server عملاً ۲ گیگابایت. */
-  telegramDownloadLimitBytes: raw.TELEGRAM_API_ROOT ? 2_000 * 1024 * 1024 : 20 * 1024 * 1024,
 };
 
 export type Config = typeof config;

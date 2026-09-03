@@ -25,6 +25,7 @@ const tests = [
   "pdf-math",
   "miniapp-detect",
   "bale-plain",
+  "download-routing",
   "history-page",
   "app-send",
   "no-external",

@@ -16,13 +16,35 @@ import {
   shareStatus,
 } from "../billing/sharing.js";
 import * as S from "./strings.js";
-import { uid } from "./identity.js";
+import { isBale, uid } from "./identity.js";
 
-let botUsername: string | null = null;
+/**
+ * نام کاربری ربات، **به تفکیک سکو**.
+ *
+ * پیش از این یک متغیر تکی بود و اولین سکویی که صدا می‌زد آن را پر می‌کرد؛
+ * از آن به بعد کاربر بله لینکی با نام کاربری تلگرام می‌گرفت (یا برعکس).
+ * روی این پروژه هر دو ربات یک نام دارند، پس هیچ‌وقت دیده نمی‌شد — و روزی
+ * که نام‌ها فرق کنند بی‌صدا می‌شکست.
+ */
+const usernames: { telegram: string | null; bale: string | null } = {
+  telegram: null,
+  bale: null,
+};
 
+/**
+ * لینک دعوت، روی دامنهٔ همان سکو.
+ *
+ * **`t.me` داخل بله باز نمی‌شود.** لینک سفت‌شده یعنی هر کاربر بله که جلسه‌اش
+ * را با هم‌کلاسی‌ها به اشتراک می‌گذاشت، لینکی می‌فرستاد که برای گیرنده‌ها
+ * بن‌بست بود — و چون خودِ فرستنده رویش کلیک نمی‌کند، هیچ‌کس گزارش نمی‌داد.
+ *
+ * همان قاعدهٔ `links.ts`: دامنه از سکو می‌آید، نه از ثابتِ کد.
+ */
 export async function shareLink(api: Api, sessionId: string): Promise<string> {
-  botUsername ??= (await api.getMe()).username;
-  return `https://t.me/${botUsername}?start=j_${sessionId}`;
+  const platform = isBale(api) ? "bale" : "telegram";
+  usernames[platform] ??= (await api.getMe()).username ?? null;
+  const host = platform === "bale" ? "https://ble.ir" : "https://t.me";
+  return `${host}/${usernames[platform]}?start=j_${sessionId}`;
 }
 
 /** پیام دعوتی که فرستنده در گروه درس فوروارد می‌کند. */

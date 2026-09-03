@@ -114,7 +114,15 @@ check("location بدون search خطا نمی‌دهد", run("#foo=bar", {}, und
 {
   const inHtml = html.match(/<div class="drop" id="drop">([\s\S]*?)<\/div>\s*<input/);
   const inJs = src.match(/function resetDrop\(\)[\s\S]*?drop\.innerHTML =([\s\S]*?);\n\}/);
-  const words = (s) => (s ? (s.match(/[؀-ۿ]+/g) ?? []).join(" ") : null);
+  /**
+   * توضیحِ HTML به کاربر نشان داده نمی‌شود، پس نباید در مقایسه بیاید.
+   *
+   * بدون این، هر توضیحی که بالای این بلوک نوشته شود آزمون را قرمز می‌کند و
+   * تنها راهِ سبزکردنش پاک‌کردنِ همان توضیح است — یعنی آزمون داشت مستندسازی
+   * را جریمه می‌کرد، نه ناهماهنگی را.
+   */
+  const words = (s) =>
+    s ? ((s.replace(/<!--[\s\S]*?-->/g, "").match(/[؀-ۿ]+/g)) ?? []).join(" ") : null;
   check("متن کادر صوت در html پیدا شد", Boolean(inHtml));
   check("متن کادر صوت در resetDrop پیدا شد", Boolean(inJs));
   check(

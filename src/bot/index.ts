@@ -44,6 +44,7 @@ import { findIdentity, resolveIdentity } from "../db/identity.js";
 import { platformOf, setBaleApi, uid } from "./identity.js";
 import { sendDoc } from "./bale-upload.js";
 import { notifyUser } from "./notify.js";
+import { extractUrl, fetchUrlToFile, UrlFetchError, type FetchUrlResult } from "./fetch-url.js";
 
 export const bot = new Bot(
   requireKey("BOT_TOKEN"),
@@ -313,7 +314,11 @@ async function historyScreen(ctx: Context, page = 0, edit = false): Promise<void
   const total = countSessions(id);
 
   if (total === 0) {
-    await reply(ctx, "هنوز جلسه‌ای نفرستادی 📭\n\nیه فایل صوتی یا ویس بفرست تا شروع کنیم 🎧");
+    await reply(
+      ctx,
+      "هنوز جلسه‌ای نفرستادی 📭\n\nیه فایل صوتی، ویس یا ویدیو بفرست تا شروع کنیم 🎧\n\n" +
+        "<i>کلاست آنلاین بوده؟ لینک ضبطشو بفرست.</i>",
+    );
     return;
   }
 
@@ -439,7 +444,13 @@ async function sendPrompt(ctx: Context): Promise<void> {
       "دکمهٔ <b>📤 آپلود فایل</b> پایین رو بزن. یه صفحه باز می‌شه که همون‌جا فایلو انتخاب" +
         " می‌کنی و آپلود می‌شه — با اینترنت ملی و بدون محدودیت حجم.",
       "",
-      "<i>چه فوروارد کنی چه آپلود، نتیجه همین‌جا تو ربات برات میاد.</i>",
+      "<b>۳. اگه کلاست آنلاین بوده</b>",
+      "لینک ضبط جلسه رو همین‌جا بفرست — خودم دانلودش می‌کنم. ویدیو هم اشکالی نداره،" +
+        " فقط صداشو برمی‌دارم و بابت تصویر سکه‌ای نمی‌دی.",
+      "<i>لینک باید بدون ورود به حساب باز شه. اگه رمز می‌خواد، از مرورگر" +
+        " دانلودش کن و خود فایلو بفرست.</i>",
+      "",
+      "<i>هر سه راه، نتیجه همین‌جا تو ربات برات میاد.</i>",
       "",
       // موجودی و نرخ **پیش از** آپلود گفته می‌شود. پیش‌تر اینجا هیچ عددی
       // نبود: کاربر تازه صوت ۹۰ دقیقه‌ای را می‌فرستاد، منتظر می‌ماند، و
@@ -1048,11 +1059,26 @@ handlers.on("message:text", async (ctx) => {
   }
 
   const state = convo.get(id);
+
+  /**
+   * لینک صوت — ولی نه وسط گفت‌وگو.
+   *
+   * اگر کاربر در حال ثبت درس است، متنش اسم درس است حتی اگر شبیه لینک باشد.
+   * بیرون از گفت‌وگو، متنی که لینک دارد یعنی «این ضبط کلاسمه، بگیرش».
+   */
+  if (!state) {
+    const url = extractUrl(text);
+    if (url) return void (await handleLink(ctx, url));
+  }
+
   if (!state) {
     touchUser(ctx);
-    await reply(ctx, "یه فایل صوتی بفرست تا شروع کنم 🎧\n\n<i>یا از دکمه‌های پایین یکی رو بزن.</i>", {
-      reply_markup: mainKeyboard,
-    });
+    await reply(
+      ctx,
+      "یه فایل صوتی بفرست تا شروع کنم 🎧\n\n" +
+        "<i>اگه کلاست آنلاین بوده، لینک ضبطشو بفرست — خودم دانلودش می‌کنم.</i>",
+      { reply_markup: mainKeyboard },
+    );
     return;
   }
 
@@ -1070,7 +1096,7 @@ handlers.on("message:text", async (ctx) => {
       ctx,
       `✅ <b>${escapeHtml(c.name)}</b> ثبت شد.\n\n` +
         "<i>اصطلاحای تخصصی این درسو یاد می‌گیرم، پس هر جلسه دقیق‌تر میشم.</i>\n\n" +
-        "حالا صوت کلاسو بفرست 🎧",
+        "حالا صوت کلاسو بفرست 🎧\n\n<i>ویدیو و لینک ضبط جلسه هم قبوله.</i>",
     );
   }
 });
@@ -1098,17 +1124,29 @@ handlers.on(["message:photo", "message:document"], async (ctx, next) => {
 
 // ─── دریافت صوت ─────────────────────────────────────────────────────────────
 
-handlers.on(["message:audio", "message:voice", "message:document", "message:video_note"], async (ctx) => {
+handlers.on(
+  ["message:audio", "message:voice", "message:document", "message:video_note", "message:video"],
+  async (ctx) => {
   const u = touchUser(ctx);
   if (!u) return;
   const id = u.tg_id;
 
   const msg = ctx.message!;
-  const media =
-    msg.audio ?? msg.voice ?? msg.video_note ?? (msg.document?.mime_type?.startsWith("audio/") ? msg.document : null);
+  /**
+   * ویدیو هم پذیرفته می‌شود.
+   *
+   * کلاس آنلاین که ضبط می‌شود ویدیو است، و دانشجو همان را دارد. ffmpeg در
+   * تمام مسیرها با `-vn` صدا زده می‌شود، پس تصویر همان اول کنار گذاشته
+   * می‌شود و از آنجا به بعد فرقی با یک فایل صوتی ندارد.
+   */
+  const mediaDoc =
+    msg.document?.mime_type?.startsWith("audio/") || msg.document?.mime_type?.startsWith("video/")
+      ? msg.document
+      : null;
+  const media = msg.audio ?? msg.voice ?? msg.video ?? msg.video_note ?? mediaDoc;
 
   if (!media) {
-    await reply(ctx, "این صوت نیست 🤔 یه فایل صوتی یا ویس بفرست.");
+    await reply(ctx, "این صوت نیست 🤔 یه فایل صوتی، ویس یا ویدیو بفرست.");
     return;
   }
 
@@ -1132,14 +1170,14 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
     // پیشرفت را فقط برای فایل بزرگ نشان بده و با گام درشت — ویرایش پیام
     // در تلگرام محدودیت نرخ دارد و دانلود ۸۰ مگابایتی صدها بار صدا می‌زند.
     let lastShown = 0;
-    const dl = await downloadTelegramFile(ctx.api, {
+    const req = {
       fileId: media.file_id,
       chatId: ctx.chat!.id,
       messageId: msg.message_id,
       declaredSize: media.file_size ?? 0,
       destDir: config.audioDir,
       baseName: sessionId,
-      onProgress: (done, total) => {
+      onProgress: (done: number, total: number) => {
         if (total < 20 * 1024 * 1024) return;
         const p = Math.floor((done / total) * 10) * 10;
         if (p <= lastShown || p >= 100) return;
@@ -1148,38 +1186,198 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
           .editMessageText(ctx.chat!.id, statusMsg.message_id, `⬇️ دارم فایلو می‌گیرم… ${toFaDigits(p)}٪`)
           .catch(() => {});
       },
-    });
+    };
+
+    /**
+     * تلاش دوباره اینجاست، نه روی دوشِ کاربر.
+     *
+     * پیام قبلی می‌گفت «یه بار دیگه بفرست» — و کاربر شش بار فرستاد، چون از
+     * او خواسته بودیم. فایل که همان‌جاست و `file_id` معتبر است؛ اگر شکست
+     * گذرا باشد (شبکه، ۵xx) خودمان باید دوباره بزنیم.
+     *
+     * `FileTooLargeError` استثناست: تکرارش قطعاً به همان نتیجه می‌رسد، پس
+     * بلافاصله بالا می‌رود.
+     */
+    let lastErr: unknown;
+    let dl: Awaited<ReturnType<typeof downloadTelegramFile>> | null = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        dl = await downloadTelegramFile(ctx.api, req);
+        break;
+      } catch (e) {
+        if (e instanceof FileTooLargeError) throw e;
+        lastErr = e;
+        logger.warn({ err: String(e), attempt }, "download attempt failed");
+        if (attempt < 3) {
+          lastShown = 0;
+          await new Promise((r) => setTimeout(r, attempt * 1500));
+        }
+      }
+    }
+    if (!dl) throw lastErr;
     audioFile = dl.filePath;
     route = dl.route;
   } catch (e) {
     if (e instanceof FileTooLargeError) {
+      /**
+       * پیام باید کاری بگوید که **خودِ کاربر** بتواند انجام دهد — و راهی که
+       * واقعاً جواب می‌دهد.
+       *
+       * متن قبلی «ویس بفرست» را پیشنهاد می‌داد، که روی بله بی‌ربط است: سقف
+       * بله (۵۰ مگابایت) برای ویس و فایل یکی است. مینی‌اپ تا ۵۰۰ مگابایت
+       * می‌گیرد چون مستقیم روی سرور خودمان می‌نشیند و اصلاً از Bot API
+       * رد نمی‌شود — پس تنها راهِ درست برای فایل بزرگ همان است.
+       */
+      const limitMb = Math.floor(e.limitBytes / 1024 / 1024);
+      const gotMb = Math.round(e.sizeBytes / 1024 / 1024);
       await ctx.api.editMessageText(
         ctx.chat!.id,
         statusMsg.message_id,
-        // متن قبلی به دانشجو می‌گفت `TELEGRAM_API_ID` را ست کند — دستورالعملِ
-        // مدیر سیستم، روی صفحهٔ کسی که فقط صوت کلاس فرستاده. این شاخه تنها
-        // وقتی نیست که MTProto پیکربندی نشده باشد: وقتی دانلودِ MTProto هم
-        // وسط راه شکست بخورد به همین‌جا می‌رسیم. پس پیام باید کاری بگوید که
-        // **خودِ کاربر** بتواند انجام دهد.
-        "❌ نشد این فایلو بگیرم — حجمش زیاده.\n\n" +
-          "<b>راه‌حل:</b> همون فایلو به‌صورت <b>ویس</b> بفرست. تلگرام خودش فشرده‌ش می‌کنه و کیفیتش برای من کافیه.",
+        `❌ این فایل ${toFaDigits(gotMb)} مگه و از سقف ${toFaDigits(limitMb)} مگابایتیِ ` +
+          `${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} رد شده.\n\n` +
+          `<b>راه‌حل:</b> از دکمهٔ «${BTN.app}» فایلو بفرست — اونجا تا ۵۰۰ مگابایت می‌گیرم.\n` +
+          `<i>یا اگه کلاست ضبط آنلاین داره، لینکشو بفرست.</i>`,
         { parse_mode: "HTML" },
       );
       return;
     }
-    logger.error({ err: String(e) }, "download failed");
-    await ctx.api.editMessageText(ctx.chat!.id, statusMsg.message_id, "❌ نشد فایلو بگیرم. یه بار دیگه بفرست.");
+    logger.error({ err: String(e), platform: platformOf(ctx) }, "download failed");
+    await ctx.api.editMessageText(
+      ctx.chat!.id,
+      statusMsg.message_id,
+      `❌ چند بار تلاش کردم ولی نشد فایلو از سرور ${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} بگیرم.\n\n` +
+        `<b>این مشکل از سمت منه، نه تو.</b> از دکمهٔ «${BTN.app}» امتحان کن — ` +
+        `اون مسیر جداست و معمولاً کار می‌کنه.`,
+      { parse_mode: "HTML" },
+    );
     return;
   }
 
+  await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
+
+  await intakeAudio(ctx, {
+    sessionId,
+    audioFile,
+    downloadRoute: route,
+    messageId: msg.message_id,
+    fileId: media.file_id,
+    declaredDurationSec: durationSec,
+  });
+},
+);
+
+// ─── دریافت از لینک ─────────────────────────────────────────────────────────
+
+/**
+ * کلاس آنلاین لینک دارد، نه فایل.
+ *
+ * ضبط جلسه‌های اسکای‌روم و ادوبی کانکت و مشابهشان یک آدرس است که دانشجو
+ * دارد. پیش از این باید خودش دانلود می‌کرد و دوباره آپلود — روی اینترنت
+ * ایران، برای یک فایل چندصدمگابایتی، همان‌جا کار را رها می‌کرد.
+ *
+ * از لحظه‌ای که فایل روی دیسک نشست، هیچ فرقی با صوتِ فرستاده‌شده ندارد و از
+ * `intakeAudio` رد می‌شود. ویدیو هم مسئله‌ای نیست: ffmpeg همه‌جا `-vn` دارد.
+ */
+async function handleLink(ctx: Context, url: string): Promise<void> {
+  const u = touchUser(ctx);
+  if (!u) return;
+  const id = u.tg_id;
+
+  if (isBusy(String(id))) {
+    await reply(ctx, "یه کار دارم انجام می‌دم، صبر کن تموم شه 🙏");
+    return;
+  }
+
+  const sessionId = shortId();
+  const statusMsg = await ctx.reply("⬇️ دارم از لینک می‌گیرم…", { parse_mode: "HTML" });
+
+  let fetched: FetchUrlResult;
+  try {
+    // مثل مسیر تلگرام، پیشرفت با گام درشت نشان داده می‌شود — ویرایش پیام
+    // محدودیت نرخ دارد و یک دانلود بزرگ صدها بار صدا می‌زند.
+    let lastShown = 0;
+    fetched = await fetchUrlToFile({
+      url,
+      destDir: config.audioDir,
+      baseName: sessionId,
+      onProgress: (done, total) => {
+        if (total < 20 * 1024 * 1024) return;
+        const p = Math.floor((done / total) * 10) * 10;
+        if (p <= lastShown || p >= 100) return;
+        lastShown = p;
+        void ctx.api
+          .editMessageText(ctx.chat!.id, statusMsg.message_id, `⬇️ دارم از لینک می‌گیرم… ${toFaDigits(p)}٪`)
+          .catch(() => {});
+      },
+    });
+  } catch (e) {
+    // پیام کاربر از خودِ خطا می‌آید: هر شاخه دقیقاً می‌داند چه چیزی خراب شده
+    // و کاربر باید چه کار کند. یک پیام عمومی هر سه حالت را یکسان می‌کرد.
+    const text =
+      e instanceof UrlFetchError
+        ? `❌ ${e.userMessage}`
+        : "❌ نشد از این لینک فایلو بگیرم. یه بار دیگه امتحان کن.";
+    if (!(e instanceof UrlFetchError)) logger.error({ err: String(e), url }, "url fetch failed");
+    await ctx.api
+      .editMessageText(ctx.chat!.id, statusMsg.message_id, text, { parse_mode: "HTML" })
+      .catch(() => {});
+    return;
+  }
+
+  await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
+
+  await intakeAudio(ctx, {
+    sessionId,
+    audioFile: fetched.filePath,
+    downloadRoute: "url",
+    // لینک نه پیام صوتی دارد نه `file_id` — هر دو عمداً خالی می‌مانند
+    declaredDurationSec: 0,
+    sourceUrl: url,
+  });
+}
+
+/**
+ * از «فایل روی دیسک است» تا «کار شروع شد» — مسیر مشترک هر منبعی.
+ *
+ * فایلِ فرستاده‌شده و لینکِ دانلودشده از اینجا به بعد فرقی ندارند: هر دو یک
+ * صوت روی دیسک‌اند. این تابع عمداً بیرون کشیده شد چون بندهای زیر ترتیب حساسی
+ * دارند — بایگانی پیش از پردازش، مدت واقعی پیش از رزرو، و هشدار اعتبار پیش
+ * از هر کاری. دو نسخهٔ موازی از این ترتیب یعنی روزی یکی‌شان عقب می‌ماند.
+ */
+interface IntakeSpec {
+  sessionId: string;
+  audioFile: string;
+  downloadRoute: string;
+  /** پیام صوتی کاربر، اگر فایل فرستاده باشد. برای لینک وجود ندارد. */
+  messageId?: number;
+  /** `file_id` سکو، اگر از خودِ سکو آمده باشد. لینک ندارد. */
+  fileId?: string;
+  /** مدتی که سکو اعلام کرده؛ صفر یعنی خودمان باید probe کنیم. */
+  declaredDurationSec: number;
+  /** آدرس منبع، فقط وقتی از لینک آمده — برای بایگانی و اشکال‌زدایی. */
+  sourceUrl?: string;
+}
+
+async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
+  const u = touchUser(ctx);
+  if (!u) return;
+  const id = u.tg_id;
+  const { sessionId, audioFile } = spec;
+
   createSession(sessionId, id, null);
-  // شناسهٔ پیام صوتی نگه داشته می‌شود تا نتایج «ریپلای» همان پیام شوند —
-  // شرط لازم برای اینکه تلگرام زمان‌های داخل متن را لینک پخش کند.
+  /**
+   * شناسهٔ پیام صوتی نگه داشته می‌شود تا نتایج «ریپلای» همان پیام شوند —
+   * شرط لازم برای اینکه تلگرام زمان‌های داخل متن را لینک پخش کند.
+   *
+   * برای لینک چنین پیامی وجود ندارد: کاربر یک آدرس فرستاده نه صوت. آن‌جا
+   * این فیلدها خالی می‌مانند و بقیهٔ کد همین حالا هم با `audio_message_id`
+   * تهی کنار می‌آید (`linkable` در کارت جلسه).
+   */
   updateSession(sessionId, {
     audio_chat_id: ctx.chat!.id,
-    audio_message_id: msg.message_id,
-    audio_file_id: media.file_id,
-    download_route: route,
+    ...(spec.messageId !== undefined ? { audio_message_id: spec.messageId } : {}),
+    ...(spec.fileId !== undefined ? { audio_file_id: spec.fileId } : {}),
+    download_route: spec.downloadRoute,
   });
 
   /**
@@ -1199,7 +1397,6 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
   if (courseId) updateSession(sessionId, { course_id: courseId });
 
   updateSession(sessionId, { mode: "full" });
-  await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
 
   /**
    * یک نسخه به کانال بایگانی — که همیشه در تلگرام است، حتی برای کاربر بله.
@@ -1214,39 +1411,48 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
    * و دقیقاً به همین دلیل مسیر بله `await` نمی‌شود: فرستادن `file_id` یک
    * تماس کوتاه است، ولی آپلودِ ده‌ها مگابایت می‌تواند دقیقه‌ها طول بکشد و
    * کاربر بله را پشت یک قابلیتِ ادمین منتظر نگه دارد.
+   *
+   * صوتی که از لینک آمده `file_id` ندارد — هیچ سکویی آن را نمی‌شناسد — پس
+   * مثل بله از روی فایل آپلود می‌شود و به همان دلیل `await` نمی‌شود.
    */
   const platform = platformOf(ctx);
-  const caption = audioCaption({
-    sender: { tgId: id, name: u.name, username: u.username },
-    mode: "full",
-    durationMs: durationSec * 1000,
-    sessionId,
-    courseName: courseId ? (getCourse(courseId)?.name ?? null) : null,
-    origin: platform,
-  });
-  if (platform === "bale") {
-    void archiveAudio(sessionId, { path: audioFile }, caption);
-  } else {
-    await archiveAudio(sessionId, { fileId: media.file_id }, caption);
-  }
 
   /**
-   * مدت واقعی — نه فقط آنچه تلگرام گفته.
+   * مدت واقعی — نه فقط آنچه سکو گفته.
    *
    * تلگرام برای `audio` و `voice` مدت را می‌دهد ولی برای فایلی که به‌صورت
-   * **سند** فرستاده شده اغلب نمی‌دهد و `durationSec` صفر می‌ماند. رزرو اعتبار
-   * روی همین عدد انجام می‌شود، پس صفر یعنی جلسه‌ای که هزینه‌اش کسر نمی‌شود.
+   * **سند** فرستاده شده اغلب نمی‌دهد و صفر می‌ماند؛ لینک هم که اصلاً هیچ
+   * مدتی همراهش نیست. رزرو اعتبار روی همین عدد انجام می‌شود، پس صفر یعنی
+   * جلسه‌ای که هزینه‌اش کسر نمی‌شود.
    *
-   * فایل همین‌جا روی دیسک هست، پس وقتی تلگرام ساکت است خودمان می‌پرسیم.
+   * فایل همین‌جا روی دیسک هست، پس وقتی سکو ساکت است خودمان می‌پرسیم.
    * شکستِ probe نباید مسیر را بشکند: در آن حالت مثل قبل جلو می‌رویم.
+   *
+   * probe **پیش از** بایگانی صدا زده می‌شود تا عنوانِ نسخهٔ ادمین هم مدت
+   * درست را داشته باشد، نه صفرِ اعلام‌نشده.
    */
-  let effectiveSec = durationSec;
+  let effectiveSec = spec.declaredDurationSec;
   if (effectiveSec === 0) {
     try {
       effectiveSec = Math.round((await probe(audioFile)).durationMs / 1000);
     } catch (e) {
       logger.warn({ sessionId, err: String(e) }, "probe for duration failed");
     }
+  }
+
+  const caption = audioCaption({
+    sender: { tgId: id, name: u.name, username: u.username },
+    mode: "full",
+    durationMs: effectiveSec * 1000,
+    sessionId,
+    courseName: courseId ? (getCourse(courseId)?.name ?? null) : null,
+    origin: platform,
+    ...(spec.sourceUrl ? { sourceUrl: spec.sourceUrl } : {}),
+  });
+  if (platform === "bale" || !spec.fileId) {
+    void archiveAudio(sessionId, { path: audioFile }, caption);
+  } else {
+    await archiveAudio(sessionId, { fileId: spec.fileId }, caption);
   }
 
   /**
@@ -1267,11 +1473,11 @@ handlers.on(["message:audio", "message:voice", "message:document", "message:vide
     sessionId,
     audioFile,
     courseId,
-    // مدت واقعی، نه فقط آنچه تلگرام گفته — مبنای رزرو اعتبار همین است
+    // مدت واقعی، نه فقط آنچه سکو گفته — مبنای رزرو اعتبار همین است
     declaredDurationSec: effectiveSec,
     mode: "full",
   });
-});
+}
 
 // ─── کلیک‌ها ────────────────────────────────────────────────────────────────
 

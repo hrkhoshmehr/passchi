@@ -41,6 +41,20 @@ const UNCOMPRESSED = new Set(["flac", "pcm_s16le", "pcm_s24le", "pcm_f32le", "pc
  * پرببیت‌ریت. آن‌جا فشرده‌سازی ۱۰ تا ۴۰ برابری است، نه ۱٫۲ برابری.
  */
 function shouldTranscode(info: AudioInfo): { transcode: boolean; reason: string } {
+  /**
+   * ویدیو همیشه ترنسکد می‌شود — پیش از هر بررسی دیگری.
+   *
+   * `probe` با `-select_streams a:0` صدا زده می‌شود، پس `codec` صوتِ **داخل**
+   * ظرف است نه خود ظرف. یک mp4 کلاس آنلاین با صدای aac از بررسی زیر سربلند
+   * بیرون می‌آمد («aac را Soniox می‌پذیرد») و کل فایل با جریان ویدیو آپلود
+   * می‌شد — صدها مگابایت تصویر که هیچ‌کس نمی‌خواهد، روی اینترنتی که همین
+   * حالا هم گلوگاه است.
+   *
+   * حالا که کلاس آنلاین لینک ضبط می‌فرستد، این مسیر مسیرِ رایج است نه حاشیه.
+   */
+  if (info.hasVideo) {
+    return { transcode: true, reason: "منبع ویدیوست؛ فقط جریان صدا برداشته می‌شود" };
+  }
   if (!SONIOX_FORMATS.has(info.codec)) {
     return { transcode: true, reason: `فرمت ${info.codec} را Soniox مستقیم نمی‌پذیرد` };
   }
