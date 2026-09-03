@@ -65,7 +65,15 @@ function makeServer(partFile) {
         }
         return { status: 200, received: contiguous(prog), duplicate: true };
       }
-      const fd = fs.openSync(partFile, fs.existsSync(partFile) ? "r+" : "w+");
+      /**
+       * عمداً **همان پرچمی** که سرور می‌زند، نه یک معادلِ راحت.
+       *
+       * نسخهٔ اول این آزمون `w+`/`r+` می‌زد و سبز بود، در حالی که سرور `a+`
+       * داشت و داده را خراب می‌کرد. آزمونی که پرچم را خودش انتخاب کند،
+       * دقیقاً همان چیزی را نمی‌سنجد که در تولید اجرا می‌شود.
+       */
+      if (!fs.existsSync(partFile)) fs.closeSync(fs.openSync(partFile, "wx"));
+      const fd = fs.openSync(partFile, "r+");
       fs.writeSync(fd, chunk, 0, chunk.length, offset);
       fs.closeSync(fd);
       addSpan(prog, offset, offset + chunk.length);
@@ -219,6 +227,24 @@ for (let i = 0; i < SIZE; i++) file[i] = (i * 7 + (i >> 11)) % 251;
     !/createWriteStream\(part[,)]/.test(srvTs) && !/\{\s*flags:\s*"a"\s*\}/.test(srvTs),
   );
   ok("و از `position` صریح استفاده می‌کند", /handle\.write\(c, 0, c\.length, at\)/.test(srvTs));
+
+  /**
+   * **`a+` ممنوع است، و این گران‌ترین درسِ این تغییر بود.**
+   *
+   * در حالت append هستهٔ سیستم آرگومانِ `position` را **نادیده می‌گیرد** و هر
+   * نوشتن به انتهای فایل می‌رود، هرچه به آن بگویی. با تکه‌های ترتیبی هرگز
+   * دیده نمی‌شد چون انتهای فایل تصادفاً جای درست بود؛ با موازی‌کاری سه نوشتن
+   * پشت سر هم چسبیدند.
+   *
+   * نتیجه‌اش فایلی بود با اندازهٔ **درست** و محتوای **غلط** — بدترین شکل
+   * خرابی، چون هر بررسیِ مبتنی بر اندازه از کنارش رد می‌شود. فقط مقایسهٔ
+   * بایت‌به‌بایت روی سرور زنده لو دادش (اولین اختلاف: بایت ۲۵۸۱۹۷).
+   */
+  ok(
+    "فایل با a+ باز نمی‌شود چون position را نادیده می‌گیرد",
+    !/fsp\.open\(part,\s*"a\+?"\)/.test(srvTs),
+  );
+  ok("و با r+ باز می‌شود که موقعیت را محترم می‌شمارد", /fsp\.open\(part,\s*"r\+"\)/.test(srvTs));
 
   /**
    * `stat().size` دیگر نباید معیارِ «چقدر رسیده» باشد — نه در `/status` و نه
