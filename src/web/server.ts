@@ -953,12 +953,69 @@ async function serveStatic(req: http.IncomingMessage, res: Res, pathname: string
     return;
   }
 
+  /**
+   * آدرس `app.js` و `styles.css` با **زمانِ خودِ فایل** مهر می‌خورد.
+   *
+   * **چرا لازم شد:** وب‌ویوی اندرویدِ بله `no-cache` را جدی نمی‌گیرد. پس از
+   * استقرارِ آپلود تکه‌تکه، گوشی همچنان نسخهٔ کهنهٔ `app.js` را اجرا می‌کرد و
+   * مستقیم به `/api/sessions/upload` می‌زد — یعنی مسیر یک‌تکهٔ قدیمی. در لاگ
+   * nginx **هیچ درخواستی برای `app.js` نبود** ولی POST می‌آمد؛ همین نشانهٔ
+   * قطعیِ کشِ گیرکرده است. نتیجه‌اش برای کاربر: فایل ۱۷ مگابایتی وسط راه
+   * می‌برید و **از اول** شروع می‌شد، چون کدِ از سرگیری اصلاً اجرا نمی‌شد.
+   *
+   * `no-cache` و ETag سرجایشان می‌مانند، ولی دیگر تنها خط دفاع نیستند: با
+   * عوض‌شدن فایل، آدرس هم عوض می‌شود و کشِ کهنه دیگر همان آدرس نیست. این
+   * همان درسِ [[passchi-deployment]] است — «HTML تازه + جاوااسکریپت کهنه»
+   * بدترین ترکیب است چون هیچ خطایی نمی‌دهد.
+   */
+  if (ext === ".html") {
+    const html = await fsp.readFile(file, "utf8");
+    const stamped = await stampAssets(html);
+    const body = Buffer.from(stamped, "utf8");
+    res.writeHead(200, {
+      "content-type": MIME[ext]!,
+      "cache-control": cache,
+      "content-length": String(body.length),
+      etag,
+    });
+    res.end(body);
+    return;
+  }
+
   res.writeHead(200, {
     "content-type": MIME[ext] ?? "application/octet-stream",
     "cache-control": cache,
     etag,
   });
   fs.createReadStream(file).pipe(res);
+}
+
+/**
+ * به هر `src`/`href` محلیِ js و css یک `?v=<زمان فایل>` بچسبان.
+ *
+ * فقط آدرس‌های محلی: `https://…` دست‌نخورده می‌ماند چون فایلش را نمی‌بینیم و
+ * مهرِ ساختگی روی آن بی‌معنی است.
+ */
+async function stampAssets(html: string): Promise<string> {
+  const stamps = new Map<string, string>();
+  const stampOf = async (rel: string): Promise<string> => {
+    const cached = stamps.get(rel);
+    if (cached !== undefined) return cached;
+    const v = await fsp
+      .stat(path.join(publicDir, rel.replace(/^\/+/, "")))
+      .then((s) => Math.floor(s.mtimeMs).toString(36))
+      .catch(() => "");
+    stamps.set(rel, v);
+    return v;
+  };
+
+  const targets = [...html.matchAll(/(?:src|href)="(\/[^"?]+\.(?:js|css))"/g)].map((m) => m[1]!);
+  for (const rel of new Set(targets)) {
+    const v = await stampOf(rel);
+    if (!v) continue;
+    html = html.split(`"${rel}"`).join(`"${rel}?v=${v}"`);
+  }
+  return html;
 }
 
 // ─── راه‌اندازی ─────────────────────────────────────────────────────────────

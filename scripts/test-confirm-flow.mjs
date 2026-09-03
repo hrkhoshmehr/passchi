@@ -122,9 +122,16 @@ check("مسیر precheck هست", /case "POST \/api\/sessions\/precheck"/.test(s
 check("precheck اعتبار را می‌سنجد", /sec > 0 && u\.credit_sec < sec/.test(server));
 check("precheck حجم را هم می‌سنجد", /sizeBytes > MAX_UPLOAD_BYTES/.test(server));
 check("اپ پیش از آپلود precheck می‌زند", /api\.call\("\/api\/sessions\/precheck"/.test(js));
+/**
+ * ترتیب روی **جای صداکردن** سنجیده می‌شود، نه جای تعریف تابع.
+ *
+ * `uploadChunked` بالاتر از `upload()` تعریف شده، پس مقایسهٔ سادهٔ اولین
+ * رخداد، تعریف را می‌گیرد نه فراخوانی — و آزمون بی‌آنکه چیزی خراب شده باشد
+ * قرمز می‌شد.
+ */
 check(
-  "precheck پیش از uploadWithProgress صدا زده می‌شود",
-  js.indexOf("/api/sessions/precheck") < js.indexOf("uploadWithProgress(`/api/sessions/upload"),
+  "precheck پیش از آپلود صدا زده می‌شود",
+  js.indexOf("/api/sessions/precheck") < js.indexOf("out = await uploadChunked("),
 );
 
 // ─── تلاش دوباره ────────────────────────────────────────────────────────────
@@ -140,12 +147,24 @@ check(
 //    است، که در `test-chunked-upload.mjs` جداگانه سنجیده می‌شود.
 //
 // پس اینجا فقط *وجودِ* تلاشِ کران‌دار و درست بررسی می‌شود، نه شکل نوشتنش.
-check("تلاش دوباره کران‌دار است", /attempt >= 3/.test(js));
+check("تلاش دوباره کران‌دار است", /strikes >= MAX_STRIKES/.test(js));
 check("فقط شبکه و ۵xx دوباره امتحان می‌شوند", /!err\.status \|\| err\.status >= 500/.test(js));
-check("۴۰۲ دوباره امتحان نمی‌شود", /if \(!retryable \|\| attempt >= 3\) throw err/.test(js));
+check("۴۰۲ دوباره امتحان نمی‌شود", /if \(!retryable \|\| \+\+strikes >= MAX_STRIKES\) throw err/.test(js));
+/**
+ * **یک مسیر، نه دو تا.**
+ *
+ * پیش‌تر فقط فایلِ بزرگ‌تر از یک تکه تقسیم می‌شد و بقیه به مسیر یک‌تکهٔ قدیمی
+ * می‌رفتند. وقتی وب‌ویوی بله نسخهٔ کهنهٔ `app.js` را اجرا کرد، همان مسیرِ
+ * کم‌آزموده بود که کاربر را با فایل ۱۷ مگابایتی به «از اول» انداخت. دو مسیر
+ * یعنی یکی‌شان همیشه عقب می‌ماند.
+ */
 check(
-  "فایل بزرگ تکه‌تکه می‌رود تا شکست، کل فایل را از دست ندهد",
-  /uploadChunked\(/.test(js) && /file\.size > CHUNK_BYTES/.test(js),
+  "هر آپلودی تکه‌تکه می‌رود — یک مسیر، نه دو تا",
+  /uploadChunked\(/.test(js) && !/file\.size > CHUNK_BYTES/.test(js),
+);
+check(
+  "مسیر یک‌تکهٔ قدیمی دیگر از اپ صدا زده نمی‌شود",
+  !/uploadWithProgress\(`\/api\/sessions\/upload/.test(js),
 );
 check("پس از شکست، از جایی که سرور رسیده ادامه می‌دهد", /uploads\/status/.test(js));
 

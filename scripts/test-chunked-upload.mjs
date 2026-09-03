@@ -137,7 +137,18 @@ ok("بایت‌ها سالم‌اند", fs.readFileSync(part).equals(file));
   }
   // مسیر تکه‌تکه باید واقعاً صدا زده شود، وگرنه همهٔ این‌ها کد مرده است.
   ok("app.js مسیر تکه‌تکه را صدا می‌زند", appJs.includes("uploadChunked("));
-  ok("و فقط برای فایل بزرگ", /file\.size > CHUNK_BYTES/.test(appJs));
+  /**
+   * **برای هر حجمی، نه فقط فایل بزرگ.**
+   *
+   * شاخهٔ `file.size > CHUNK_BYTES` برداشته شد: داشتنِ دو مسیر یعنی یکی‌شان
+   * کم‌آزموده می‌ماند، و وقتی وب‌ویوی بله نسخهٔ کهنهٔ `app.js` را اجرا کرد
+   * همان مسیرِ یک‌تکه بود که فایل ۱۷ مگابایتی را از اول شروع کرد.
+   */
+  ok("برای هر حجمی، نه فقط بزرگ", !/file\.size > CHUNK_BYTES/.test(appJs));
+  ok(
+    "شمارندهٔ خطا مشترک است تا درجازدن بی‌پایان نشود",
+    /MAX_STRIKES/.test(appJs) && /strikes = 0/.test(appJs),
+  );
 }
 
 fs.rmSync(dir, { recursive: true, force: true });

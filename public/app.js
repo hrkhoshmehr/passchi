@@ -613,46 +613,63 @@ function uploadChunked(qs, file, onPercent) {
 
   return (async () => {
     let sent = 0;
+    /**
+     * شمارشِ خطا **روی کل آپلود** است، نه روی هر تکه.
+     *
+     * اگر هر تکه شمارندهٔ خودش را داشته باشد، یک اتصالِ بد می‌تواند بی‌نهایت
+     * طول بکشد: هر تکه سه بار تلاش می‌کند و تکهٔ بعدی دوباره از سه شروع
+     * می‌کند. با شمارندهٔ مشترک، پیشرفتِ واقعی آن را صفر می‌کند و
+     * درجازدن بالاخره تسلیم می‌شود.
+     */
+    let strikes = 0;
+    const MAX_STRIKES = 8;
+
     while (sent < file.size) {
+      /**
+       * پارامترها **داخل** حلقه ساخته می‌شوند، بعد از هر به‌روزرسانیِ `sent`.
+       *
+       * باگ قبلی همین بود: `params` یک بار پیش از حلقهٔ تلاش ساخته می‌شد، پس
+       * وقتی تلاشِ دوباره `sent` را از `/status` تازه می‌کرد، درخواستِ بعدی
+       * همچنان **آفستِ کهنه** را می‌فرستاد — سرور ۴۰۹ می‌داد و آپلود در جا
+       * می‌زد تا تسلیم شود. یعنی همان «از اول رفتن» که گزارش شد.
+       */
       const end = Math.min(sent + CHUNK_BYTES, file.size);
-      const isFinal = end >= file.size;
       const params = new URLSearchParams(qs);
       params.set("id", uploadId);
       params.set("offset", String(sent));
-      if (isFinal) params.set("final", "1");
+      if (end >= file.size) params.set("final", "1");
 
-      let res;
-      // هر تکه تا سه بار؛ شکستِ یک تکه کل فایل را از دست نمی‌دهد.
-      for (let attempt = 1; ; attempt++) {
+      const from = sent;
+      try {
+        const res = await uploadWithProgress(
+          `/api/uploads/chunk?${params}`,
+          file.slice(from, end),
+          (ratio) => onPercent((from + (end - from) * ratio) / file.size),
+        );
+        sent = end;
+        strikes = 0; // پیشرفت واقعی — سابقهٔ خطا پاک می‌شود
+        if (res && res.sessionId) return res;
+        continue;
+      } catch (err) {
+        // ۴۰۹ یعنی سرور جای دیگری ایستاده؛ از همان‌جا ادامه بده، نه از اول.
+        if (err.status === 409 && typeof err.data?.received === "number") {
+          sent = err.data.received;
+          continue;
+        }
+        // ۴۰۲ و ۴۱۳ جوابِ درستِ سرورند؛ تکرارشان فقط وقت کاربر را می‌گیرد.
+        const retryable = !err.status || err.status >= 500 || err.status === 400;
+        if (!retryable || ++strikes >= MAX_STRIKES) throw err;
+
+        await new Promise((r) => setTimeout(r, Math.min(1000 * strikes, 4000)));
+
+        // سرور تا کجا گرفته؟ تکهٔ نیمه‌رسیده نباید از ابتدای خودش برود.
         try {
-          res = await uploadWithProgress(
-            `/api/uploads/chunk?${params}`,
-            file.slice(sent, end),
-            (ratio) => onPercent((sent + (end - sent) * ratio) / file.size),
-          );
-          break;
-        } catch (err) {
-          // ۴۰۹ یعنی سرور جای دیگری است؛ از همان‌جا ادامه بده نه از اول.
-          if (err.status === 409 && typeof err.data?.received === "number") {
-            sent = err.data.received;
-            break;
-          }
-          const retryable = !err.status || err.status >= 500 || err.status === 400;
-          if (!retryable || attempt >= 3) throw err;
-          await new Promise((r) => setTimeout(r, 1000 * attempt));
-
-          // پیش از تلاش دوباره بپرس سرور تا کجا گرفته — تکهٔ نیمه‌رسیده
-          // نباید دوباره از ابتدای خودش فرستاده شود.
-          try {
-            const st = await api.call(`/api/uploads/status?id=${uploadId}`, { method: "GET" });
-            if (typeof st?.received === "number") sent = st.received;
-          } catch {
-            /* اگر نشد، از همان `sent` فعلی ادامه می‌دهیم */
-          }
+          const st = await api.call(`/api/uploads/status?id=${uploadId}`, { method: "GET" });
+          if (typeof st?.received === "number") sent = st.received;
+        } catch {
+          /* اگر نشد، از همان `sent` فعلی ادامه می‌دهیم */
         }
       }
-      if (res) sent = end;
-      if (res && res.sessionId) return res;
     }
     throw new Error("آپلود کامل شد ولی پاسخی نگرفتیم.");
   })();
@@ -749,15 +766,20 @@ async function upload(file) {
     };
 
     /**
-     * فایل بزرگ تکه‌تکه می‌رود، کوچک یک‌تکه.
+     * **همه‌چیز از مسیر تکه‌تکه می‌رود، حتی فایل کوچک.**
      *
-     * زیر یک تکه، تقسیم‌کردن فقط یک رفت‌وبرگشت اضافه می‌سازد بی‌آنکه چیزی
-     * را امن‌تر کند — شکست در آن اندازه به‌هرحال یعنی از اول.
+     * پیش‌تر فقط فایلِ بزرگ‌تر از یک تکه تقسیم می‌شد و بقیه به مسیر یک‌تکهٔ
+     * قدیمی می‌رفتند. دو دلیل برای برداشتنِ آن شاخه:
+     *
+     * ۱. فایلِ زیر ۴ مگابایت هم تکه‌تکه می‌شود — فقط یک تکه — پس چیزی از
+     *    دست نمی‌رود و رفت‌وبرگشتِ اضافه‌ای هم نیست.
+     * ۲. مهم‌تر: داشتنِ دو مسیر یعنی یکی از آن‌ها کم‌استفاده و کم‌آزموده
+     *    می‌ماند. وقتی وب‌ویوی بله نسخهٔ کهنهٔ این فایل را اجرا کرد، همان
+     *    مسیر یک‌تکه بود که کاربر را به «از اول» انداخت.
+     *
+     * یک مسیر یعنی یک رفتار: هرچه رسید می‌ماند و از همان‌جا ادامه پیدا می‌کند.
      */
-    out =
-      file.size > CHUNK_BYTES
-        ? await uploadChunked(qs.toString(), file, show)
-        : await uploadWithProgress(`/api/sessions/upload?${qs}`, file, show);
+    out = await uploadChunked(qs.toString(), file, show);
 
     /**
      * رسیدنِ آخرین بایت پایانِ کار نیست.
