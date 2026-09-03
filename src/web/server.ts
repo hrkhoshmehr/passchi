@@ -382,9 +382,16 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
     if (uid === null) return;
     const id = (url.searchParams.get("id") ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
     if (!id) return json(res, 400, { error: "شناسهٔ آپلود نامعتبر است." });
-    const part = partPath(uid, id);
-    const received = await fsp.stat(part).then((s) => s.size).catch(() => 0);
-    return json(res, 200, { received });
+    /**
+     * **اندازهٔ فایل جواب نیست، طولِ پیوسته است.**
+     *
+     * با نوشتنِ موازی فایل می‌تواند سوراخ داشته باشد: تکه‌ای که در بایت ۸
+     * مگابایت نشسته فایل را ۸ مگابایتی می‌کند حتی اگر میانه‌اش نرسیده باشد.
+     * برگرداندنِ آن عدد یعنی کلاینت از جای اشتباه ادامه دهد و فایلِ سوراخ
+     * تحویل شود.
+     */
+    const prog = uploads.get(uploadKey(uid, id));
+    return json(res, 200, { received: prog ? contiguous(prog) : 0 });
   }
 
   // مسیرهای پارامتردار
@@ -462,14 +469,96 @@ function partPath(userId: number, uploadId: string): string {
 }
 
 /**
- * یک تکه از آپلود را می‌گیرد و به انتهای فایل نیمه‌کاره اضافه می‌کند.
+ * پیشرفتِ یک آپلودِ **موازی**، در حافظه.
  *
- * پارامترها در آدرس‌اند: `id` (شناسهٔ آپلود)، `offset` (چند بایت از قبل
- * نوشته شده)، و در تکهٔ آخر `final=1` به‌همراه همان `duration`/`ext`/`courseId`
- * که مسیر یک‌تکه می‌گیرد.
+ * **چرا دیگر `stat().size` کافی نیست:** تا وقتی تکه‌ها ترتیبی می‌آمدند و به
+ * انتهای فایل چسبانده می‌شدند، اندازهٔ فایل دقیقاً یعنی «چقدر رسیده». با
+ * نوشتنِ موازی این حرف **غلط** می‌شود: تکه‌ای که در بایت ۸ مگابایت می‌نشیند
+ * فایل را ۸ مگابایتی می‌کند حتی اگر مگابایت‌های ۲ تا ۸ هنوز نرسیده باشند —
+ * یعنی فایل سوراخ دارد ولی اندازه‌اش می‌گوید کامل است. اگر کلاینت به آن عدد
+ * تکیه کند، از جای اشتباه ادامه می‌دهد و فایل خراب تحویل می‌شود.
  *
- * `offset` صریح است تا تکهٔ تکراری — که با تلاش دوبارهٔ کلاینت کاملاً محتمل
- * است — دوباره نوشته نشود و فایل خراب نشود.
+ * پس بازه‌های رسیده صریح نگه داشته می‌شوند و «چقدر رسیده» یعنی **طولِ
+ * پیوستهٔ از صفر**، نه اندازهٔ فایل.
+ */
+type UploadProgress = {
+  /** بازه‌های `[start, end)` که واقعاً نوشته شده‌اند، مرتب و ادغام‌شده. */
+  spans: Array<[number, number]>;
+  /** آخرین دست‌درازی، برای جاروی آپلودهای رهاشده. */
+  touched: number;
+  /** آفستِ پایانِ تکهٔ پایانی — یعنی اندازهٔ واقعی فایل، وقتی رسیده باشد. */
+  finalAt: number | null;
+};
+
+const uploads = new Map<string, UploadProgress>();
+
+/** کلید در حافظه، هم‌شکل با نام فایل تا دو کاربر قاطی نشوند. */
+function uploadKey(userId: number, uploadId: string): string {
+  return `${userId}:${uploadId}`;
+}
+
+/**
+ * بازهٔ تازه را اضافه کن و هر چه هم‌پوشان است را در هم ادغام کن.
+ *
+ * ادغام لازم است چون تلاش دوباره می‌تواند بازه‌ای را بفرستد که با آنچه هست
+ * هم‌پوشانی دارد؛ بدون ادغام، فهرست بی‌جهت بلند می‌شود و «طولِ پیوسته» هم
+ * غلط درمی‌آید.
+ */
+function addSpan(p: UploadProgress, start: number, end: number): void {
+  if (end <= start) return;
+  p.spans.push([start, end]);
+  p.spans.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const s of p.spans) {
+    const last = merged[merged.length - 1];
+    if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]);
+    else merged.push([s[0], s[1]]);
+  }
+  p.spans = merged;
+}
+
+/**
+ * چند بایت **پیوسته از صفر** رسیده است.
+ *
+ * این همان عددی است که کلاینت باید از آن ادامه دهد. با تکه‌های موازی، فایل
+ * می‌تواند جلوتر از این عدد هم داده داشته باشد — ولی آن داده تا وقتی سوراخِ
+ * پیش از خود پر نشده قابل اتکا نیست.
+ */
+function contiguous(p: UploadProgress): number {
+  return p.spans.length > 0 && p.spans[0]![0] === 0 ? p.spans[0]![1] : 0;
+}
+
+/**
+ * آپلودهای رهاشده را جارو کن.
+ *
+ * بدون این، هر آپلودِ نیمه‌کاره که کاربر رهایش کرد یک ورودی در حافظه و یک
+ * فایل روی دیسک می‌ماند تا ابد. یک ساعت سخاوتمندانه است: کاربری که وسط
+ * آپلود اینترنتش قطع شود و ده دقیقه بعد برگردد، باید بتواند ادامه دهد.
+ */
+const UPLOAD_TTL_MS = 60 * 60 * 1000;
+
+async function sweepUploads(): Promise<void> {
+  const now = Date.now();
+  for (const [key, p] of uploads) {
+    if (now - p.touched < UPLOAD_TTL_MS) continue;
+    uploads.delete(key);
+    const [uid, id] = key.split(":");
+    await fsp.unlink(partPath(Number(uid), id!)).catch(() => {});
+  }
+}
+
+/**
+ * یک تکه از آپلود را در **جای خودش** می‌نویسد.
+ *
+ * **چرا موقعیتی و نه چسباندن به انتها:** کلاینت حالا چند تکه را هم‌زمان
+ * می‌فرستد، تا وقتی یکی منتظر پاسخ است بقیه بایت بفرستند و اتصال بیکار
+ * نماند. با `flags: "a"` این ممکن نبود — دو نوشتنِ هم‌زمان در هم می‌رفتند و
+ * فایل خراب می‌شد. حالا هر تکه با `position` صریح می‌نشیند، پس ترتیبِ رسیدن
+ * بی‌اهمیت است.
+ *
+ * پارامترها در آدرس‌اند: `id` (شناسهٔ آپلود)، `offset` (این تکه از کجای فایل
+ * است)، `total` (اندازهٔ کل فایل) و در تکهٔ پایانی `final=1` به‌همراه همان
+ * `duration`/`ext`/`courseId` که مسیر یک‌تکه می‌گیرد.
  */
 async function uploadChunk(
   req: http.IncomingMessage,
@@ -481,62 +570,191 @@ async function uploadChunk(
   if (!id) return json(res, 400, { error: "شناسهٔ آپلود نامعتبر است." });
 
   const offset = Math.max(0, Number(url.searchParams.get("offset") ?? 0));
+  const total = Math.max(0, Number(url.searchParams.get("total") ?? 0));
   const isFinal = url.searchParams.get("final") === "1";
+  const len = Number(req.headers["content-length"] ?? 0);
+
+  /**
+   * سقف **پیش از نوشتن** سنجیده می‌شود، نه حین آن.
+   *
+   * با تکه‌های موازی، «مجموع تا حالا» دیگر از اندازهٔ فایل درنمی‌آید، و
+   * فهمیدنِ عبور از سقف وسط نوشتن یعنی نیم‌گیگابایت را نوشته‌ایم و بعد
+   * می‌فهمیم. `offset + len` همان چیزی است که این تکه ادعا می‌کند.
+   */
+  if (offset + len > MAX_UPLOAD_BYTES || total > MAX_UPLOAD_BYTES) {
+    return json(res, 413, { error: "فایل خیلی بزرگ است." });
+  }
+
+  const key = uploadKey(userId, id);
+  let prog = uploads.get(key);
+  if (!prog) {
+    prog = { spans: [], touched: Date.now(), finalAt: null };
+    /**
+     * **پس از ری‌استارت، آنچه روی دیسک است از دست نرود.**
+     *
+     * نقشهٔ پیشرفت در حافظه است، پس خاموشیِ وسط آپلود آن را می‌برد در حالی
+     * که فایل `.part` سر جایش می‌ماند. بدون این، کلاینت `received: 0`
+     * می‌شنید و یک فایل نیم‌گیگابایتی را از اول می‌فرستاد — همان چیزی که
+     * این همه کار شد تا نیفتد.
+     *
+     * فقط بازهٔ `[0, size)` بازیابی می‌شود و نه بیشتر: با نوشتنِ موازی،
+     * فایل می‌تواند سوراخ داشته باشد و اندازه‌اش چیزی جلوتر از دادهٔ سالم
+     * را نشان دهد. آنچه پس از اولین سوراخ است دوباره فرستاده می‌شود —
+     * کمی کارِ دوباره، ولی هرگز فایلِ خراب.
+     *
+     * پس ادعای این بازیابی عمداً **کم‌تر از واقعیت** است، چون تنها خطای
+     * قابل‌قبول اینجا فرستادنِ دوبارهٔ چند مگابایت است، نه صوتی که سوراخ
+     * دارد و کاربر بابتش سکه داده.
+     */
+    const onDisk = await fsp.stat(part).then((s) => s.size).catch(() => 0);
+    if (onDisk > 0) {
+      addSpan(prog, 0, onDisk);
+      logger.info({ uploadId: id, bytes: onDisk }, "آپلود نیمه‌کاره از دیسک بازیابی شد");
+    }
+    uploads.set(key, prog);
+  }
+  prog.touched = Date.now();
+
   const part = partPath(userId, id);
   await fsp.mkdir(config.workDir, { recursive: true });
 
-  const have = await fsp.stat(part).then((s) => s.size).catch(() => 0);
-
-  // تکه‌ای که قبلاً کامل نوشته شده: پذیرفته‌شده اعلامش کن، دوباره ننویس.
-  if (offset < have) return json(res, 200, { received: have, duplicate: true });
-  if (offset > have) {
-    // شکاف یعنی تکه‌ای گم شده؛ کلاینت باید از `have` ادامه دهد نه جلوتر.
-    return json(res, 409, { received: have, error: "ترتیب تکه‌ها به هم خورده." });
+  /**
+   * تکه‌ای که قبلاً کامل نشسته: پذیرفته‌شده اعلامش کن، دوباره ننویس.
+   *
+   * برخلاف نسخهٔ ترتیبی، اینجا شکاف **خطا نیست**. تکهٔ جلوتر ممکن است پیش
+   * از تکهٔ عقب‌تر برسد و این عین انتظار است؛ ۴۰۹ دادن به آن یعنی جنگیدن با
+   * همان موازی‌کاری که می‌خواهیم.
+   */
+  const already = len > 0 && prog.spans.some(([s, e]) => s <= offset && offset + len <= e);
+  if (already) {
+    req.resume(); // بدنه را مصرف کن وگرنه اتصال معلق می‌ماند
+    return json(res, 200, { received: contiguous(prog), duplicate: true });
   }
 
-  let written = have;
+  let written = 0;
+  let fh: fsp.FileHandle | null = null;
   try {
+    // `a+` فایل را می‌سازد اگر نباشد و محتوای موجود را نمی‌برد؛ نوشتن هم
+    // چون `position` صریح دارد به انتها نمی‌چسبد.
+    fh = await fsp.open(part, "a+");
+    const handle = fh;
     await new Promise<void>((resolve, reject) => {
-      const out = fs.createWriteStream(part, { flags: "a" });
+      let pos = offset;
+      let pending = 0;
+      let ended = false;
+      let failed = false;
+      const settle = () => {
+        if (ended && pending === 0 && !failed) resolve();
+      };
       req.on("data", (c: Buffer) => {
-        written += c.length;
-        if (written > MAX_UPLOAD_BYTES) {
-          reject(new Error("فایل خیلی بزرگ است."));
+        if (failed) return;
+        if (len > 0 && written + c.length > len) {
+          // بدنه از آنچه هدر اعلام کرده بزرگ‌تر است — به آن اعتماد نکن.
+          failed = true;
+          reject(new Error("اندازهٔ تکه با هدر نمی‌خواند."));
           req.destroy();
-          out.destroy();
+          return;
         }
+        const at = pos;
+        pos += c.length;
+        written += c.length;
+        pending++;
+        req.pause();
+        handle.write(c, 0, c.length, at).then(
+          () => {
+            pending--;
+            req.resume();
+            settle();
+          },
+          (err) => {
+            pending--;
+            failed = true;
+            reject(err);
+          },
+        );
       });
-      req.pipe(out);
-      out.on("finish", () => resolve());
-      out.on("error", reject);
+      req.on("end", () => {
+        ended = true;
+        settle();
+      });
       // قطع‌شدن وسط یک تکه فاجعه نیست: آنچه نوشته شده می‌ماند و کلاینت از
       // همان‌جا ادامه می‌دهد. فقط لاگ می‌شود تا الگویش دیده شود.
       req.on("error", (err: Error) => {
+        failed = true;
         logger.warn({ uploadId: id, written, err: err.message }, "تکهٔ آپلود قطع شد");
         reject(new Error("ارتباط وسط تکه قطع شد."));
       });
       req.on("aborted", () => {
+        failed = true;
         logger.warn({ uploadId: id, written }, "کلاینت تکه را رها کرد");
         reject(new Error("ارتباط وسط تکه قطع شد."));
       });
     });
   } catch (e) {
-    // فایل نیمه‌کاره **پاک نمی‌شود** — همان چیزی است که ادامه را ممکن می‌کند.
-    const now = await fsp.stat(part).then((s) => s.size).catch(() => 0);
-    if (written > MAX_UPLOAD_BYTES) {
-      await fsp.unlink(part).catch(() => {});
-      return json(res, 413, { error: "فایل خیلی بزرگ است." });
-    }
-    return json(res, 400, { received: now, error: e instanceof Error ? e.message : "تکه نرسید." });
+    /**
+     * **آنچه واقعاً نوشته شد ثبت می‌شود، نه آنچه قرار بود.**
+     *
+     * تکه‌ای که وسط راه مُرد، بخشی از خودش را روی دیسک گذاشته. ثبت‌نکردنش
+     * یعنی دوباره فرستادنِ همان بایت‌ها؛ ثبتِ کاملش یعنی سوراخِ نادیده. پس
+     * دقیقاً همان مقداری که رسید ثبت می‌شود — نه بیشتر، نه کمتر.
+     */
+    if (written > 0) addSpan(prog, offset, offset + written);
+    await fh?.close().catch(() => {});
+    return json(res, 400, {
+      received: contiguous(prog),
+      error: e instanceof Error ? e.message : "تکه نرسید.",
+    });
+  }
+  await fh?.close().catch(() => {});
+
+  addSpan(prog, offset, offset + written);
+  if (isFinal) prog.finalAt = offset + written;
+
+  const size = prog.finalAt;
+
+  /**
+   * **پایان یعنی پرشدنِ همهٔ سوراخ‌ها، نه رسیدنِ تکهٔ آخر.**
+   *
+   * با آپلود موازی، تکهٔ پایانی می‌تواند پیش از تکه‌های میانی برسد. اگر
+   * همان‌جا فایل را ببندیم و به ffprobe بدهیم، فایلی با سوراخ تحویل داده‌ایم
+   * که یا خطای مبهم می‌دهد یا — بدتر — صوتی ناقص را کامل جا می‌زند.
+   *
+   * پس هر تکه‌ای که تمام می‌شود می‌پرسد «حالا کامل شد؟» و فقط آخرین نفر —
+   * هرکدام که باشد — کار را می‌بندد.
+   */
+  if (size === null || !(contiguous(prog) >= size)) {
+    return json(res, 200, { received: contiguous(prog) });
   }
 
-  if (!isFinal) return json(res, 200, { received: written });
+  /**
+   * بستنِ کار **یک‌بار** اتفاق می‌افتد.
+   *
+   * چند تکهٔ موازی می‌توانند تقریباً هم‌زمان تمام شوند و هر کدام ببینند که
+   * فایل کامل است. بدون این قفل، دو تای‌شان `rename` می‌زنند و دومی روی
+   * فایلی کار می‌کند که دیگر آنجا نیست — یا بدتر، دو جلسه برای یک آپلود
+   * ساخته می‌شود و کاربر دوبار حساب می‌شود.
+   *
+   * `Map.delete` اینجا نقشِ قفل را دارد چون جاوااسکریپت تک‌رشته‌ای است و
+   * بین خواندن و حذف هیچ `await`ای نیست: فقط یکی `true` می‌گیرد.
+   */
+  if (!uploads.delete(key)) {
+    return json(res, 200, { received: contiguous(prog) });
+  }
 
-  // تکهٔ آخر: فایل کامل است، ببرش به مسیر صوت و مثل آپلود یک‌تکه ادامه بده.
+  // فایل کامل است، ببرش به مسیر صوت و مثل آپلود یک‌تکه ادامه بده.
   const sessionId = shortId();
   const ext = (url.searchParams.get("ext") ?? "ogg").replace(/[^a-z0-9]/gi, "").slice(0, 5) || "ogg";
   const dest = path.join(config.audioDir, `${sessionId}.${ext}`);
   await fsp.mkdir(config.audioDir, { recursive: true });
+
+  /**
+   * فایل دقیقاً به اندازهٔ اعلام‌شده بریده می‌شود.
+   *
+   * تلاش دوبارهٔ یک تکه می‌تواند دم فایل را از اندازهٔ واقعی بلندتر کند
+   * (نوشتنِ موقعیتی فایل را کِش می‌آورد). دنبالهٔ اضافه یعنی چند بایت
+   * بی‌معنا ته صوت، که ffprobe را گیج می‌کند.
+   */
+  await fsp.truncate(part, size).catch(() => {});
   await fsp.rename(part, dest);
 
   return finishUpload(res, {
@@ -1081,6 +1299,13 @@ export function startWebServer(): http.Server | null {
     logger.info({ port: config.WEB_PORT, publicUrl: config.PUBLIC_URL || "—" }, "web server listening");
   });
   setInterval(() => purgeExpiredSessions(), 6 * 60 * 60_000).unref();
+  /**
+   * آپلودهای رهاشده هم باید جارو شوند، وگرنه هر آپلودِ نیمه‌کاره یک فایل
+   * روی دیسک و یک ورودی در حافظه می‌گذارد که هیچ‌وقت برداشته نمی‌شود.
+   */
+  setInterval(() => {
+    void sweepUploads();
+  }, 15 * 60_000).unref();
   return server;
 }
 

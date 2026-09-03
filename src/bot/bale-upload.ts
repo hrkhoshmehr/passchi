@@ -113,16 +113,48 @@ export async function baleSendFile(
 
   const body = Buffer.concat(chunks);
   const root = config.BALE_API_ROOT.replace(/\/+$/, "");
-  const res = await fetch(`${root}/bot${config.BALE_BOT_TOKEN}/${method}`, {
-    method: "POST",
-    headers: {
-      "content-type": `multipart/form-data; boundary=${boundary}`,
-      "content-length": String(body.length),
-    },
-    body: new Uint8Array(body),
-  });
 
-  const data = (await res.json()) as { ok: boolean; result?: BaleUploadResult; description?: string };
+  /**
+   * **مهلت، چون بله گاهی بایت‌ها را می‌بلعد و هرگز جواب نمی‌دهد.**
+   *
+   * روی همین سرور دیده شد: یک آپلود ۲۵ مگابایتی که `ss -tni` تأییدش می‌کرد
+   * کامل رفته و ack شده (`bytes_acked` برابر کل حجم)، ولی هفت دقیقه هیچ
+   * پاسخی نیامد — در حالی که `getMe` در همان لحظه ۰٫۲ ثانیه جواب می‌داد. پس
+   * سرویس بالا بود و فقط همان درخواست بی‌جواب ماند.
+   *
+   * بدون مهلت، `fetch` تا ابد معلق می‌ماند و چون این تابع **داخل کارِ صف**
+   * صدا زده می‌شود، یکی از دو جای همزمان را برای همیشه اشغال می‌کرد. دو تای
+   * این‌ها یعنی کل سرویس برای همهٔ کاربران می‌خوابید — بی‌آنکه خطایی در لاگ
+   * باشد.
+   *
+   * مهلت سخاوتمندانه است چون آپلودِ سالمِ یک فایل بزرگ روی همین مسیر واقعاً
+   * دقایقی طول می‌کشد؛ هدف گرفتنِ حالتِ «هرگز» است، نه حالتِ کند.
+   */
+  const UPLOAD_TIMEOUT_MS = 4 * 60_000;
+  let res: Response;
+  try {
+    res = await fetch(`${root}/bot${config.BALE_BOT_TOKEN}/${method}`, {
+      method: "POST",
+      headers: {
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+        "content-length": String(body.length),
+      },
+      body: new Uint8Array(body),
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+    });
+  } catch (e) {
+    logger.warn(
+      { method, chatId, bytes: body.length, err: String(e instanceof Error ? e.message : e) },
+      "ارسال فایل به بله بی‌جواب ماند یا شکست",
+    );
+    throw e;
+  }
+
+  const data = (await res.json().catch(() => ({ ok: false, description: `پاسخ نامعتبر (${res.status})` }))) as {
+    ok: boolean;
+    result?: BaleUploadResult;
+    description?: string;
+  };
   if (!data.ok) {
     logger.warn(
       { method, chatId, bytes: body.length, err: data.description },
