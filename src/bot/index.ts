@@ -12,7 +12,7 @@ import * as S from "./strings.js";
 import { downloadLimitFor, downloadTelegramFile, FileTooLargeError } from "./download.js";
 import { commit, InsufficientCredit, grant, refund, reserve, totalShareRefunds } from "../billing/ledger.js";
 import {
-  accessibleSessions, registerOwner, setShareEnabled, setShareTarget, shareStatus,
+  accessibleSessions, isMember, registerOwner, setShareEnabled, setShareTarget, shareStatus,
 } from "../billing/sharing.js";
 import {
   handleJoin, invitationMessage, joinPreview, shareTargetKeyboard, shareToggleKeyboard,
@@ -355,6 +355,32 @@ async function historyScreen(ctx: Context, page = 0, edit = false): Promise<void
  * جدا شدنش از فهرست عمدی است: کاربر اول انتخاب می‌کند و بعد گزینه‌ها را
  * می‌بیند، نه اینکه هشت مجموعه دکمه هم‌زمان جلویش باشد.
  */
+/**
+ * جلسه‌ای که این کاربر حق دیدنش را دارد — مالکش باشد یا بابتش پرداخته باشد.
+ *
+ * ## چرا لازم شد
+ *
+ * دکمه‌های جزوه و رونوشت و تحلیل و برشِ صوت فقط جلسه را از پایگاه‌داده
+ * می‌خواندند و هیچ‌جا نمی‌سنجیدند مالِ چه کسی است — در حالی که همهٔ دکمه‌های
+ * هم‌ردیفشان (`son:`، `slink:`، `full:`، `retry:`) می‌سنجیدند. یعنی یک از قلم
+ * افتادن بود، نه یک تصمیم.
+ *
+ * و شناسهٔ جلسه اسرارآمیز نیست: لینک دعوت به شکل `j_<sessionId>` است و مالک
+ * همان را در گروه درس فوروارد می‌کند. پس هر کسی که در آن گروه است شناسه را
+ * دارد، و با کلاینتی که کال‌بکِ دلخواه بفرستد جزوه را بدون پرداختِ سهم
+ * برمی‌داشت — یعنی کلِ منطقِ سهم و سقف دور می‌خورد.
+ *
+ * عضو بودن کافی است، نه فقط مالک بودن: کسی که سهمش را داده باید بتواند
+ * جزوه و رونوشت همان جلسه را دوباره بگیرد.
+ */
+function readableSession(ctx: Context, sessionId: string): SessionRow | null {
+  const s = getSession(sessionId);
+  if (!s) return null;
+  const me = uid(ctx);
+  if (s.tg_id === me) return s;
+  return isMember(sessionId, me) ? s : null;
+}
+
 async function sessionCard(ctx: Context, sessionId: string): Promise<void> {
   const s = getSession(sessionId);
   if (!s || s.tg_id !== uid(ctx)) {
@@ -981,16 +1007,27 @@ handlers.command("forget", async (ctx) => {
   let removed = 0;
   let unshared = 0;
   for (const s of listSessions(id, 500)) {
-    if (s.original_file) await fs.unlink(s.original_file).catch(() => {});
-    if (s.pdf_path) await fs.unlink(s.pdf_path).catch(() => {});
+    /**
+     * جلسهٔ اشتراکی فقط از اشتراک خارج می‌شود، و **فایل‌هایش می‌مانند**.
+     *
+     * پیش‌تر حلقه پیش از هر شرطی صوت و جزوه را از دیسک پاک می‌کرد و بعد تازه
+     * شاخهٔ اشتراکی را جدا می‌کرد — یعنی دقیقاً خلافِ چیزی که پیام به کاربر
+     * وعده می‌دهد: جزوه‌ای که هم‌کلاسی بابتش سکه داده بود از بین می‌رفت و
+     * دکمهٔ جزوه‌اش از آن به بعد خطا می‌داد.
+     *
+     * صوت هم می‌ماند، وگرنه زمان‌های گزارشِ همان هم‌کلاسی‌ها دیگر لینکِ پخش
+     * نمی‌شوند. خاموش‌شدنِ اشتراک جلوی پیوستنِ تازه را می‌گیرد، که همان چیزی
+     * است که کاربر خواسته.
+     */
     if (s.share_enabled) {
       setShareEnabled(s.id, false);
-      updateSession(s.id, { original_file: null, pdf_path: null });
       unshared++;
-    } else {
-      purgeSession(s.id);
-      removed++;
+      continue;
     }
+    if (s.original_file) await fs.unlink(s.original_file).catch(() => {});
+    if (s.pdf_path) await fs.unlink(s.pdf_path).catch(() => {});
+    purgeSession(s.id);
+    removed++;
   }
   await reply(
     ctx,
@@ -1769,7 +1806,7 @@ handlers.callbackQuery(/^retry:([a-f0-9]+)$/, async (ctx) => {
 });
 
 handlers.callbackQuery(/^txt:([a-f0-9]+)$/, async (ctx) => {
-  const s = getSession(ctx.match![1]!);
+  const s = readableSession(ctx, ctx.match![1]!);
   await ctx.answerCallbackQuery();
   if (!s?.transcript_txt) {
     await ctx.reply("رونوشت این جلسه موجود نیست.");
@@ -1782,7 +1819,7 @@ handlers.callbackQuery(/^txt:([a-f0-9]+)$/, async (ctx) => {
 
 handlers.callbackQuery(/^clip:([a-f0-9]+):(\d+)$/, async (ctx) => {
   const [, sessionId, atMsRaw] = ctx.match!;
-  const s = getSession(sessionId!);
+  const s = readableSession(ctx, sessionId!);
   if (!s || !s.original_file) {
     await ctx.answerCallbackQuery({ text: "فایل صوتی این جلسه دیگر ذخیره نیست." });
     return;
@@ -1805,7 +1842,7 @@ handlers.callbackQuery(/^clip:([a-f0-9]+):(\d+)$/, async (ctx) => {
 });
 
 handlers.callbackQuery(/^pdf:([a-f0-9]+)$/, async (ctx) => {
-  const s = getSession(ctx.match![1]!);
+  const s = readableSession(ctx, ctx.match![1]!);
   await ctx.answerCallbackQuery();
   if (!s?.pdf_path) {
     await ctx.reply("جزوهٔ این جلسه موجود نیست.");
@@ -1817,7 +1854,7 @@ handlers.callbackQuery(/^pdf:([a-f0-9]+)$/, async (ctx) => {
 });
 
 handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
-  const s = getSession(ctx.match![1]!);
+  const s = readableSession(ctx, ctx.match![1]!);
   await ctx.answerCallbackQuery();
   const r = s ? sessionReport(s) : null;
   if (!s || !r) {

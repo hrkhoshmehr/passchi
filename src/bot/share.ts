@@ -16,6 +16,7 @@ import {
   shareStatus,
 } from "../billing/sharing.js";
 import * as S from "./strings.js";
+import { notifyUser } from "./notify.js";
 import { isBale, platformOf, uid } from "./identity.js";
 
 /**
@@ -255,14 +256,23 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
     const tail = result.capJustReached
       ? `\n\n<b>نصفِ هزینه برگشت.</b> از این به بعد هم‌کلاسی‌ها رایگان برش می‌دارن.`
       : "";
-    await ctx.api
-      .sendMessage(
-        result.ownerTgId,
-        `💰 <b>${fmtCost(result.ownerRefundSec)}</b> برگشت به حسابت!\n\n` +
-          `یکی «${escapeHtml(s.title ?? "کلاس")}» رو برداشت.${tail}`,
-        { parse_mode: "HTML" },
-      )
-      .catch(() => {});
+    /**
+     * ⚠️ اینجا `ctx.api.sendMessage(result.ownerTgId, …)` بود و غلط بود.
+     *
+     * `ownerTgId` **شناسهٔ داخلی** مالک است نه شناسهٔ چتش، و `ctx.api` هم ربات
+     * سکوی *پیوسته* است نه سکوی مالک. برای مالکی که از بله یا وب آمده،
+     * شناسهٔ داخلی بالای ۲^۵۲ است و پیام بی‌صدا شکست می‌خورد؛ و اگر پیوسته در
+     * بله باشد و مالک در تلگرام، همان عدد می‌توانست به یک کاربرِ بی‌ربطِ بله
+     * برسد — دقیقاً همان چیزی که `notify.ts` برای جلوگیری از آن نوشته شد.
+     *
+     * بی‌صدا هم بود، چون خطا با `catch` خالی بلعیده می‌شد. و این پیام همان
+     * چیزی است که مالک را ترغیب می‌کند لینک را پخش کند.
+     */
+    await notifyUser(
+      result.ownerTgId,
+      `💰 <b>${fmtCost(result.ownerRefundSec)}</b> برگشت به حسابت!\n\n` +
+        `یکی «${escapeHtml(s.title ?? "کلاس")}» رو برداشت.${tail}`,
+    ).catch(() => {});
   }
 
   return {

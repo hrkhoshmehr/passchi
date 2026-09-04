@@ -85,12 +85,52 @@ export function createTusServer(deps: TusDeps): Server {
     allowedHeaders: ["Authorization"],
 
     /**
-     * دروازهٔ احراز هویت: هر درخواستِ tus (POST/PATCH/HEAD) باید توکنِ معتبر
-     * داشته باشد، وگرنه همین‌جا با ۴۰۱ رد می‌شود.
+     * دروازهٔ احراز هویت **و مالکیت**.
+     *
+     * هر درخواستِ tus باید توکنِ معتبر داشته باشد — ولی توکنِ معتبر کافی
+     * نیست. **این آزمونِ زنده لو دادش:** کاربر B با توکنِ سالمِ خودش PATCHِ
+     * آپلودِ نیمه‌کارهٔ کاربر A را تمام کرد و جلسه — با صوتِ A — به نامِ **B**
+     * ساخته شد (چون `onUploadFinish` کاربر را از توکنِ همان درخواستِ آخر
+     * می‌گرفت). یعنی ضبطِ کلاسِ یکی به حسابِ دیگری می‌نشست. `DELETE` هم باز
+     * بود: هر کسی می‌توانست آپلودِ در جریانِ دیگری را نابود کند.
+     *
+     * شناسه‌ها UUIDِ تصادفی‌اند پس حدس‌زدنی نیستند، ولی در آدرس سفر می‌کنند و
+     * آدرس در لاگِ CDN و پراکسی می‌نشیند — «حدس‌ناپذیر» مجوزِ دسترسی نیست.
      */
-    onIncomingRequest: async (req) => {
+    onIncomingRequest: async (req, uploadId) => {
       const uid = deps.tokenToUserId(req.headers.get("authorization"));
       if (uid == null) throw httpError(401, { error: "نشستت منقضی شده. دوباره وارد شو." });
+
+      /**
+       * روی POST هنوز آپلودی وجود ندارد (این قلاب **پیش از** ساخت صدا زده
+       * می‌شود و `uploadId` فقط شناسهٔ تازه‌ساخته است)، پس چیزی برای مقایسه
+       * نیست. مالک همان‌جا در `onUploadCreate` مهر می‌شود.
+       */
+      if (req.method === "POST" || !uploadId) return;
+
+      const owner = await store
+        .getUpload(uploadId)
+        .then((u) => u.metadata?.uid)
+        .catch(() => undefined);
+
+      /**
+       * نبودنِ آپلود را همین‌جا قضاوت نمی‌کنیم — بگذار tus خودش ۴۰۴ِ استانداردش
+       * را بدهد. فقط وقتی مالکِ ثبت‌شده داریم و با درخواست‌کننده نمی‌خواند جلو
+       * را می‌گیریم.
+       */
+      if (owner === undefined) return;
+      if (Number(owner) !== uid) {
+        deps.log({ uploadId, owner, asked: uid }, "tus: دسترسی به آپلودِ کاربرِ دیگر رد شد");
+        // ۴۰۴ و نه ۴۰۳: پاسخِ دوم تأیید می‌کند که چنین آپلودی وجود دارد.
+        throw httpError(404, { error: "آپلود پیدا نشد." });
+      }
+    },
+
+    /** مالکِ آپلود همین‌جا مهر می‌شود تا هر درخواستِ بعدی بتواند بسنجدش. */
+    onUploadCreate: async (req, upload) => {
+      const uid = deps.tokenToUserId(req.headers.get("authorization"));
+      if (uid == null) throw httpError(401, { error: "نشستت منقضی شده. دوباره وارد شو." });
+      return { metadata: { ...(upload.metadata ?? {}), uid: String(uid) } };
     },
 
     /**
@@ -101,10 +141,20 @@ export function createTusServer(deps: TusDeps): Server {
      * می‌پذیرند؛ جایگزینش یک رفت‌وبرگشتِ اضافه بود.
      */
     onUploadFinish: async (req, upload) => {
-      const uid = deps.tokenToUserId(req.headers.get("authorization"));
-      if (uid == null) throw httpError(401, { error: "نشستت منقضی شده." });
-
       const md = upload.metadata ?? {};
+
+      /**
+       * جلسه به نامِ **سازندهٔ آپلود** ساخته می‌شود، نه صاحبِ توکنی که آخرین
+       * تکه را فرستاد.
+       *
+       * پیش‌تر اینجا `uid` از هدرِ همین درخواست خوانده می‌شد، و همان یک خط
+       * یعنی هرکس آخرین PATCH را بزند صاحبِ فایل می‌شود. حالا `onIncomingRequest`
+       * جلوی غریبه را می‌گیرد، ولی این خط هم مستقل درست است تا اگر روزی آن
+       * دروازه سست شد، مالکیت از جای دیگری تصمیم گرفته نشود.
+       */
+      const stamped = md.uid == null ? null : Number(md.uid);
+      const uid = stamped ?? deps.tokenToUserId(req.headers.get("authorization"));
+      if (uid == null) throw httpError(401, { error: "نشستت منقضی شده." });
       const src = path.join(deps.uploadDir, upload.id);
       const r = await deps.finalize({
         userId: uid,
