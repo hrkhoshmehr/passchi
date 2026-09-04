@@ -272,9 +272,14 @@ export function mergeCourseTerms(courseId: number, newTerms: string[]): string[]
  * `awaiting_credit` یعنی فایل گرفته شده و سالم روی دیسک است، ولی اعتبار
  * کاربر کفاف نمی‌داد. جلسه زنده می‌ماند تا پس از شارژ ادامه پیدا کند — نه
  * `error` است (چیزی خراب نشده) نه `queued` (در صفی نیست).
+ *
+ * `awaiting_confirm` همان حالت است با یک تفاوت: اعتبار **هست** و فقط منتظر
+ * «بله»ی کاربریم. فایل روی دیسک است و هیچ سکه‌ای هنوز رزرو نشده.
+ *
+ * هیچ‌کدام از این دو در صف نیستند، پس `orphanedQueued` سراغشان نمی‌رود.
  */
 export type SessionStatus =
-  | "queued" | "awaiting_credit" | "preprocess" | "stt" | "analyze" | "pdf"
+  | "queued" | "awaiting_credit" | "awaiting_confirm" | "preprocess" | "stt" | "analyze" | "pdf"
   | "done" | "error" | "cancelled";
 
 export interface SessionRow {
@@ -400,12 +405,23 @@ export function sessionTimeMap(s: SessionRow): TimeSegment[] {
 }
 
 /** فایل‌های صوتی قدیمی‌تر از KEEP_AUDIO_DAYS برای پاک‌سازی */
+/**
+ * صوت‌هایی که وقتشان گذشته و باید از دیسک بروند.
+ *
+ * ⚠️ **جلسه‌های معلق هم شمرده می‌شوند.** پیش‌تر فقط `done`/`error`/`cancelled`
+ * جارو می‌شدند، پس جلسه‌ای که منتظر شارژ یا منتظر تأییدِ کاربر مانده بود
+ * صوتش را **برای همیشه** روی دیسک نگه می‌داشت — هیچ مسیری هرگز برنمی‌داشتش.
+ * با آمدنِ قدمِ تأیید، تعداد این جلسه‌ها بیشتر هم می‌شود.
+ *
+ * همان پنجرهٔ نگهداری برایشان کافی است: تا آن روز کاربر فرصت شارژ و تأیید
+ * داشته و پس از آن، مثل هر جلسهٔ دیگری، فایل خام دلیلی برای ماندن ندارد.
+ */
 export function expiredAudio(days: number): Array<{ id: string; original_file: string }> {
   return db
     .prepare(
       `SELECT id, original_file FROM sessions
        WHERE original_file IS NOT NULL
-         AND status IN ('done','error','cancelled')
+         AND status IN ('done','error','cancelled','awaiting_credit','awaiting_confirm')
          AND created_at < datetime('now', ?)`,
     )
     .all(`-${days} days`) as unknown as Array<{ id: string; original_file: string }>;

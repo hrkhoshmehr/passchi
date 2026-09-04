@@ -195,5 +195,39 @@ check(
 );
 check("دکمه‌های ربات فقط روی دسکتاپ پنهان می‌شوند", /if \(strandedOnDesktop\) \{/.test(js));
 
+// ─── ربات: همان قاعده، که تا امروز فقط در وب بود ────────────────────────────
+//
+// مینی‌اپ از اول قیمت را می‌پرسید ولی ربات نمی‌پرسید: فرستادنِ فایل یعنی
+// شروعِ فوریِ کار و کسرِ سکه. برای یک کلاس ۹۰ دقیقه‌ای یعنی ۹۰ سکه بی‌آنکه
+// کسی پرسیده باشد، و کاربر عدد را اولین بار بعد از خرج‌شدن می‌دید.
+{
+  const bot = readLf("src/bot/index.ts");
+  const strings = readLf("src/bot/strings.ts");
+  const db = readLf("src/db/index.ts");
+
+  const intake = bot.slice(
+    bot.indexOf("async function intakeAudio"),
+    bot.indexOf("// ─── کلیک‌ها"),
+  );
+  check("ربات پیش از شروع، هزینه را می‌پرسد", intake.includes("confirmCostMessage"));
+  check("جلسه در حالت انتظارِ تأیید نگه داشته می‌شود", /status: "awaiting_confirm"/.test(intake));
+  check("متن تأیید هزینه هست", strings.includes("export function confirmCostMessage"));
+  check("دکمهٔ شروع و انصراف هر دو هستند", /`go:\$\{sessionId\}`/.test(intake) && /`nogo:\$\{sessionId\}`/.test(intake));
+  check("دست‌کدِ شروع هست", /callbackQuery\(\/\^go:/.test(bot));
+  check("دست‌کدِ انصراف هست", /callbackQuery\(\/\^nogo:/.test(bot));
+
+  // انصراف نباید بن‌بست باشد: راهِ برگشت باید همان‌جا بماند
+  const nogo = bot.slice(bot.indexOf("callbackQuery(/^nogo:"), bot.indexOf("callbackQuery(/^txt:"));
+  check("انصراف دکمهٔ شروع را نگه می‌دارد", /`go:\$\{sessionId\}`/.test(nogo));
+  check("کارت جلسه هم راهِ شروع دارد", /awaiting_confirm" \|\| s\.status === "awaiting_credit"/.test(bot));
+
+  // و فایلِ جلسهٔ معلق نباید برای همیشه روی دیسک بماند
+  check(
+    "جاروی صوت، جلسه‌های معلق را هم می‌گیرد",
+    /'awaiting_credit','awaiting_confirm'/.test(db),
+  );
+  check("وضعیت تازه در نوع تعریف شده", db.includes('"awaiting_confirm"'));
+}
+
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
 process.exit(bad === 0 ? 0 : 1);

@@ -390,6 +390,14 @@ async function sessionCard(ctx: Context, sessionId: string): Promise<void> {
   await ctx.answerCallbackQuery();
 
   const kb = new InlineKeyboard();
+  /**
+   * جلسه‌ای که منتظر «بله» یا منتظر شارژ مانده باید از همین‌جا هم قابل
+   * شروع باشد — وگرنه تنها راهش پیامِ اصلی است و آن پیام در چتِ شلوغ گم
+   * می‌شود؛ یعنی کاربر باید فایل را دوباره بفرستد.
+   */
+  if ((s.status === "awaiting_confirm" || s.status === "awaiting_credit") && s.original_file) {
+    kb.text("✅ شروع کن", `go:${s.id}`).row();
+  }
   if (s.pdf_path) kb.text("📕 جزوه", `pdf:${s.id}`);
   if (s.report_json) kb.text("📋 تحلیل", `rep:${s.id}`);
   if (s.transcript_txt) kb.text("📄 رونوشت", `txt:${s.id}`);
@@ -1584,6 +1592,35 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
     return;
   }
 
+  /**
+   * تأیید پیش از خرج‌کردن سکه.
+   *
+   * تا پیش از این، فرستادنِ فایل یعنی شروعِ فوریِ کار و کسرِ سکه — کاربر عدد
+   * را اولین بار *بعد* از خرج‌شدن می‌دید. برای یک کلاس ۹۰ دقیقه‌ای یعنی ۹۰
+   * سکه بی‌آنکه کسی پرسیده باشد.
+   *
+   * این با آن دو سؤالی که عمداً حذف شدند فرق دارد: آنها («کدام درس»، «جزوه
+   * می‌خواهی؟») چیزهایی بودند که کاربر تازه جوابشان را نمی‌داند. این یکی
+   * دربارهٔ پولِ خودش است و جوابش را می‌داند.
+   *
+   * فایل روی دیسک نگه داشته می‌شود و هیچ سکه‌ای رزرو نمی‌شود تا وقتی «شروع
+   * کن» را بزند. مینی‌اپ همین کار را از قبل می‌کرد — آنجا حتی پیش از آپلود،
+   * چون مرورگر مدت را از خودِ فایل می‌خواند.
+   *
+   * مدت صفر یعنی نه سکو گفته و نه `probe` توانست بخواند. آن‌وقت عددی برای
+   * نشان‌دادن نداریم و پرسیدن بی‌معنی است، پس مثل قبل جلو می‌رویم؛ تسویه
+   * به‌هرحال با مدت واقعی انجام می‌شود.
+   */
+  if (effectiveSec > 0) {
+    updateSession(sessionId, { status: "awaiting_confirm", original_file: audioFile });
+    await reply(ctx, S.confirmCostMessage(effectiveSec, u.credit_sec), {
+      reply_markup: new InlineKeyboard()
+        .text("✅ شروع کن", `go:${sessionId}`)
+        .text("✖️ بی‌خیال", `nogo:${sessionId}`),
+    });
+    return;
+  }
+
   await startJob(ctx, {
     sessionId,
     audioFile,
@@ -1772,6 +1809,41 @@ handlers.callbackQuery(/^resume:([a-f0-9]+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   await resumeSession(ctx, sessionId);
+});
+
+/**
+ * «شروع کن» روی تأییدِ هزینه — همان مسیر `resume` است.
+ *
+ * جلسه از قبل ساخته شده، فایلش روی دیسک است و مالکیتش سنجیده می‌شود؛ تنها
+ * چیزی که نبود، «بله»ی کاربر بود.
+ */
+handlers.callbackQuery(/^go:([a-f0-9]+)$/, async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  await ctx.answerCallbackQuery({ text: "شروع کردم…" });
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+  await resumeSession(ctx, sessionId);
+});
+
+/**
+ * «بی‌خیال» — ولی **بن‌بست نه**.
+ *
+ * فایل همان‌جا می‌ماند و دکمهٔ شروع سرِ جایش. کاربری که منصرف شده اغلب
+ * پشیمان می‌شود یا اول می‌رود شارژ می‌کند؛ اگر اینجا راه بسته باشد باید
+ * همان چند ده مگابایت را دوباره بفرستد.
+ */
+handlers.callbackQuery(/^nogo:([a-f0-9]+)$/, async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  const s = getSession(sessionId);
+  await ctx.answerCallbackQuery();
+  if (!s || s.tg_id !== uid(ctx)) return;
+  await ctx.editMessageText(
+    `باشه، شروع نکردم و سکه‌ای کم نشد.\n\n` +
+      `<i>فایلت تا ${toFaDigits(config.KEEP_AUDIO_DAYS)} روز نگه داشته می‌شه — هر وقت خواستی بزن.</i>`,
+    {
+      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard().text("✅ شروع کن", `go:${sessionId}`),
+    },
+  ).catch(() => {});
 });
 
 handlers.callbackQuery(/^retry:([a-f0-9]+)$/, async (ctx) => {

@@ -421,6 +421,34 @@ export function accountMessage(i: AccountInput): string {
 }
 
 /** پیام «سکه کم است» — همه‌جا یک شکل، و همیشه با راه خروج. */
+/**
+ * تأیید پیش از خرج‌کردن سکه.
+ *
+ * ## چرا این سؤال، برخلاف دو سؤالِ حذف‌شده، می‌ماند
+ *
+ * پیش‌تر بین «فایل را فرستادم» و «کار شروع شد» دو سؤال بود — کدام درس، و
+ * جزوه می‌خواهی یا نه — و هر دو حذف شدند چون کاربر تازه‌وارد جوابشان را
+ * **نمی‌داند** و هر سؤال یک جای رهاکردن است.
+ *
+ * این سؤال از آن جنس نیست: جوابش را کاربر می‌داند، و موضوعش پولِ خودش است.
+ * بدون آن، فرستادنِ یک فایل ۹۰ دقیقه‌ای یعنی ۹۰ سکه کسر شود بی‌آنکه کسی
+ * پرسیده باشد — و کاربر عدد را اولین بار در صورت‌حساب ببیند.
+ *
+ * موجودیِ پس از کسر هم نوشته می‌شود، چون سؤال بعدیِ همه همان است.
+ */
+export function confirmCostMessage(neededSec: number, balanceSec: number): string {
+  const after = Math.max(0, balanceSec - neededSec);
+  return [
+    "فایلت رسید ✅",
+    "",
+    `مدت: <b>${toFaDigits(fmtDuration(neededSec * 1000))}</b>`,
+    `هزینه: <b>${fmtCoinsWithToman(costCoins(neededSec))}</b>`,
+    `موجودی الان: <b>${fmtBalance(balanceSec)}</b> · بعدش: <b>${fmtBalance(after)}</b>`,
+    "",
+    "<i>شروع کنم؟</i>",
+  ].join("\n");
+}
+
 export function lowBalanceMessage(neededSec: number, balanceSec: number): string {
   return [
     "سکه‌هات کم میاد 😅",
