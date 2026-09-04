@@ -27,6 +27,20 @@ const MAX_ATTEMPTS = 4;
 const BACKOFF_MS = 3_000;
 
 /**
+ * دمای پیش‌فرض نمونه‌گیری.
+ *
+ * پیش‌تر هیچ دمایی فرستاده نمی‌شد و Gemini روی پیش‌فرض خودش (۱٫۰) کار می‌کرد.
+ * نتیجهٔ اندازه‌گیری‌شده روی یک رونوشت بایت‌به‌بایت یکسان: تعداد بخش‌ها بین
+ * ۲ تا ۷ نوسان می‌کرد و تعداد نکات بین ۰ تا ۹. برای محصولی که باید به
+ * دانشجوی غایب «جواب قطعی» بدهد، این نوسان خودِ نقص است.
+ *
+ * صفر نیست بلکه نزدیک صفر: روی صفرِ کامل، مدل گاهی در حلقهٔ تکرار می‌افتد.
+ * این مقدار برای هر دو پاس اعمال می‌شود؛ پاس جزوه هم بازسازی درس است نه
+ * نوشتن خلاقانه، پس دمای پایین به آن آسیبی نمی‌زند.
+ */
+const DEFAULT_TEMPERATURE = 0.1;
+
+/**
  * محتوای پیام — یا رشتهٔ ساده، یا بلوک‌هایی که یکی‌شان می‌تواند کش شود.
  *
  * شکل بلوکی فقط وقتی لازم است که بخواهیم `cache_control` بگذاریم؛ برای بقیهٔ
@@ -126,7 +140,16 @@ async function callWithRetry(payload: Record<string, unknown>): Promise<Completi
  */
 export async function chat(
   messages: ChatMessage[],
-  opts: { model?: string; maxTokens?: number; jsonSchema?: unknown; schemaName?: string } = {},
+  opts: {
+    model?: string;
+    maxTokens?: number;
+    jsonSchema?: unknown;
+    schemaName?: string;
+    /** اگر ندهی `DEFAULT_TEMPERATURE` می‌نشیند — نه پیش‌فرضِ ارائه‌دهنده. */
+    temperature?: number;
+    /** بذر نمونه‌گیری؛ همهٔ ارائه‌دهنده‌ها احترامش نمی‌گذارند. */
+    seed?: number;
+  } = {},
 ): Promise<ChatResult> {
   const candidates = (opts.model ?? config.OPENROUTER_MODEL)
     .split(",")
@@ -140,9 +163,11 @@ export async function chat(
       model,
       messages,
       max_tokens: opts.maxTokens ?? 16_000,
+      temperature: opts.temperature ?? DEFAULT_TEMPERATURE,
       // بدون این، فیلد usage.cost در پاسخ نمی‌آید
       usage: { include: true },
     };
+    if (opts.seed !== undefined) payload.seed = opts.seed;
     if (opts.jsonSchema) {
       payload.response_format = {
         type: "json_schema",
