@@ -78,5 +78,37 @@ const build = (markdown) =>
   check("HTML خام در متن عادی اجرا نمی‌شود", !plain.includes("<script>alert"));
 }
 
+// ─── ۵) فرمولی که کلمهٔ فارسی دارد نباید به KaTeX برود ──────────────────────
+//
+// روی خروجی واقعی همین محصول دیده شد. KaTeX متریکِ حروف فارسی را ندارد:
+// برای هر حرف هشدار «No character metrics» می‌دهد، عرض را از رویِ متریکِ
+// لاتین حساب می‌کند — «اثر حقوقی» با نُه حرف ۴۷ پیکسل — و گلیف را از
+// فونتِ نظام برمی‌دارد نه وزیرمتن. بدتر: `.katex` جهتش چپ‌به‌راست است، پس
+// عبارتِ فارسی برعکس هم چیده می‌شود.
+{
+  // ⚠️ روی کلِ سند دنبال «katex» نگرد: سی‌اس‌اسِ جاسازی‌شدهٔ KaTeX خودش این
+  // کلمه را صدها بار دارد. نشانهٔ *رندرشدن*، عنصرِ خروجی است.
+  const rendered = (html) => /<span class="katex/.test(html);
+  const faBlock = (html) => html.match(/<div class="fa-formula fa-formula-block">([^<]*)<\/div>/);
+  const faInline = (html) => html.match(/<span class="fa-formula">([^<]*)<\/span>/);
+
+  const html = build("رابطه:\n\n$$ \\text{عقد} = \\text{توافق} + \\text{اثر حقوقی} $$\n");
+  check("فرمول فارسی به کاتکس نرفت", !rendered(html));
+  const m = faBlock(html);
+  check("به‌جایش بلوک فارسی ساخته شد", Boolean(m));
+  const inner = m?.[1] ?? "";
+  check("کلمه‌ها سالم‌اند", inner.includes("عقد") && inner.includes("اثر حقوقی"));
+  check("دستور تِک باقی نمانده", !/\\|[{}]/.test(inner), inner);
+
+  // درون‌خطیِ فارسی هم همین‌طور، ولی نباید بلوکِ وسط‌چین بسازد
+  const inline = build("جنس عقد $\\text{توافق}$ است.");
+  check("فرمول درون‌خطیِ فارسی به کاتکس نرفت", !rendered(inline));
+  check("درون‌خطیِ فارسی درون‌خطی ماند", Boolean(faInline(inline)) && !faBlock(inline));
+
+  // و ریاضیِ واقعیِ لاتین نباید قربانی شود
+  const latin = build("جنس $\\text{Agreement}$ است و $\\frac{a}{b}$ هم هست.");
+  check("ریاضی لاتین همچنان با کاتکس رندر می‌شود", rendered(latin));
+}
+
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
 process.exit(bad === 0 ? 0 : 1);

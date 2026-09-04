@@ -52,10 +52,61 @@ function normalizeListMarkers(src: string): string {
  * امان بماند.
  */
 
+/** حروف عربی‌نویس — فارسی، عربی، و شکل‌های گسترده‌شان. */
+const ARABIC_SCRIPT = /[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]/;
+
+/**
+ * فرمولی که کلمهٔ فارسی دارد، اصلاً نباید به KaTeX برود.
+ *
+ * ## چرا
+ *
+ * KaTeX **متریکِ حروف فارسی را ندارد**. روی خروجی واقعی همین جلسه:
+ *
+ *     $$ \text{عقد} = \text{توافق} + \text{اثر حقوقی} $$
+ *
+ * برای هر حرف «No character metrics … Main-Regular» هشدار می‌دهد، عرض‌ها را
+ * از رویِ متریکِ لاتین حساب می‌کند و «اثر حقوقی» با نُه حرف فقط ۴۷ پیکسل
+ * جا می‌گیرد — یعنی گلیف‌ها از جعبه‌شان بیرون می‌زنند و روی هم می‌افتند.
+ * گلیف را هم از Times New Roman برمی‌دارد نه وزیرمتن، چون فونت‌های KaTeX
+ * حرف فارسی ندارند.
+ *
+ * و بدتر از به‌هم‌ریختگی: `.katex` در همین قالب `direction: ltr` است، پس
+ * عبارتِ فارسیِ داخل فرمول **برعکس** هم چیده می‌شود.
+ *
+ * مدل هم بی‌دلیل این کار را نمی‌کند: در درس‌های نظری («عقد = توافق + اثر
+ * حقوقی») دستش به نمادِ ریاضی می‌رود تا رابطه را نشان دهد. خودِ رابطه
+ * درست است، فقط ریاضی نیست — پس متنِ ساده رندر می‌شود، با فونت و جهتِ
+ * خودِ سند.
+ */
+function faFormulaHtml(tex: string, display: boolean): string {
+  const plain = tex
+    // پوشش‌های متنی: محتوایشان همان چیزی است که باید دیده شود
+    .replace(/\\(?:text|textrm|mathrm|mathbf|mathit|operatorname)\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\times/g, "×")
+    .replace(/\\div/g, "÷")
+    .replace(/\\leq?\b/g, "≤")
+    .replace(/\\geq?\b/g, "≥")
+    .replace(/\\neq\b/g, "≠")
+    .replace(/\\rightarrow|\\to\b/g, "←") // در متن راست‌به‌چپ، جهتِ روایت برعکس است
+    .replace(/\\leftarrow\b/g, "→")
+    .replace(/\\[,;: ]/g, " ")
+    .replace(/\\[a-zA-Z]+/g, "") // هر دستور ناشناختهٔ باقی‌مانده
+    .replace(/[{}]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const tag = display ? "div" : "span";
+  return `<${tag} class="fa-formula${display ? " fa-formula-block" : ""}">${escapeHtml(plain)}</${tag}>`;
+}
+
 function extractMath(src: string): { text: string; blocks: string[] } {
   const blocks: string[] = [];
   const stash = (tex: string, display: boolean): string => {
     let html: string;
+    if (ARABIC_SCRIPT.test(tex)) {
+      blocks.push(faFormulaHtml(tex, display));
+      return `KATEXPLACEHOLDER${blocks.length - 1}ENDKATEX`;
+    }
     try {
       // `throwOnError` روشن است تا خطای واقعی به `catch` برسد و لاگ شود؛
       // با `false` خرابی به‌شکل متنِ زشت در PDF می‌نشیند و کسی نمی‌فهمد.
@@ -159,6 +210,10 @@ body{
 /* KaTeX در بافت RTL بدون این دو خط آینه می‌شود: کل رابطه از راست به چپ
    چیده می‌شود و مثلاً ∇f به f∇ تبدیل می‌شود. isolate جریان دوجهته را قطع می‌کند. */
 .katex{font-size:1.02em;direction:ltr;unicode-bidi:isolate;text-align:left}
+/* فرمولی که کلمهٔ فارسی دارد: فونت و جهتِ خودِ سند، نه فونت‌های کاتکس */
+.fa-formula{font-family:inherit;direction:rtl;unicode-bidi:isolate;white-space:normal}
+.fa-formula-block{display:block;margin:.9em 0;text-align:center;font-weight:600;
+  background:#f7f9fb;border-radius:6px;padding:.5em .8em}
 .katex-display{margin:.9em 0;direction:ltr;unicode-bidi:isolate;text-align:center}
 .katex-display>.katex{display:block;text-align:center}
 
