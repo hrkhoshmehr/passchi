@@ -9,14 +9,34 @@ import { toFaDigits } from "../util/time.js";
 
 let browserPromise: Promise<Browser> | null = null;
 
+/**
+ * مرورگر یک بار ساخته و بازاستفاده می‌شود — ولی باید از مرگش هم برگردد.
+ *
+ * بدون شنوندهٔ `disconnected`، اگر کرومیوم یک بار به‌خاطر کمبود حافظه کشته
+ * شود، این متغیر همچنان به یک مرورگرِ مرده اشاره می‌کند و از آن لحظه **هر**
+ * جزوه‌ای تا ری‌استارتِ سرویس شکست می‌خورد. روی یک سرور کوچک که هم‌زمان
+ * ffmpeg هم اجرا می‌کند، این اتفاق فرضی نیست.
+ */
 function getBrowser(): Promise<Browser> {
-  browserPromise ??= puppeteer.launch({
-    headless: true,
-    ...(process.env.PUPPETEER_EXECUTABLE_PATH
-      ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH }
-      : {}),
-    args: ["--no-sandbox", "--disable-dev-shm-usage", "--font-render-hinting=none"],
-  });
+  browserPromise ??= puppeteer
+    .launch({
+      headless: true,
+      ...(process.env.PUPPETEER_EXECUTABLE_PATH
+        ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH }
+        : {}),
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--font-render-hinting=none"],
+    })
+    .then((b) => {
+      b.on("disconnected", () => {
+        logger.warn("مرورگر رندر قطع شد — دفعهٔ بعد از نو ساخته می‌شود");
+        browserPromise = null;
+      });
+      return b;
+    })
+    .catch((e: unknown) => {
+      browserPromise = null; // وگرنه یک شکستِ گذرا برای همیشه کش می‌شود
+      throw e;
+    });
   return browserPromise;
 }
 

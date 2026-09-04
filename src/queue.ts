@@ -2,52 +2,103 @@ import { config } from "./config.js";
 import { logger } from "./util/logger.js";
 
 interface Job {
+  /** کلید صف: شناسهٔ داخلی کاربر. یک نفر می‌تواند چند کار داشته باشد. */
   id: string;
   run: (signal: AbortSignal) => Promise<void>;
   controller: AbortController;
 }
 
 const pending: Job[] = [];
-const active = new Map<string, Job>();
 
+/**
+ * کارهای در جریان — **مجموعه**، نه نگاشتِ کلیدخورده روی کاربر.
+ *
+ * ## باگی که این را عوض کرد
+ *
+ * قبلاً `Map<string, Job>` بود با کلیدِ شناسهٔ کاربر. دو کارِ هم‌زمانِ یک نفر
+ * روی یک کلید می‌نشستند، پس:
+ *
+ * • `active.size` بالا نمی‌رفت و `pump` سقف `MAX_CONCURRENT_JOBS` را رد
+ *   می‌کرد — با پنج کارِ یک کاربر، هر پنج‌تا هم‌زمان اجرا می‌شدند.
+ * • تمام‌شدنِ اولی ورودیِ دومی را پاک می‌کرد، پس `isBusy` دروغ می‌گفت.
+ * • `cancel` فقط آخرین کار را می‌دید.
+ *
+ * مسیر رسیدن به آن فرضی نبود: مسیر ربات پیش از صف‌کردن `isBusy` می‌زند ولی
+ * مسیر تأییدِ سرور وب نمی‌زد، پس یک آپلود از مینی‌اپ وسط یک کار در ربات کافی
+ * بود. روی یک سرور کوچک که هم‌زمان ffmpeg و کرومیوم هم دارد، نتیجه‌اش کمبود
+ * حافظه است — یعنی همان چیزی که `recoverInterrupted` برای پاک‌کردن پس از آن
+ * ساخته شده.
+ */
+const active = new Set<Job>();
+
+/** چند کارِ در جریان به نام این کاربر است. */
+function activeFor(id: string): number {
+  let n = 0;
+  for (const j of active) if (j.id === id) n++;
+  return n;
+}
+
+function start(job: Job): void {
+  active.add(job);
+  void job
+    .run(job.controller.signal)
+    .catch((e: unknown) => logger.error({ jobId: job.id, err: String(e) }, "job failed"))
+    .finally(() => {
+      active.delete(job);
+      pump();
+    });
+}
+
+/**
+ * هر کاربر **یک** کارِ در جریان دارد، و کلِ سیستم `MAX_CONCURRENT_JOBS` تا.
+ *
+ * قید per-user اینجا اعمال می‌شود نه در صدازننده‌ها: مسیر ربات `isBusy` را
+ * می‌زند و پیام مهربان می‌دهد، ولی مسیر وب نمی‌زد. با اعمالِ قید در یک جا،
+ * کارِ دومِ همان کاربر به‌جای اجرای موازی، پشتِ اولی صبر می‌کند.
+ */
 function pump(): void {
-  while (active.size < config.MAX_CONCURRENT_JOBS && pending.length > 0) {
-    const job = pending.shift()!;
-    active.set(job.id, job);
-    void job
-      .run(job.controller.signal)
-      .catch((e: unknown) => logger.error({ jobId: job.id, err: String(e) }, "job failed"))
-      .finally(() => {
-        active.delete(job.id);
-        pump();
-      });
+  let started = true;
+  while (started && active.size < config.MAX_CONCURRENT_JOBS) {
+    started = false;
+    for (let i = 0; i < pending.length; i++) {
+      const job = pending[i]!;
+      if (activeFor(job.id) > 0) continue; // نوبتش بعد از کارِ در جریانِ خودش
+      pending.splice(i, 1);
+      start(job);
+      started = true;
+      break;
+    }
   }
 }
 
 export function enqueue(id: string, run: (signal: AbortSignal) => Promise<void>): number {
   const job: Job = { id, run, controller: new AbortController() };
   pending.push(job);
-  const position = pending.length;
   pump();
-  return active.has(id) ? 0 : position;
+  if (active.has(job)) return 0;
+  return pending.filter((j) => j.id === id).indexOf(job) + 1;
 }
 
+/** کارهای این کاربر را لغو کن — چه در صف، چه در جریان. */
 export function cancel(id: string): boolean {
-  const idx = pending.findIndex((j) => j.id === id);
-  if (idx >= 0) {
-    pending.splice(idx, 1);
-    return true;
+  let hit = false;
+  for (let i = pending.length - 1; i >= 0; i--) {
+    if (pending[i]!.id === id) {
+      pending.splice(i, 1);
+      hit = true;
+    }
   }
-  const job = active.get(id);
-  if (job) {
-    job.controller.abort();
-    return true;
+  for (const job of active) {
+    if (job.id === id) {
+      job.controller.abort();
+      hit = true;
+    }
   }
-  return false;
+  return hit;
 }
 
 export function isBusy(id: string): boolean {
-  return active.has(id) || pending.some((j) => j.id === id);
+  return activeFor(id) > 0 || pending.some((j) => j.id === id);
 }
 
 export function queueDepth(): { active: number; pending: number } {

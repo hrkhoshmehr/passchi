@@ -16,6 +16,15 @@ import path from "node:path";
 const NEEDS_DB = new Set(["gift", "identity", "archive-routing", "interrupted-recovery", "sharing"]);
 
 const tests = [
+  // ── دروازه‌های راستی‌آزمایی ──────────────────────────────────────────────
+  // اینها ستون محصول‌اند («نکته با ذکر منبع») ولی تا امروز بیرون از این
+  // فهرست بودند، یعنی در اجرای معمولِ آزمون‌ها سنجیده نمی‌شدند. هر سه آفلاین
+  // و سریع‌اند؛ دلیلی برای بیرون‌ماندنشان نبود.
+  "quote-gate",
+  "emphasis",
+  "keypoint-kind",
+
+  "queue",
   "keyboards",
   "platform-detect",
   "archive-routing",
