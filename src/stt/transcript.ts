@@ -241,7 +241,19 @@ export interface QuoteMatch {
   role: SpeakerRole;
   /** متن دقیق پاره‌گفتاری که نقل‌قول در آن پیدا شد */
   utteranceText: string;
+  /**
+   * همان تکه‌ای از نقل‌قولِ مدل که واقعاً تأیید شد.
+   *
+   * معمولاً خودِ نقل‌قول است. فرق می‌کند وقتی مدل چند خط رونوشت را با «…»
+   * به هم دوخته باشد؛ آن‌وقت فقط بلندترین تکه تأیید می‌شود و **همان** به
+   * کاربر نشان داده می‌شود، نه جملهٔ دوخته‌شده. چیزی که تأیید نشده نباید در
+   * جای «عین حرف استاد» بنشیند.
+   */
+  matchedQuote: string;
 }
+
+/** نقل‌قولی که مدل از چند خط رونوشت به هم دوخته: «…» یا «...» وسطش هست. */
+const STITCH = /\s*(?:…|\.\.\.)\s*/;
 
 /**
  * تأیید نقل‌قول: بررسی می‌کند جمله‌ای که مدل به‌عنوان «حرف استاد» برگردانده
@@ -250,7 +262,9 @@ export interface QuoteMatch {
  */
 export function verifyQuote(t: BuiltTranscript, quote: string, hintMs?: number): QuoteMatch {
   const q = normalizeFa(quote);
-  const fail: QuoteMatch = { ok: false, score: 0, atMs: hintMs ?? 0, role: "نامشخص", utteranceText: "" };
+  const fail: QuoteMatch = {
+    ok: false, score: 0, atMs: hintMs ?? 0, role: "نامشخص", utteranceText: "", matchedQuote: quote,
+  };
   if (q.length < 8) return fail;
 
   const take = (score: number, owner: Utterance): QuoteMatch => ({
@@ -259,6 +273,7 @@ export function verifyQuote(t: BuiltTranscript, quote: string, hintMs?: number):
     atMs: owner.startMs,
     role: owner.role,
     utteranceText: owner.text,
+    matchedQuote: quote,
   });
 
   // گذر اول: تک‌تک پاره‌گفتارها. اگر نقل‌قول کامل داخل یکی باشد، زمانش
@@ -284,9 +299,46 @@ export function verifyQuote(t: BuiltTranscript, quote: string, hintMs?: number):
     }
   }
 
-  // اگر مدل زمان داده و نمره مرزی است، نزدیکی زمانی را به‌عنوان شاهد کمکی حساب کن
-  if (!best.ok && hintMs !== undefined && best.score >= 0.6 && Math.abs(best.atMs - hintMs) < 60_000) {
-    best.ok = true;
+  /**
+   * ⚠️ اینجا یک «نجاتِ مرزی» بود و برداشته شد.
+   *
+   * قاعده‌اش این بود: اگر نمره بین ۰٫۶ و ۰٫۷۵ بماند ولی زمانی که مدل داده به
+   * زمانِ بهترین تطبیق نزدیک باشد، نکته تأیید شود. مشکلش این است که آن زمان
+   * را **خودِ مدل** تولید کرده، از رونوشتی که هر خطش با زمان دقیق برچسب
+   * خورده و پرامپت هم صریح یادش داده عدد را کپی کند. یعنی مدل هر دو طرفِ
+   * «تأیید متقابل» را می‌نوشت و آستانهٔ واقعی ۰٫۶ بود نه ۰٫۷۵ — در حالی که
+   * مستندات عدد دوم را قطعی اعلام کرده بود.
+   *
+   * روی هفده نقل‌قولِ واقعیِ ذخیره‌شده هیچ‌کدام به این نجات نیاز نداشتند
+   * (کمترین نمره ۰٫۸۹ بود)، پس برداشتنش چیزی از فراخوانی کم نکرد.
+   */
+  if (best.ok) return best;
+
+  /**
+   * نقل‌قولِ **دوخته‌شده**: مدل چند خط رونوشت را با «…» به هم چسبانده.
+   *
+   * شایع‌ترین شکلِ شکستِ راستی‌آزمایی است — مخصوصاً وقتی می‌خواهد فهرستی
+   * (مثلاً نام چند کتاب) را کامل کند. جملهٔ دوخته‌شده در هیچ پاره‌گفتاری پیدا
+   * نمی‌شود، پس **کلِ نکته** حذف می‌شد، در حالی که هر تکه‌اش واقعاً گفته شده
+   * بود.
+   *
+   * راه‌حل: بلندترین تکه راستی‌آزمایی می‌شود و زمان هم روی همان می‌نشیند. و
+   * مهم‌تر: `matchedQuote` همان تکه می‌شود، پس چیزی که به کاربر به‌عنوان «عین
+   * حرف استاد» نشان داده می‌شود دقیقاً همان چیزی است که تأیید شده — نه جملهٔ
+   * دوخته‌شده. باقیِ حرف در `detail` نکته هست و از دست نمی‌رود.
+   */
+  if (STITCH.test(quote)) {
+    const parts = quote
+      .split(STITCH)
+      .map((p) => p.trim())
+      .filter((p) => normalizeFa(p).length >= 8)
+      .sort((a, b) => normalizeFa(b).length - normalizeFa(a).length);
+
+    for (const part of parts) {
+      const m = verifyQuote(t, part, hintMs);
+      if (m.ok) return { ...m, matchedQuote: part };
+    }
   }
+
   return best;
 }

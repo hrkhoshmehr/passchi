@@ -90,7 +90,13 @@ function verifyEvidence(t: BuiltTranscript, e: Evidence | null): VerifiedEvidenc
   if (!e) return null;
   const m = verifyQuote(t, e.quote, e.at_ms);
   return {
-    quote: e.quote,
+    /**
+     * نقل‌قولِ نمایش‌داده‌شده همان چیزی است که **تأیید شد**، نه لزوماً آنچه
+     * مدل نوشت. فرقشان وقتی است که مدل چند خط را با «…» به هم دوخته باشد؛
+     * آن‌وقت فقط تکهٔ تأییدشده می‌ماند. نشان‌دادنِ متنِ تأییدنشده در جای «عین
+     * حرف استاد» دقیقاً همان چیزی است که این دروازه برای جلوگیری از آن هست.
+     */
+    quote: m.ok ? m.matchedQuote : e.quote,
     at_ms: m.ok ? m.atMs : e.at_ms,
     speaker: m.ok && m.role !== "نامشخص" ? m.role : e.speaker,
     verified: m.ok,
@@ -109,7 +115,30 @@ const IMPORTANCE_MARKERS = [
   "امتحان", "میان ترم", "میانترم", "پایان ترم", "پایانترم", "کوییز", "نمره", "سوال میاد",
   "مهم", "اهمیت", "حتما", "یاد بگیر", "یادبگیر", "بلد باش", "حفظ کن", "دقت کن",
   "توجه کن", "یادداشت کن", "تاکید", "فراموش نکن", "کلیدی", "اساسی", "جدی بگیر",
-].map(normalizeFa);
+].map((m) => normalizeFa(m).split(" ").filter(Boolean));
+
+/**
+ * پایانه‌هایی که کلمه را عوض نمی‌کنند، فقط صرفش می‌کنند.
+ *
+ * لازم است چون نشانه‌ها ریشه‌اند نه شکلِ کامل: «یاد بگیر» باید «یاد بگیرید» را
+ * بگیرد و «مهم» باید «مهمه» و «مهم‌ترین» را. ولی «ان» عمداً **نیست** — با آن،
+ * «مهمان» هم نشانهٔ اهمیت حساب می‌شد.
+ */
+const INFLECTIONS = ["", "ه", "ی", "یی", "تر", "ترین", "ید", "ند", "یم", "م", "د", "ت", "ها", "های"];
+
+/** نفیِ بلافاصله‌ای که ادعا را وارونه می‌کند: «این اصلا مهم نیست». */
+const NEGATIONS = new Set(["نیست", "نیستش", "نیستند", "نبود", "نداره", "ندارد", "نه", "نمیاد"]);
+
+function isNegation(token: string | undefined): boolean {
+  return token !== undefined && (NEGATIONS.has(token) || token.startsWith("نمی"));
+}
+
+/** آیا توکنِ متن، همان نشانه است یا صرفِ آن؟ */
+function matchesMarkerToken(word: string, marker: string): boolean {
+  if (!word.startsWith(marker)) return false;
+  const tail = word.slice(marker.length);
+  return INFLECTIONS.includes(tail);
+}
 
 /**
  * نکته‌ای که مدل `emphasis` زده ولی محتوایش دربارهٔ نمره یا ترتیب کلاس است.
@@ -152,10 +181,34 @@ export function classifyKeyPointKind(quote: string, title: string): "grading" | 
  * حالی که آن جمله فقط ادامهٔ درس بوده — و این بدترین حالت است، چون هم
  * ظاهرِ مستند دارد و هم دانشجو را به‌سمت مطلبی می‌فرستد که استاد هیچ‌وقت
  * مهمش ندانسته. پس ادعای اهمیت باید در خودِ کلمات استاد باشد، نه در تفسیر.
+ *
+ * ## چرا مقایسه دیگر زیررشته‌ای نیست
+ *
+ * نسخهٔ اول `includes` می‌زد، پس «مهم» را داخل «مهمان» و «مهمونی» هم پیدا
+ * می‌کرد و «این اصلاً مهم نیست» را هم تأیید اهمیت می‌شمرد. هر سه را روی کد
+ * واقعی دیدیم. حالا تطبیق روی **مرزِ توکن** است، با پایانه‌های مجاز، و نفیِ
+ * بلافاصله ادعا را باطل می‌کند.
  */
 export function statesImportance(quote: string): boolean {
-  const q = normalizeFa(quote);
-  return IMPORTANCE_MARKERS.some((m) => q.includes(m));
+  const words = normalizeFa(quote).split(" ").filter(Boolean);
+  if (words.length === 0) return false;
+
+  for (const marker of IMPORTANCE_MARKERS) {
+    for (let i = 0; i + marker.length <= words.length; i++) {
+      // همهٔ توکن‌های نشانه جز آخری باید عین هم باشند؛ آخری می‌تواند صرف شود.
+      let hit = true;
+      for (let k = 0; k < marker.length - 1; k++) {
+        if (words[i + k] !== marker[k]) { hit = false; break; }
+      }
+      if (!hit) continue;
+      const last = i + marker.length - 1;
+      if (!matchesMarkerToken(words[last]!, marker[marker.length - 1]!)) continue;
+      // «مهم نیست» ادعای اهمیت نیست — دو توکن بعدی را نگاه کن.
+      if (isNegation(words[last + 1]) || isNegation(words[last + 2])) continue;
+      return true;
+    }
+  }
+  return false;
 }
 
 function computeComposition(
@@ -265,7 +318,30 @@ function normalizeChapters(
  * بهترند، ولی باید در لاگ دیده شوند تا اگر مدل یا پرامپت پس رفت بفهمیم.
  */
 function warnIfCompressed(chapters: ClassAnalysis["chapters"], durationMs: number): void {
-  if (chapters.length < 2 || durationMs <= 0) return;
+  if (durationMs <= 0) return;
+
+  /**
+   * **کم‌بودنِ تعداد بخش هم یک شکست است، نه فقط فشردگی.**
+   *
+   * اسکیما چهار تا شش بخش می‌خواهد، ولی هیچ‌جا کف نداشت. روی همان کلاس ۹۴
+   * دقیقه‌ای یک اجرا **دو** بخش داد — بخش دومش ۷۹ دقیقه — و چون پوشش کامل
+   * بود و حفره نداشت، از هیچ بررسی‌ای رد نمی‌شد. برای کاربری که می‌خواهد
+   * فقط بیست دقیقهٔ خاصی را گوش بدهد، «بخشی به طول ۷۹ دقیقه» یعنی همان
+   * نداشتنِ بخش‌بندی.
+   *
+   * اینجا هم فقط لاگ می‌شود: بخش‌بندیِ درشت از نبودنش بهتر است، ولی باید
+   * دیده شود. دمای پایین و ترتیب تازهٔ اسکیما این را روی صفر از هشت آوردند؛
+   * این خط همان است که می‌گوید اگر برگشت.
+   */
+  const MIN_CHAPTERS = 3;
+  if (chapters.length > 0 && chapters.length < MIN_CHAPTERS && durationMs > 20 * 60_000) {
+    logger.warn(
+      { chapters: chapters.length, durationMs },
+      "بخش‌های خیلی کم برای این مدت — بخش‌بندی عملاً بی‌فایده است",
+    );
+  }
+
+  if (chapters.length < 2) return;
   const lastStart = chapters[chapters.length - 1]!.start_ms;
   const covered = lastStart / durationMs;
   // شروعِ بخش آخر زیر ۲۵٪ مدت یعنی همهٔ مرزها در ابتدای فایل فشرده شده‌اند
@@ -416,7 +492,7 @@ export async function analyzeClass(
      * دقیقاً همان چیزهایی حذف می‌شوند که دانشجوی غایب بیشتر از همه می‌خواهد.
      * برای آنها همان دروازهٔ اول — «جمله واقعاً گفته شده» — کافی است.
      */
-    if ((kp.kind === "exam" || kp.kind === "emphasis") && !statesImportance(kp.evidence.quote)) {
+    if ((kp.kind === "exam" || kp.kind === "emphasis") && !statesImportance(ev.quote)) {
       dropped++;
       logger.debug({ title: kp.title, quote: kp.evidence.quote }, "نقل‌قول ادعای تأکید را ثابت نمی‌کند");
       continue;
@@ -429,7 +505,7 @@ export async function analyzeClass(
      * می‌آید تا نکته‌ای که واقعاً تأکید نبوده اول حذف شود، نه اینکه با
      * تغییر برچسب از دروازه فرار کند.
      */
-    const fixed = kp.kind === "emphasis" ? (classifyKeyPointKind(kp.evidence.quote, kp.title) ?? kp.kind) : kp.kind;
+    const fixed = kp.kind === "emphasis" ? (classifyKeyPointKind(ev.quote, kp.title) ?? kp.kind) : kp.kind;
     if (fixed !== kp.kind) {
       logger.debug({ title: kp.title, from: kp.kind, to: fixed }, "نوع نکته بر پایهٔ محتوا تصحیح شد");
     }
@@ -461,10 +537,19 @@ export async function analyzeClass(
 
   if (!opts.skipNotes) {
    try {
+    /**
+     * اسکلت با نکته‌های **تأییدشده** ساخته می‌شود، نه خروجی خام مدل.
+     *
+     * پیش‌تر `parsed.key_points` می‌رفت، یعنی هر نکته‌ای که دروازهٔ راستی‌آزمایی
+     * یا دروازهٔ تأکید حذفش کرده بود، از در پشتی به جزوه برمی‌گشت — و جزوه
+     * همان چیزی است که کاربر نگه می‌دارد و برای گروه درس فوروارد می‌کند.
+     * یعنی پیام تلگرام به دروازه‌ها احترام می‌گذاشت و بزرگ‌ترین خروجیِ محصول
+     * نه.
+     */
     const skeleton = `### تحلیل ساختاریافتهٔ همین جلسه\n\n\`\`\`json\n${JSON.stringify(
       {
         topics: parsed.topics,
-        key_points: parsed.key_points,
+        key_points: keyPoints,
         glossary: parsed.glossary,
         open_questions: parsed.open_questions,
       },

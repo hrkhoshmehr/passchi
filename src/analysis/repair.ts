@@ -14,6 +14,8 @@
  * دروازهٔ راستی‌آزمایی دور زده نشود.
  */
 
+import { KeyPoint, ProfessorAction, SegmentKind } from "./schema.js";
+
 type Obj = Record<string, unknown>;
 
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -61,12 +63,19 @@ function evidence(v: unknown): Obj | null {
   };
 }
 
-const KP_KINDS = new Set(["exam", "emphasis", "homework", "deadline"]);
-const ACTION_KINDS = new Set([
-  "attendance", "quiz", "homework", "deadline", "exam_info",
-  "grading", "makeup_class", "class_cancelled", "other",
-]);
-const SEGMENT_KINDS = new Set(["teaching", "qa", "admin", "offtopic", "technical", "break"]);
+/**
+ * فهرست‌های مجاز **از خودِ اسکیما** مشتق می‌شوند، نه دستی.
+ *
+ * نسخهٔ دستیِ قبلی از اسکیما عقب مانده بود: `grading` و `logistics` به
+ * `KeyPoint` اضافه شده بودند ولی اینجا نه، و چون هر نوعِ ناشناخته به
+ * `emphasis` تبدیل می‌شود، آن دو دسته به دروازهٔ تأکید می‌افتادند و — چون
+ * «بارم امتحان ۱۲ نمره است» با کلمهٔ «مهم» گفته نمی‌شود — بی‌صدا حذف
+ * می‌شدند. یعنی دقیقاً همان دو دسته‌ای که دانشجوی غایب بیشتر از همه
+ * می‌خواهد. با مشتق‌شدن از اسکیما، این انحراف دیگر ممکن نیست.
+ */
+const KP_KINDS = new Set<string>(KeyPoint.shape.kind.options);
+const ACTION_KINDS = new Set<string>(ProfessorAction.shape.action.options);
+const SEGMENT_KINDS = new Set<string>(SegmentKind.options);
 
 /**
  * آیا این خروجی آن‌قدر خالی است که نباید به‌عنوان «تحلیل» تحویل داده شود؟

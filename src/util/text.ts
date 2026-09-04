@@ -37,16 +37,92 @@ export function tokens(s: string): string[] {
   return n ? n.split(" ") : [];
 }
 
-/** نسبت هم‌پوشانی توکن‌های نقل‌قول با یک پنجرهٔ متن (۰..۱) */
+/**
+ * بلندترین زیردنبالهٔ مشترک بین دو آرایهٔ توکن — تطبیقِ **ترتیب‌دار**.
+ * مقایسه برابریِ کامل توکن است، نه زیررشته.
+ */
+function lcsLength(a: string[], b: string[]): number {
+  // فقط دو ردیف نگه داشته می‌شود؛ برای پاره‌گفتارهای کوتاه کاملاً کافی است.
+  let prev = new Array<number>(b.length + 1).fill(0);
+  let cur = new Array<number>(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1]! + 1 : Math.max(prev[j]!, cur[j - 1]!);
+    }
+    [prev, cur] = [cur, prev];
+    cur.fill(0);
+  }
+  return prev[b.length]!;
+}
+
+/**
+ * چند جفتِ **مجاورِ** نقل‌قول، در متن هم مجاور و به همان ترتیب آمده‌اند.
+ *
+ * یک توکنِ فاصله تحمل می‌شود (`MAX_GAP`)، چون رونوشتِ خودکار گاهی کلمهٔ پرکننده
+ * («خب»، «یعنی») را نگه می‌دارد که مدل در نقل‌قول نیاورده. بیشتر از آن دیگر
+ * «همان جمله» نیست.
+ */
+function adjacencyRatio(qt: string[], ht: string[]): number {
+  const MAX_GAP = 2;
+  const pairs = qt.length - 1;
+  if (pairs <= 0) return ht.includes(qt[0]!) ? 1 : 0;
+
+  const at = new Map<string, number[]>();
+  ht.forEach((t, i) => {
+    const list = at.get(t);
+    if (list) list.push(i);
+    else at.set(t, [i]);
+  });
+
+  let hit = 0;
+  for (let k = 0; k < pairs; k++) {
+    const first = at.get(qt[k]!);
+    const second = at.get(qt[k + 1]!);
+    if (!first || !second) continue;
+    if (first.some((i) => second.some((j) => j > i && j - i <= MAX_GAP))) hit++;
+  }
+  return hit / pairs;
+}
+
+/**
+ * چقدر این نقل‌قول واقعاً همان جمله‌ای است که در متن گفته شده (۰..۱).
+ *
+ * ## چرا شمارشِ کلمه کافی نیست
+ *
+ * نسخهٔ اول فقط می‌شمرد چند کلمهٔ نقل‌قول *جایی* در متن پیدا می‌شود — بدون
+ * ترتیب، بدون مجاورت، و با `includes` که زیررشته را هم قبول می‌کرد. نتیجه
+ * روی یک نمونهٔ واقعی:
+ *
+ *     پاره‌گفتار: «…این قسمت رو که گفتم توی جزوه هست و از اون فصل هم یه چیزایی میاد»
+ *     نقل‌قول جعلی: «این رو که گفتم از اون فصل توی امتحان میاد»  →  ۰٫۹۰، پذیرفته
+ *
+ * کلمهٔ «امتحان» هرگز گفته نشده بود و تنها کلمهٔ ناموفق هم همان بود — یعنی
+ * دقیقاً همان کلمه‌ای که کل ادعا رویش سوار است. `includes` هم «علم» را داخل
+ * «معلم» پیدا می‌کرد.
+ *
+ * ## قاعدهٔ فعلی
+ *
+ * کمینهٔ دو سنجه، تا هیچ‌کدام به‌تنهایی نتواند نمره را بالا ببرد:
+ *
+ * • **ترتیب** — نسبت بلندترین زیردنبالهٔ مشترک. جابه‌جایی کلمه‌ها را می‌گیرد.
+ * • **مجاورت** — نسبت جفت‌های مجاور. کلمهٔ *افزوده* را می‌گیرد، که سنجهٔ اول
+ *   تنبیهش نمی‌کند.
+ *
+ * روی همان نمونهٔ جعلی: ترتیب ۰٫۸۰ ولی مجاورت ۰٫۵۶ → رد.
+ */
 export function containmentScore(quote: string, haystackNorm: string): number {
   const q = normalizeFa(quote);
   if (!q) return 0;
-  if (haystackNorm.includes(q)) return 1;
-  const qt = q.split(" ");
+  // مرزِ کلمه لازم است، وگرنه «علم» داخل «معلم» نمرهٔ کامل می‌گیرد.
+  if (` ${haystackNorm} `.includes(` ${q} `)) return 1;
+  const qt = q.split(" ").filter(Boolean);
   if (qt.length === 0) return 0;
-  let hit = 0;
-  for (const t of qt) if (t.length > 1 && haystackNorm.includes(t)) hit++;
-  return hit / qt.length;
+  const ht = haystackNorm.split(" ").filter(Boolean);
+  if (ht.length === 0) return 0;
+
+  const order = lcsLength(qt, ht) / qt.length;
+  if (order === 0) return 0;
+  return Math.min(order, adjacencyRatio(qt, ht));
 }
 
 /** بریدن متن برای پیام تلگرام (سقف ۴۰۹۶ کاراکتر) */
