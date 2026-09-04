@@ -25,11 +25,26 @@ import fs from "node:fs";
 import { buildTranscript } from "../src/stt/transcript.ts";
 import { analyzeClass } from "../src/analysis/analyze.ts";
 
-const CACHE = "data/cache/class example.7c6a57d28c894bfb.soniox.json";
-const N = Number(process.argv[2] ?? 5);
+/**
+ * پیش‌فرض همان کلاسی است که باگ رویش پیدا شد، ولی **هر** رونوشتِ کش‌شده‌ای
+ * پذیرفته می‌شود — مهم‌تر از همه فایلی که شکایتِ کاربر از آن آمده:
+ *
+ *   npx tsx scripts/stability-check.mjs data/cache/<hash>.soniox.json 4
+ *
+ * روی فایلِ ناشناس، «حقیقتِ زمینی» در کار نیست، پس سنجه عوض می‌شود: مهم این
+ * است که همهٔ اجراها **یک** جواب بدهند، نه اینکه جوابشان چه باشد. آن هم
+ * دقیقاً همان چیزی است که کاربر دید — یک بار «تکلیف داد»، یک بار نه.
+ */
+const isNum = (s) => /^\d+$/.test(s ?? "");
+const CACHE = process.argv[2] && !isNum(process.argv[2])
+  ? process.argv[2]
+  : "data/cache/class example.7c6a57d28c894bfb.soniox.json";
+const N = Number((isNum(process.argv[2]) ? process.argv[2] : process.argv[3]) ?? 5);
+/** فقط برای کلاسِ نمونه حقیقتِ زمینیِ دستی داریم. */
+const KNOWN = CACHE.includes("class example");
 
 if (!fs.existsSync(CACHE)) {
-  console.error(`رونوشتِ کش‌شده نیست: ${CACHE}\nیک بار خط لوله را روی «class example.m4a» اجرا کن تا ساخته شود.`);
+  console.error(`رونوشتِ کش‌شده نیست: ${CACHE}`);
   process.exit(1);
 }
 
@@ -81,12 +96,23 @@ const chs = runs.map((r) => r.chapters);
 const hw = runs.filter((r) => r.homework).length;
 const trap = runs.filter((r) => r.trap).length;
 
-console.log(`\n— تکلیف «بله»: ${hw} از ${N}   (باید ${N} باشد)`);
-console.log(`— تلهٔ «دو نمره»: ${trap} از ${N}   (باید صفر باشد)`);
+const patterns = new Set(runs.map((r) => r.kinds)).size;
+
+console.log(
+  `\n— تکلیف «بله»: ${hw} از ${N}   ` +
+    (KNOWN ? `(باید ${N} باشد)` : "(باید صفر یا همه باشد — دودلی خودش نقص است)"),
+);
+if (KNOWN) console.log(`— تلهٔ «دو نمره»: ${trap} از ${N}   (باید صفر باشد)`);
 console.log(`— بخش‌ها: ${chs.join(", ")}   (هیچ‌کدام نباید زیر ۴ باشد)`);
 console.log(`— شروعِ بخش آخر: ${runs.map((r) => "٪" + r.lastPct).join(", ")}   (زیر ٪۲۵ یعنی زمان‌ها حدسی‌اند)`);
-console.log(`— الگوهای متمایزِ نوع: ${new Set(runs.map((r) => r.kinds)).size} از ${N}`);
+console.log(`— الگوهای متمایزِ نوع: ${patterns} از ${N}`);
 
-const failed = hw < N || trap > 0 || Math.min(...chs) < 4;
+/**
+ * روی فایلِ ناشناس، «تکلیف داد یا نه» را نمی‌دانیم — ولی **دودلی** را
+ * می‌دانیم و همان چیزی است که کاربر دید. پس شرط، یکدست‌بودن است نه یک مقدارِ
+ * مشخص.
+ */
+const undecided = hw !== 0 && hw !== N;
+const failed = KNOWN ? hw < N || trap > 0 || Math.min(...chs) < 4 : undecided || Math.min(...chs) < 4;
 console.log(failed ? "\n❌ پایداری افت کرده" : "\n✅ پایدار");
 process.exit(failed ? 1 : 0);
