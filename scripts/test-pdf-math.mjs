@@ -110,5 +110,21 @@ const build = (markdown) =>
   check("ریاضی لاتین همچنان با کاتکس رندر می‌شود", rendered(latin));
 }
 
+// ─── ۶) امضای پای جزوه ──────────────────────────────────────────────────────
+//
+// جزوه فوروارد می‌شود و همان چیزی است که در گروه درس دست‌به‌دست می‌گردد. پای
+// آخرین صفحه باید بگوید از کجا آمده، وگرنه کسی که آن را از دوستش گرفته راهی
+// برای پیداکردن ما ندارد.
+{
+  const html = build("## بخش\n\nمتن نمونه.\n");
+  check("امضا در جزوه هست", /ساخته شده توسط/.test(html));
+  check("آیدی ربات نوشته شده", html.includes("@passchi_bot"));
+  // آیدی لاتین در متن راست‌به‌چپ باید جدا شود، وگرنه @ سرِ جای اشتباه می‌افتد
+  check("آیدی جداسازی دوجهته دارد", /class="handle"/.test(html) && /\.sign \.handle\{direction:ltr/.test(html));
+  // باید آخرین چیزِ سند باشد تا ته آخرین صفحه بنشیند
+  const body = html.slice(html.indexOf("<body>"), html.indexOf("</body>"));
+  check("پس از امضا چیزی نمی‌آید", body.trimEnd().endsWith("</p>") && body.lastIndexOf('class="sign"') > body.lastIndexOf('class="note"'));
+}
+
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
 process.exit(bad === 0 ? 0 : 1);

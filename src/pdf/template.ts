@@ -4,6 +4,7 @@ import { buildFontCss } from "./assets.js";
 import { escapeHtml } from "../util/text.js";
 import { logger } from "../util/logger.js";
 import { fmtDuration, toFaDigits } from "../util/time.js";
+import { BOT_HANDLE } from "../bot/menu.js";
 import type { AnalysisReport } from "../analysis/schema.js";
 
 const md = new MarkdownIt({ html: false, linkify: true, typographer: false, breaks: false });
@@ -267,6 +268,13 @@ th{background:#f7f9fb;font-weight:600;color:#3d4852}
 .section{break-before:page}
 .note{margin-top:2.4em;padding-top:.8em;border-top:1px solid var(--line);
   font-size:8.5pt;color:var(--dim);line-height:1.8}
+/* امضای پای جزوه — با متن باقی می‌ماند، پس همیشه ته آخرین صفحه می‌نشیند */
+.sign{margin-top:1.2em;text-align:center;font-size:9pt;color:var(--dim);
+  break-inside:avoid}
+.sign b{color:var(--ink);font-weight:600}
+/* آیدی لاتین در متن راست‌به‌چپ باید جدا شود، وگرنه @ سرِ جای اشتباه می‌افتد */
+.sign .handle{direction:ltr;unicode-bidi:isolate;display:inline-block;
+  font-variant-numeric:normal}
 </style>
 </head>
 <body>
@@ -311,6 +319,8 @@ ${
 این جزوه به‌صورت خودکار از رونوشت صوت کلاس ساخته شده و ممکن است خطا داشته باشد؛ جای دفتر و کتاب مرجع را نمی‌گیرد.
 تولید: ${escapeHtml(doc.generatedAt.toLocaleDateString("fa-IR"))}
 </p>
+
+<p class="sign">ساخته شده توسط <b class="handle">${escapeHtml(BOT_HANDLE)}</b></p>
 
 </body>
 </html>`;
