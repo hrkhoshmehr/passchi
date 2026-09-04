@@ -227,6 +227,37 @@ check("دکمه‌های ربات فقط روی دسکتاپ پنهان می‌�
     /'awaiting_credit','awaiting_confirm'/.test(db),
   );
   check("وضعیت تازه در نوع تعریف شده", db.includes('"awaiting_confirm"'));
+
+  // ── قیمت پیش از دانلود ───────────────────────────────────────────────────
+  //
+  // فایلی که کاربر تأیید نمی‌کند نباید هیچ باری روی سرور بگذارد.
+  const handler = bot.slice(bot.indexOf('handlers.on(\n  ["message:audio"'), bot.indexOf("// ─── دریافت از لینک"));
+  const holdIdx = handler.indexOf("holdBeforeDownload");
+  const dlIdx = handler.indexOf("downloadMedia(");
+  check("دست‌کدِ صوت پیش از دانلود قیمت می‌دهد", holdIdx >= 0 && dlIdx >= 0 && holdIdx < dlIdx);
+  check("مدت از خودِ پیام خوانده می‌شود", handler.includes("declaredDurationSec("));
+  check(
+    "نگه‌داشتنِ پیش از دانلود فقط شناسهٔ فایل را ذخیره می‌کند",
+    /audio_file_id: spec\.fileId/.test(bot) && !/original_file/.test(
+      bot.slice(bot.indexOf("async function holdBeforeDownload"), bot.indexOf("interface IntakeSpec")),
+    ),
+  );
+
+  // ── مدت اعلام‌شده حرفِ فرستنده است ────────────────────────────────────────
+  //
+  // پس از دانلود باید با probe راستی‌آزمایی شود، وگرنه کلاینتِ دست‌کاری‌شده
+  // با «یک ثانیه» یک کلاس چهارساعته را مجانی پردازش می‌کند — و چون `commit`
+  // با strict:false مابه‌التفاوت را تا صفر می‌بُرد، هیچ‌جا هم گیر نمی‌کرد.
+  const resume = bot.slice(bot.indexOf("async function resumeSession"), bot.indexOf("handlers.callbackQuery(/^resume:"));
+  check("پس از دانلود، مدت با probe راستی‌آزمایی می‌شود", /await probe\(audioFile\)/.test(resume));
+  check("مبنای رزرو، عددِ خودمان می‌شود", /durationSec = realSec/.test(resume));
+  check("گران‌تر از قیمتِ اعلام‌شده دوباره پرسیده می‌شود", /costCoins\(realSec\) > costCoins\(durationSec\)/.test(resume));
+
+  // ── سقفِ فایل‌های تصمیم‌نگرفته ────────────────────────────────────────────
+  check("سقفِ جلسه‌های معلق هست", /const MAX_PENDING_SESSIONS = \d+/.test(bot));
+  check("سقف روی هر دو مسیرِ ورودی اعمال می‌شود", (bot.match(/await tooManyPending\(/g) ?? []).length >= 2);
+  check("سقف پیش از دانلود بررسی می‌شود", handler.indexOf("tooManyPending") < dlIdx);
+  check("شمارش از پایگاه‌داده می‌آید", db.includes("export function pendingSessions"));
 }
 
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);

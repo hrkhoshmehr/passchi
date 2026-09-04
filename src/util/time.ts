@@ -40,3 +40,51 @@ export function pct(part: number, whole: number): number {
   if (whole <= 0) return 0;
   return Math.round((part / whole) * 1000) / 10;
 }
+
+/**
+ * مدتی که سکو اعلام کرده، با واحدِ **تشخیص‌داده‌شده** — بدون دانلود فایل.
+ *
+ * ## باگی که این را لازم کرد
+ *
+ * یک ویسِ ۴۹ ثانیه‌ای در بله، ۸۲۴ سکه قیمت خورد. **بله مدتِ ویس را به
+ * میلی‌ثانیه می‌دهد و تلگرام به ثانیه**؛ آن فایل ۴۹٬۴۴۰ میلی‌ثانیه بود و
+ * همان عدد به‌جای ثانیه نشست — هزار برابر. کاربر «اعتبارت کم است» گرفت و
+ * کارش همان‌جا ماند.
+ *
+ * ## چرا واحد را از حجم می‌فهمیم، نه از نام سکو
+ *
+ * وسوسه‌کننده است که بنویسیم «اگر بله بود تقسیم بر هزار». ولی شاهدی نداریم
+ * که بله برای **همهٔ** انواع رسانه یک‌جور رفتار کند، و اگر جایی ثانیه بدهد
+ * و ما تقسیم کنیم، هزینه هزار برابر **کم‌تر** حساب می‌شود — خطایی که سمتِ
+ * ضررِ ماست و هیچ‌کس هم شکایتی نمی‌کند تا بفهمیم.
+ *
+ * حجم فایل در همان پیام هست و مرزهای نرخ‌بیت فیزیکی‌اند: هیچ صوت یا ویدیویی
+ * زیر چهار کیلوبیت بر ثانیه یا بالای بیست مگابیت بر ثانیه نیست. پس از روی
+ * حجم می‌شود گفت کدام تفسیرِ عدد اصلاً ممکن است. این قاعده هم بله را درست
+ * می‌خواند و هم اگر روزی تلگرام واحدش را عوض کرد.
+ *
+ * وقتی هیچ تفسیری جور درنمی‌آید، همان عددِ خام برمی‌گردد و `sure` می‌شود
+ * `false` — صدازننده باید بداند که این یک تخمین است و پیش از کسرِ نهایی
+ * فایل را `probe` کند.
+ */
+export function declaredDurationSec(
+  declared: number,
+  sizeBytes: number,
+  maxSec = 240 * 60,
+): { sec: number; sure: boolean } {
+  if (!Number.isFinite(declared) || declared <= 0) return { sec: 0, sure: false };
+
+  // مرزهای نرخ‌بیت: از اپوسِ خیلی فشرده تا ویدیوی باکیفیت
+  const bits = sizeBytes > 0 ? sizeBytes * 8 : 0;
+  const plausible = (sec: number): boolean => {
+    if (sec < 1 || sec > maxSec) return false;
+    if (bits <= 0) return true; // حجم نداریم، فقط سقفِ مدت را می‌سنجیم
+    const bitrate = bits / sec;
+    return bitrate >= 4_000 && bitrate <= 20_000_000;
+  };
+
+  if (plausible(declared)) return { sec: Math.round(declared), sure: true };
+  const asMs = declared / 1000;
+  if (plausible(asMs)) return { sec: Math.round(asMs), sure: true };
+  return { sec: Math.round(declared), sure: false };
+}

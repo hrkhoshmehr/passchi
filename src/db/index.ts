@@ -359,6 +359,23 @@ export function listSessions(tgId: number, limit = 10, offset = 0): SessionRow[]
     .all(tgId, limit, offset) as unknown as SessionRow[];
 }
 
+/**
+ * جلسه‌هایی که منتظر تصمیمِ کاربرند — تأییدنشده یا منتظر شارژ.
+ *
+ * برای محدودکردنِ صف‌کردنِ بی‌پایانِ فایل به کار می‌رود: هر کدام یک سطر
+ * پایگاه‌داده و چند پیام است، و آنی که به شارژ رسیده یک فایلِ دانلودشده هم
+ * روی دیسک دارد.
+ */
+export function pendingSessions(tgId: number): SessionRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM sessions
+       WHERE tg_id = ? AND status IN ('awaiting_confirm','awaiting_credit')
+       ORDER BY created_at DESC`,
+    )
+    .all(tgId) as unknown as SessionRow[];
+}
+
 /** شمار کل جلسه‌های کاربر — برای صفحه‌بندی. */
 export function countSessions(tgId: number): number {
   const row = db

@@ -24,6 +24,7 @@ const tests = [
   "emphasis",
   "keypoint-kind",
 
+  "duration",
   "queue",
   "keyboards",
   "platform-detect",

@@ -4,7 +4,7 @@ import { Bot, Composer, InlineKeyboard, InputFile, type Api, type Context } from
 import { config, requireKey } from "../config.js";
 import { logger } from "../util/logger.js";
 import { chunkMessage, escapeHtml, htmlToPlain, shortId } from "../util/text.js";
-import { fmtClock, fmtDuration, toFaDigits } from "../util/time.js";
+import { declaredDurationSec, fmtClock, fmtDuration, toFaDigits } from "../util/time.js";
 import { extractClip, probe, TimeMap } from "../audio/ffmpeg.js";
 import { runPipeline } from "../pipeline.js";
 import { cancel as cancelJob, enqueue, isBusy, queueDepth } from "../queue.js";
@@ -34,11 +34,11 @@ import {
   mintGift, refusalMessage,
 } from "./gift.js";
 import {
-  RATE_LINE, coinsAsMinutesIfUseful, coinsToSec, fmtBalance, fmtCoins, fmtCost, fmtToman,
+  RATE_LINE, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtBalance, fmtCoins, fmtCost, fmtToman,
 } from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
-  getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions,
+  getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, pendingSessions,
   countSessions, getGift, listGifts, pendingTopups, purgeSession, revokeGift, sessionReport,
   sessionTimeMap, updateSession,
   type SessionMode,
@@ -1211,11 +1211,155 @@ handlers.on(
     await reply(ctx, "یه کار دارم انجام می‌دم، صبر کن تموم شه 🙏");
     return;
   }
-
-  const durationSec = "duration" in media && media.duration ? media.duration : 0;
+  if (await tooManyPending(ctx, id)) return;
 
   const sessionId = shortId();
-  const sizeMb = Math.round((media.file_size ?? 0) / 1024 / 1024);
+
+  /**
+   * **قیمت پیش از دانلود.**
+   *
+   * سکو مدت را همان‌جا در پیام می‌گوید، پس برای قیمت‌دادن لازم نیست فایل را
+   * بگیریم. کاربری که منصرف می‌شود یا اعتبارش کم است، دیگر هیچ بایتی روی
+   * سرور نمی‌آورد — روی کلاسِ چندصدمگابایتی این تفاوتِ کوچکی نیست.
+   *
+   * واحدِ آن عدد از **حجم فایل** تشخیص داده می‌شود نه از نام سکو، چون بله
+   * مدتِ ویس را به میلی‌ثانیه می‌دهد و تلگرام به ثانیه. جزئیاتش در
+   * `declaredDurationSec`.
+   *
+   * `sec === 0` یعنی سکو مدتی نگفته — که برای فایلِ فرستاده‌شده به‌صورت
+   * **سند** عادی است. آن‌وقت چاره‌ای جز دانلود و `probe` نیست و مسیر قدیمی
+   * ادامه پیدا می‌کند.
+   */
+  const declared = declaredDurationSec(
+    "duration" in media && media.duration ? media.duration : 0,
+    media.file_size ?? 0,
+    config.MAX_AUDIO_MINUTES * 60,
+  );
+  if (declared.sec > 0) {
+    await holdBeforeDownload(ctx, {
+      sessionId,
+      sec: declared.sec,
+      fileId: media.file_id,
+      messageId: msg.message_id,
+    });
+    return;
+  }
+
+  const durationSec = 0;
+  const dl = await downloadMedia(ctx, {
+    sessionId,
+    fileId: media.file_id,
+    messageId: msg.message_id,
+    declaredSize: media.file_size ?? 0,
+  });
+  if (!dl) return;
+  const { audioFile, route } = dl;
+
+  await intakeAudio(ctx, {
+    sessionId,
+    audioFile,
+    downloadRoute: route,
+    messageId: msg.message_id,
+    fileId: media.file_id,
+    declaredDurationSec: durationSec,
+  });
+},
+);
+
+// ─── دریافت از لینک ─────────────────────────────────────────────────────────
+
+/**
+ * کلاس آنلاین لینک دارد، نه فایل.
+ *
+ * ضبط جلسه‌های اسکای‌روم و ادوبی کانکت و مشابهشان یک آدرس است که دانشجو
+ * دارد. پیش از این باید خودش دانلود می‌کرد و دوباره آپلود — روی اینترنت
+ * ایران، برای یک فایل چندصدمگابایتی، همان‌جا کار را رها می‌کرد.
+ *
+ * از لحظه‌ای که فایل روی دیسک نشست، هیچ فرقی با صوتِ فرستاده‌شده ندارد و از
+ * `intakeAudio` رد می‌شود. ویدیو هم مسئله‌ای نیست: ffmpeg همه‌جا `-vn` دارد.
+ */
+async function handleLink(ctx: Context, url: string): Promise<void> {
+  const u = touchUser(ctx);
+  if (!u) return;
+  const id = u.tg_id;
+
+  if (isBusy(String(id))) {
+    await reply(ctx, "یه کار دارم انجام می‌دم، صبر کن تموم شه 🙏");
+    return;
+  }
+  if (await tooManyPending(ctx, id)) return;
+
+  const sessionId = shortId();
+  const statusMsg = await ctx.reply("⬇️ دارم از لینک می‌گیرم…", { parse_mode: "HTML" });
+
+  let fetched: FetchUrlResult;
+  try {
+    // مثل مسیر تلگرام، پیشرفت با گام درشت نشان داده می‌شود — ویرایش پیام
+    // محدودیت نرخ دارد و یک دانلود بزرگ صدها بار صدا می‌زند.
+    let lastShown = 0;
+    fetched = await fetchUrlToFile({
+      url,
+      destDir: config.audioDir,
+      baseName: sessionId,
+      onProgress: (done, total) => {
+        if (total < 20 * 1024 * 1024) return;
+        const p = Math.floor((done / total) * 10) * 10;
+        if (p <= lastShown || p >= 100) return;
+        lastShown = p;
+        void ctx.api
+          .editMessageText(ctx.chat!.id, statusMsg.message_id, `⬇️ دارم از لینک می‌گیرم… ${toFaDigits(p)}٪`)
+          .catch(() => {});
+      },
+    });
+  } catch (e) {
+    // پیام کاربر از خودِ خطا می‌آید: هر شاخه دقیقاً می‌داند چه چیزی خراب شده
+    // و کاربر باید چه کار کند. یک پیام عمومی هر سه حالت را یکسان می‌کرد.
+    const text =
+      e instanceof UrlFetchError
+        ? `❌ ${e.userMessage}`
+        : "❌ نشد از این لینک فایلو بگیرم. یه بار دیگه امتحان کن.";
+    if (!(e instanceof UrlFetchError)) logger.error({ err: String(e), url }, "url fetch failed");
+    await ctx.api
+      .editMessageText(ctx.chat!.id, statusMsg.message_id, text, { parse_mode: "HTML" })
+      .catch(() => {});
+    return;
+  }
+
+  await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
+
+  await intakeAudio(ctx, {
+    sessionId,
+    audioFile: fetched.filePath,
+    downloadRoute: "url",
+    // لینک نه پیام صوتی دارد نه `file_id` — هر دو عمداً خالی می‌مانند
+    declaredDurationSec: 0,
+    sourceUrl: url,
+  });
+}
+
+/**
+ * از «فایل روی دیسک است» تا «کار شروع شد» — مسیر مشترک هر منبعی.
+ *
+ * فایلِ فرستاده‌شده و لینکِ دانلودشده از اینجا به بعد فرقی ندارند: هر دو یک
+ * صوت روی دیسک‌اند. این تابع عمداً بیرون کشیده شد چون بندهای زیر ترتیب حساسی
+ * دارند — بایگانی پیش از پردازش، مدت واقعی پیش از رزرو، و هشدار اعتبار پیش
+ * از هر کاری. دو نسخهٔ موازی از این ترتیب یعنی روزی یکی‌شان عقب می‌ماند.
+ */
+/**
+ * فایل را از سکو بگیر و روی دیسک بگذار — با تلاش دوباره و پیامِ زندهٔ پیشرفت.
+ *
+ * از دلِ دست‌کدِ صوت بیرون کشیده شد چون حالا **دو** صدازننده دارد: مسیرِ
+ * قدیمی (فایلی که سکو مدتش را نگفته و باید probe شود) و دکمهٔ «شروع کن»
+ * روی جلسه‌ای که قیمتش پیش از دانلود اعلام شده بود.
+ *
+ * `null` یعنی نشد — و پیامِ مناسبش همین‌جا به کاربر داده شده، پس صدازننده
+ * فقط باید برگردد.
+ */
+async function downloadMedia(
+  ctx: Context,
+  o: { sessionId: string; fileId: string; messageId: number; declaredSize: number },
+): Promise<{ audioFile: string; route: string } | null> {
+  const sizeMb = Math.round((o.declaredSize) / 1024 / 1024);
   const statusMsg = await ctx.reply(
     `⬇️ دارم فایلو می‌گیرم${sizeMb > 20 ? ` (${toFaDigits(sizeMb)} مگ)` : ""}…`,
     { parse_mode: "HTML" },
@@ -1228,12 +1372,12 @@ handlers.on(
     // در تلگرام محدودیت نرخ دارد و دانلود ۸۰ مگابایتی صدها بار صدا می‌زند.
     let lastShown = 0;
     const req = {
-      fileId: media.file_id,
+      fileId: o.fileId,
       chatId: ctx.chat!.id,
-      messageId: msg.message_id,
-      declaredSize: media.file_size ?? 0,
+      messageId: o.messageId,
+      declaredSize: o.declaredSize,
       destDir: config.audioDir,
-      baseName: sessionId,
+      baseName: o.sessionId,
       onProgress: (done: number, total: number) => {
         if (total < 20 * 1024 * 1024) return;
         const p = Math.floor((done / total) * 10) * 10;
@@ -1338,7 +1482,7 @@ handlers.on(
           `<b>از دکمهٔ پایین بفرستش</b> — اونجا تا ۵۰۰ مگ می‌گیرم.`,
         { parse_mode: "HTML", ...(kb.inline_keyboard.length ? { reply_markup: kb } : {}) },
       );
-      return;
+      return null;
     }
     logger.error({ err: String(e), platform: platformOf(ctx) }, "download failed");
     const kb = new InlineKeyboard();
@@ -1352,100 +1496,111 @@ handlers.on(
         `<b>مشکل از سمت منه نه تو.</b> از دکمهٔ پایین امتحان کن — مسیرش جداست.`,
       { parse_mode: "HTML", ...(kb.inline_keyboard.length ? { reply_markup: kb } : {}) },
     );
-    return;
+    return null;
   }
 
   await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
+  return { audioFile, route };
+}
 
-  await intakeAudio(ctx, {
-    sessionId,
-    audioFile,
-    downloadRoute: route,
-    messageId: msg.message_id,
-    fileId: media.file_id,
-    declaredDurationSec: durationSec,
-  });
-},
-);
-
-// ─── دریافت از لینک ─────────────────────────────────────────────────────────
 
 /**
- * کلاس آنلاین لینک دارد، نه فایل.
+ * سقفِ جلسه‌های تصمیم‌نگرفته — تا کسی نتواند ربات را با فایل پر کند.
  *
- * ضبط جلسه‌های اسکای‌روم و ادوبی کانکت و مشابهشان یک آدرس است که دانشجو
- * دارد. پیش از این باید خودش دانلود می‌کرد و دوباره آپلود — روی اینترنت
- * ایران، برای یک فایل چندصدمگابایتی، همان‌جا کار را رها می‌کرد.
+ * ## چه چیزی را می‌بندد و چه چیزی را نه
  *
- * از لحظه‌ای که فایل روی دیسک نشست، هیچ فرقی با صوتِ فرستاده‌شده ندارد و از
- * `intakeAudio` رد می‌شود. ویدیو هم مسئله‌ای نیست: ffmpeg همه‌جا `-vn` دارد.
+ * حالا که قیمت **پیش از دانلود** اعلام می‌شود، فرستادنِ فایل و انصراف دیگر
+ * هیچ باری روی سرور نمی‌گذارد: هیچ بایتی دانلود نمی‌شود. آنچه می‌ماند
+ * ارزان‌تر ولی صفر نیست — هر بار یک سطر پایگاه‌داده و دو سه تماس با Bot API.
+ *
+ * و یک حالت گران‌تر هم هست: کاربری که تأیید می‌کند، فایل دانلود می‌شود، و
+ * `probe` نشان می‌دهد مدت واقعی خیلی بیشتر از اعلامِ فرستنده است و اعتبارش
+ * نمی‌رسد. آن فایل روی دیسک می‌ماند. با سقف، چنین کسی بعد از چند بار
+ * می‌بندد و باید تکلیفِ قبلی‌ها را روشن کند.
+ *
+ * سقف عمداً پایین نیست: دانشجویی که سه کلاسِ یک روز را پشت سر هم می‌فرستد
+ * کارِ عادی می‌کند و نباید ببندد.
  */
-async function handleLink(ctx: Context, url: string): Promise<void> {
-  const u = touchUser(ctx);
-  if (!u) return;
-  const id = u.tg_id;
+const MAX_PENDING_SESSIONS = 5;
 
-  if (isBusy(String(id))) {
-    await reply(ctx, "یه کار دارم انجام می‌دم، صبر کن تموم شه 🙏");
-    return;
-  }
+async function tooManyPending(ctx: Context, userId: number): Promise<boolean> {
+  const pending = pendingSessions(userId);
+  if (pending.length < MAX_PENDING_SESSIONS) return false;
 
-  const sessionId = shortId();
-  const statusMsg = await ctx.reply("⬇️ دارم از لینک می‌گیرم…", { parse_mode: "HTML" });
+  await reply(
+    ctx,
+    `<b>${toFaDigits(pending.length)} فایل داری که هنوز تصمیمی براشون نگرفتی.</b>\n\n` +
+      `اول اونا رو شروع کن یا بی‌خیالشون شو، بعد فایل تازه بفرست.`,
+    {
+      reply_markup: new InlineKeyboard()
+        .text("✅ شروعِ آخرین فایل", `go:${pending[0]!.id}`)
+        .row()
+        .text(`📚 ${BTN.history}`, "hpage:0"),
+    },
+  );
+  return true;
+}
 
-  let fetched: FetchUrlResult;
-  try {
-    // مثل مسیر تلگرام، پیشرفت با گام درشت نشان داده می‌شود — ویرایش پیام
-    // محدودیت نرخ دارد و یک دانلود بزرگ صدها بار صدا می‌زند.
-    let lastShown = 0;
-    fetched = await fetchUrlToFile({
-      url,
-      destDir: config.audioDir,
-      baseName: sessionId,
-      onProgress: (done, total) => {
-        if (total < 20 * 1024 * 1024) return;
-        const p = Math.floor((done / total) * 10) * 10;
-        if (p <= lastShown || p >= 100) return;
-        lastShown = p;
-        void ctx.api
-          .editMessageText(ctx.chat!.id, statusMsg.message_id, `⬇️ دارم از لینک می‌گیرم… ${toFaDigits(p)}٪`)
-          .catch(() => {});
-      },
-    });
-  } catch (e) {
-    // پیام کاربر از خودِ خطا می‌آید: هر شاخه دقیقاً می‌داند چه چیزی خراب شده
-    // و کاربر باید چه کار کند. یک پیام عمومی هر سه حالت را یکسان می‌کرد.
-    const text =
-      e instanceof UrlFetchError
-        ? `❌ ${e.userMessage}`
-        : "❌ نشد از این لینک فایلو بگیرم. یه بار دیگه امتحان کن.";
-    if (!(e instanceof UrlFetchError)) logger.error({ err: String(e), url }, "url fetch failed");
-    await ctx.api
-      .editMessageText(ctx.chat!.id, statusMsg.message_id, text, { parse_mode: "HTML" })
-      .catch(() => {});
-    return;
-  }
-
-  await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id).catch(() => {});
-
-  await intakeAudio(ctx, {
-    sessionId,
-    audioFile: fetched.filePath,
-    downloadRoute: "url",
-    // لینک نه پیام صوتی دارد نه `file_id` — هر دو عمداً خالی می‌مانند
-    declaredDurationSec: 0,
-    sourceUrl: url,
-  });
+/** درسی که خودمان حدس می‌زنیم — بدون پرسیدن از کاربر. */
+function autoCourseId(userId: number): number | null {
+  const courses = listCourses(userId);
+  if (courses.length === 1) return courses[0]!.id;
+  const recent = listSessions(userId, 20).find((s) => s.course_id !== null)?.course_id ?? null;
+  return recent && courses.some((c) => c.id === recent) ? recent : null;
 }
 
 /**
- * از «فایل روی دیسک است» تا «کار شروع شد» — مسیر مشترک هر منبعی.
+ * جلسه را **پیش از دانلود** نگه دار و قیمتش را بگو.
  *
- * فایلِ فرستاده‌شده و لینکِ دانلودشده از اینجا به بعد فرقی ندارند: هر دو یک
- * صوت روی دیسک‌اند. این تابع عمداً بیرون کشیده شد چون بندهای زیر ترتیب حساسی
- * دارند — بایگانی پیش از پردازش، مدت واقعی پیش از رزرو، و هشدار اعتبار پیش
- * از هر کاری. دو نسخهٔ موازی از این ترتیب یعنی روزی یکی‌شان عقب می‌ماند.
+ * سکو مدت را در خودِ پیام گفته، پس برای قیمت‌دادن به فایل نیازی نیست. آنچه
+ * ذخیره می‌شود شناسهٔ فایل است نه خودش؛ دانلود تازه وقتی انجام می‌شود که
+ * کاربر «شروع کن» را بزند. یعنی فایلِ کسی که منصرف شد یا اعتبارش کم بود
+ * اصلاً روی سرور نمی‌آید.
+ *
+ * ⚠️ مدتِ اینجا **تخمینِ سکو**ست. مبنای کسرِ نهایی نیست: خط لوله فایل را
+ * خودش `probe` می‌کند و تسویه با مدت واقعی انجام می‌شود. این عدد فقط برای
+ * قیمتِ نشان‌داده‌شده و رزروِ اولیه است.
  */
+async function holdBeforeDownload(
+  ctx: Context,
+  spec: { sessionId: string; sec: number; fileId: string; messageId: number },
+): Promise<void> {
+  const u = touchUser(ctx);
+  if (!u) return;
+  const { sessionId, sec } = spec;
+
+  createSession(sessionId, u.tg_id, autoCourseId(u.tg_id));
+  updateSession(sessionId, {
+    status: u.credit_sec < sec ? "awaiting_credit" : "awaiting_confirm",
+    original_ms: sec * 1000,
+    audio_file_id: spec.fileId,
+    audio_chat_id: ctx.chat!.id,
+    audio_message_id: spec.messageId,
+    mode: "full",
+  });
+
+  if (u.credit_sec < sec) {
+    await reply(
+      ctx,
+      S.lowBalanceMessage(sec, u.credit_sec) +
+        "\n\n<i>فایلت همون‌جا تو چت هست — بعد از شارژ همین دکمه رو بزن، لازم نیست دوباره بفرستی.</i>",
+      {
+        reply_markup: new InlineKeyboard()
+          .text("🪙 شارژ حساب", "topup")
+          .row()
+          .text("▶️ ادامه بده", `go:${sessionId}`),
+      },
+    );
+    return;
+  }
+
+  await reply(ctx, S.confirmCostMessage(sec, u.credit_sec), {
+    reply_markup: new InlineKeyboard()
+      .text("✅ شروع کن", `go:${sessionId}`)
+      .text("✖️ بی‌خیال", `nogo:${sessionId}`),
+  });
+}
+
 interface IntakeSpec {
   sessionId: string;
   audioFile: string;
@@ -1492,10 +1647,7 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
    * پس: درسی نداری، بدون درس جلو می‌رویم. یک درس داری، همان. چند تا داری،
    * آخرین درسی که استفاده کردی. تصحیحش بعد از دیدن نتیجه یک کلیک است.
    */
-  const courses = listCourses(id);
-  const recent = listSessions(id, 20).find((s) => s.course_id !== null)?.course_id ?? null;
-  const courseId =
-    courses.length === 1 ? courses[0]!.id : (recent && courses.some((c) => c.id === recent) ? recent : null);
+  const courseId = autoCourseId(id);
   if (courseId) updateSession(sessionId, { course_id: courseId });
 
   updateSession(sessionId, { mode: "full" });
@@ -1520,15 +1672,12 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
   const platform = platformOf(ctx);
 
   /**
-   * مدت واقعی — نه فقط آنچه سکو گفته.
+   * اینجا سکو مدتی نگفته بود، پس فایل را خودمان می‌پرسیم.
    *
-   * تلگرام برای `audio` و `voice` مدت را می‌دهد ولی برای فایلی که به‌صورت
-   * **سند** فرستاده شده اغلب نمی‌دهد و صفر می‌ماند؛ لینک هم که اصلاً هیچ
-   * مدتی همراهش نیست. رزرو اعتبار روی همین عدد انجام می‌شود، پس صفر یعنی
-   * جلسه‌ای که هزینه‌اش کسر نمی‌شود.
-   *
-   * فایل همین‌جا روی دیسک هست، پس وقتی سکو ساکت است خودمان می‌پرسیم.
-   * شکستِ probe نباید مسیر را بشکند: در آن حالت مثل قبل جلو می‌رویم.
+   * وقتی سکو عددی بدهد، کار پیش از دانلود تمام شده و اصلاً به اینجا
+   * نمی‌رسیم — `declaredDurationSec` واحدش را از حجم تشخیص می‌دهد و
+   * `holdBeforeDownload` همان‌جا قیمت می‌دهد. این مسیر برای فایلی است که
+   * به‌صورت **سند** آمده یا از لینک گرفته شده و هیچ مدتی همراهش نیست.
    *
    * probe **پیش از** بایگانی صدا زده می‌شود تا عنوانِ نسخهٔ ادمین هم مدت
    * درست را داشته باشد، نه صفرِ اعلام‌نشده.
@@ -1577,7 +1726,13 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
      * حالا جلسه با وضعیت `awaiting_credit` نگه داشته می‌شود و پس از شارژ
      * خودش ادامه می‌دهد؛ دکمهٔ ادامه هم همین‌جا هست.
      */
-    updateSession(sessionId, { status: "awaiting_credit", original_file: audioFile });
+    // مدت هم ذخیره می‌شود، وگرنه «ادامه بده» با صفر شروع می‌کند و بررسیِ اعتبار
+    // بی‌اثر می‌شود — `resumeSession` مدت را از همین ستون می‌خواند.
+    updateSession(sessionId, {
+      status: "awaiting_credit",
+      original_file: audioFile,
+      original_ms: effectiveSec * 1000,
+    });
     await reply(
       ctx,
       S.lowBalanceMessage(effectiveSec, u.credit_sec) +
@@ -1612,7 +1767,13 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
    * به‌هرحال با مدت واقعی انجام می‌شود.
    */
   if (effectiveSec > 0) {
-    updateSession(sessionId, { status: "awaiting_confirm", original_file: audioFile });
+    // مدت هم ذخیره می‌شود — `resumeSession` که پشتِ دکمهٔ «شروع کن» است
+    // مبنای رزروش را از همین ستون می‌خواند، نه از حافظه.
+    updateSession(sessionId, {
+      status: "awaiting_confirm",
+      original_file: audioFile,
+      original_ms: effectiveSec * 1000,
+    });
     await reply(ctx, S.confirmCostMessage(effectiveSec, u.credit_sec), {
       reply_markup: new InlineKeyboard()
         .text("✅ شروع کن", `go:${sessionId}`)
@@ -1774,30 +1935,126 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
   const u = touchUser(ctx);
   if (!s || !u || s.tg_id !== u.tg_id) return;
 
-  if (!s.original_file || !(await fs.access(s.original_file).then(() => true).catch(() => false))) {
-    await reply(ctx, "فایل صوتی این جلسه دیگر روی سرور نیست 😔 دوباره بفرستش.");
-    return;
-  }
   if (isBusy(String(uid(ctx)))) {
     await reply(ctx, "یه کار در جریانه، صبر کن تموم شه 🙏");
     return;
   }
 
-  const durationSec = Math.max(0, Math.round(s.original_ms / 1000));
+  let durationSec = Math.max(0, Math.round(s.original_ms / 1000));
   if (durationSec > 0 && u.credit_sec < durationSec) {
     await reply(ctx, S.lowBalanceMessage(durationSec, u.credit_sec), {
       reply_markup: new InlineKeyboard()
         .text("🪙 شارژ حساب", "topup")
         .row()
-        .text("▶️ ادامه بده", `resume:${sessionId}`),
+        .text("▶️ ادامه بده", `go:${sessionId}`),
     });
     return;
+  }
+
+  /**
+   * **حالا تازه دانلود می‌کنیم.**
+   *
+   * جلسه‌ای که قیمتش پیش از دانلود اعلام شده هنوز فایلی روی دیسک ندارد؛ فقط
+   * شناسهٔ فایل را نگه داشته‌ایم. کاربری که تأیید نکرد یا اعتبارش نرسید،
+   * هیچ‌وقت به اینجا نمی‌رسد و هیچ بایتی هم روی سرور نمی‌آید.
+   *
+   * بایگانی هم همین‌جاست و نه زودتر، چون تا این لحظه چیزی برای بایگانی‌کردن
+   * وجود نداشت.
+   */
+  let audioFile = s.original_file;
+  const onDisk =
+    audioFile !== null && (await fs.access(audioFile).then(() => true).catch(() => false));
+
+  if (!onDisk) {
+    if (!s.audio_file_id) {
+      await reply(ctx, "فایل صوتی این جلسه دیگر روی سرور نیست 😔 دوباره بفرستش.");
+      return;
+    }
+    const dl = await downloadMedia(ctx, {
+      sessionId,
+      fileId: s.audio_file_id,
+      messageId: s.audio_message_id ?? 0,
+      declaredSize: 0,
+    });
+    if (!dl) return;
+    audioFile = dl.audioFile;
+    updateSession(sessionId, { original_file: audioFile, download_route: dl.route });
+
+    /**
+     * **مدتِ اعلام‌شده حرفِ فرستنده است، نه واقعیت.**
+     *
+     * سکو آن عدد را از کلاینت می‌گیرد؛ یک کلاینتِ دست‌کاری‌شده می‌تواند برای
+     * یک فایل چهارساعته بنویسد «یک ثانیه». تا امروز این یعنی پردازشِ مجانی:
+     * رزرو روی همان عدد انجام می‌شد، خط لوله کامل اجرا می‌شد (و رونویسیِ
+     * چهار ساعت پولِ واقعی است)، و `commit` هم چون `strict: false` است
+     * مابه‌التفاوت را **تا صفر می‌بُرد** به‌جای اینکه شکست بخورد.
+     *
+     * پس از این لحظه فایل روی دیسکِ ماست و `ffprobe` ارزان است. مبنای رزرو
+     * و کسر، همین عددِ خودمان است — عددِ سکو فقط برای *نمایشِ* قیمت بود.
+     */
+    try {
+      const realSec = Math.round((await probe(audioFile)).durationMs / 1000);
+      if (realSec > 0 && realSec !== durationSec) {
+        logger.info({ sessionId, quoted: durationSec, real: realSec }, "مدت واقعی با تخمین فرق داشت");
+        updateSession(sessionId, { original_ms: realSec * 1000 });
+
+        // گران‌تر از آنچه قول داده بودیم؟ دوباره بپرس، نه اینکه بی‌خبر بگیری.
+        if (costCoins(realSec) > costCoins(durationSec) + 1) {
+          if (u.credit_sec < realSec) {
+            updateSession(sessionId, { status: "awaiting_credit" });
+            await reply(
+              ctx,
+              `مدت واقعی این فایل <b>${toFaDigits(fmtDuration(realSec * 1000))}</b> بود، نه چیزی که فرستنده اعلام کرده بود.\n\n` +
+                S.lowBalanceMessage(realSec, u.credit_sec),
+              {
+                reply_markup: new InlineKeyboard()
+                  .text("🪙 شارژ حساب", "topup")
+                  .row()
+                  .text("▶️ ادامه بده", `go:${sessionId}`),
+              },
+            );
+            return;
+          }
+          updateSession(sessionId, { status: "awaiting_confirm" });
+          await reply(
+            ctx,
+            `مدت واقعی بیشتر از چیزی بود که سکو اعلام کرده بود.\n\n` +
+              S.confirmCostMessage(realSec, u.credit_sec),
+            {
+              reply_markup: new InlineKeyboard()
+                .text("✅ شروع کن", `go:${sessionId}`)
+                .text("✖️ بی‌خیال", `nogo:${sessionId}`),
+            },
+          );
+          return;
+        }
+        // از این‌جا به بعد عددِ خودمان ملاک است، نه تخمینِ سکو.
+        durationSec = realSec;
+      }
+    } catch (e) {
+      logger.warn({ sessionId, err: String(e) }, "probe after download failed");
+    }
+
+    const platform = platformOf(ctx);
+    const caption = audioCaption({
+      sender: { tgId: u.tg_id, name: u.name, username: u.username },
+      mode: "full",
+      durationMs: durationSec * 1000,
+      sessionId,
+      courseName: s.course_id ? (getCourse(s.course_id)?.name ?? null) : null,
+      origin: platform,
+    });
+    if (platform === "bale" || !s.audio_file_id) {
+      void archiveAudio(sessionId, { path: audioFile }, caption);
+    } else {
+      await archiveAudio(sessionId, { fileId: s.audio_file_id }, caption);
+    }
   }
 
   updateSession(sessionId, { status: "queued", error: null });
   await startJob(ctx, {
     sessionId,
-    audioFile: s.original_file,
+    audioFile: audioFile!,
     courseId: s.course_id,
     declaredDurationSec: durationSec,
     mode: (s.mode as SessionMode) ?? "full",
