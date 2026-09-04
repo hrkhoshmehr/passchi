@@ -24,6 +24,7 @@ const tests = [
   "emphasis",
   "keypoint-kind",
 
+  "timeline",
   "duration",
   "queue",
   "keyboards",

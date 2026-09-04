@@ -1,7 +1,7 @@
 import type { AnalysisReport } from "../analysis/schema.js";
 import { config } from "../config.js";
 import { chunkMessage, escapeHtml } from "../util/text.js";
-import { fmtClock, fmtClockLink, fmtDuration, toFaDigits } from "../util/time.js";
+import { fmtClockLink, fmtDuration, toFaDigits } from "../util/time.js";
 import {
   balanceCoins, coinsAsMinutesIfUseful, costCoins,
   fmtBalance, fmtCoins, fmtCoinsWithToman, fmtCost, RATE_LINE, shareBack,
@@ -198,7 +198,7 @@ const ACTION_NEGATIVE: Record<string, string> = {
  */
 export function extractedMessage(r: AnalysisReport): string {
   const out = ["📌 <b>چی از کلاس درآوردم</b>", ""];
-
+  
   const byAction = new Map(r.professor_actions.map((a) => [a.action, a]));
   for (const key of CORE_ACTIONS) {
     const a = byAction.get(key);
@@ -258,13 +258,22 @@ export function extractedMessage(r: AnalysisReport): string {
     out.push("<b>نکته‌ها</b>");
     for (const k of points) {
       out.push("");
+      /**
+       * زمان **بیرون از** نقل‌قول بازشونده می‌آید.
+       *
+       * پیش‌تر ته همان بلوکِ جمع‌شونده بود، و تلگرام داخلِ نقل‌قول زمان را به
+       * لینکِ پخش تبدیل نمی‌کند — پس هیچ‌کدام از این زمان‌ها زدنی نبودند، در
+       * حالی که کلِ ارزشِ «عین حرف استاد، دقیقهٔ فلان» همین است که بشود
+       * شنیدش. حالا کنارِ عنوان است، بی‌قالب و در خطِ خودش.
+       */
       out.push(
         `${KP_LABEL[k.kind] ?? "•"} <b>${escapeHtml(k.title)}</b>` +
           (k.due ? ` — مهلت: ${escapeHtml(k.due)}` : ""),
       );
+      out.push(fmtClockLink(k.evidence.at_ms));
       const inner: string[] = [];
       if (k.detail.trim()) inner.push(escapeHtml(k.detail.trim()));
-      inner.push(`«${escapeHtml(trimQuote(k.evidence.quote))}» ${fmtClockLink(k.evidence.at_ms)}`);
+      inner.push(`«${escapeHtml(trimQuote(k.evidence.quote))}»`);
       out.push(`<blockquote expandable>${inner.join("\n\n")}</blockquote>`);
     }
   }
@@ -310,6 +319,27 @@ const KIND_EMOJI: Record<string, string> = {
  *
  * پیام باید ریپلای پیام صوت باشد تا تلگرام زمان‌ها را به لینک پخش تبدیل کند؛
  * بدون آن، همین متن فقط یک فهرست عدد است.
+ *
+ * ## چرا زمان از کنارِ عنوان برداشته شد و نقل‌قول بازشونده رفت
+ *
+ * دو چیز خراب بود و هر دو را کاربر روی خروجی واقعی دید.
+ *
+ * **یک: زمان دوبار می‌آمد.** سرِ عنوانِ بخش `00:00` بود و اولین ریزه‌کاریِ
+ * همان بخش هم `00:00` — چون ریزه‌کاریِ اول عملاً از شروعِ همان بخش است. یک
+ * عدد، دو بار، پشت سر هم.
+ *
+ * **دو: فقط اولین زمان در تلگرام زدنی بود.** ریزه‌کاری‌ها داخل
+ * `blockquote expandable` بودند و تلگرام داخلِ نقل‌قول زمان را به لینکِ پخش
+ * تبدیل نمی‌کند. یعنی همان چیزی که این پیام برایش ساخته شده — «بیست دقیقهٔ
+ * خاصی را گوش بده» — برای همهٔ بخش‌ها جز اولی کار نمی‌کرد.
+ *
+ * پس حالا عنوان زمان ندارد و زمان‌ها **خطِ ساده و بی‌قالب** زیر عنوان
+ * می‌آیند: نه نقل‌قول، نه پررنگ، نه کج. زمان اولِ خط است، که مطمئن‌ترین جا
+ * برای تشخیصِ تلگرام است.
+ *
+ * بهایش این است که پیام بلندتر می‌شود — ریزه‌کاری‌ها دیگر جمع نمی‌شوند. آن
+ * جمع‌شدن ارزشش را داشت وقتی زمان‌ها کار می‌کردند؛ حالا که نمی‌کردند، خودِ
+ * قابلیت مهم‌تر از کوتاهیِ پیام است.
  */
 export function timelineMessage(r: AnalysisReport, linkable: boolean): string {
   const rows = [...r.chapters].sort((a, b) => a.start_ms - b.start_ms);
@@ -317,23 +347,29 @@ export function timelineMessage(r: AnalysisReport, linkable: boolean): string {
 
   const out = ["🕘 <b>کلاس به چه بخش‌هایی گذشت</b>"];
   if (linkable) out.push("<i>رو هر زمان بزنی، صوت از همون‌جا پخش میشه.</i>");
-
+  
   for (const c of rows) {
     const title = c.title.trim() || KIND_LABEL[c.kind] || c.kind;
     const span = Math.max(0, c.end_ms - c.start_ms);
     out.push("");
     out.push(
-      `${fmtClockLink(c.start_ms)}  ${KIND_EMOJI[c.kind] ?? "▫️"} <b>${escapeHtml(title)}</b>` +
+      `${KIND_EMOJI[c.kind] ?? "▫️"} <b>${escapeHtml(title)}</b>` +
         (span >= 60_000 ? ` · <i>${fmtDuration(span)}</i>` : ""),
     );
+
+    /**
+     * زیر هر عنوان دست‌کم **یک** زمانِ زدنی باید باشد، وگرنه آن بخش راهِ
+     * ورودی ندارد. اگر ریزه‌کاری‌ای نبود یا اولینش خیلی دیرتر از شروعِ بخش
+     * بود، خودِ شروعِ بخش هم می‌آید.
+     */
     const parts = c.parts.filter((p) => p.label.trim());
-    if (parts.length) {
-      out.push(
-        `<blockquote expandable>${parts
-          .map((p) => `${fmtClockLink(p.at_ms)}  ${escapeHtml(p.label.trim())}`)
-          .join("\n")}</blockquote>`,
-      );
+    const lines = parts.map((p) => `${fmtClockLink(p.at_ms)}  ${escapeHtml(p.label.trim())}`);
+    if (!parts.length) {
+      lines.unshift(`${fmtClockLink(c.start_ms)}  شروع این بخش`);
+    } else if (parts[0]!.at_ms - c.start_ms > 60_000) {
+      lines.unshift(`${fmtClockLink(c.start_ms)}  شروع این بخش`);
     }
+    out.push(...lines);
   }
 
   const bar = compositionBar(r);
