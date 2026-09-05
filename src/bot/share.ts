@@ -171,7 +171,26 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
         );
         return null;
       });
-    audioMessageId = sent?.message_id ?? null;
+    /**
+     * **`file_id` با مدتِ صفر یعنی صوتِ مرده — دور بریزش و از دیسک بفرست.**
+     *
+     * سکو مدت را همراهِ فایلِ کش‌شده نگه می‌دارد و پارامتر `duration` را در
+     * ارسالِ با `file_id` **نادیده می‌گیرد** — آزموده شد: همان `file_id` با
+     * `duration: 3723` باز هم `duration: 0` برگرداند.
+     *
+     * پس صوتی که پیش از رفعِ مدت آپلود شده تا ابد مرده می‌ماند: دکمهٔ پخش
+     * هست، فشارش می‌دهی، هیچ اتفاقی نمی‌افتد — و زمان‌های گزارش هم زدنی
+     * نمی‌شوند چون سکو جایی برای پریدن نمی‌شناسد.
+     *
+     * از دیسک که بفرستیم مدت را خودمان می‌گوییم و `file_id` تازه از آن به
+     * بعد سالم است. یعنی هر جلسهٔ قدیمی بار **اول** خودش را درمان می‌کند.
+     */
+    if (sent && "audio" in sent && sent.audio?.duration === 0 && s.original_ms > 0) {
+      logger.info({ sessionId: s.id }, "cached audio had zero duration — re-uploading from disk");
+      await ctx.api.deleteMessage(ctx.chat!.id, sent.message_id).catch(() => {});
+    } else {
+      audioMessageId = sent?.message_id ?? null;
+    }
   }
 
   // فایل روی دیسک، وقتی `file_id` کار نکرد یا اصلاً نبود
