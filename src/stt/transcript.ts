@@ -111,10 +111,39 @@ export function buildTranscript(tokens: TranscriptToken[], timeMap: TimeMap): Bu
   const speakers = [...byId.values()].sort((a, b) => b.speechMs - a.speechMs);
   const totalSpeechMs = speakers.reduce((a, s) => a + s.speechMs, 0);
   if (speakers[0]) {
+    /**
+     * **پرحرف‌ترین گوینده فقط وقتی استاد است که واقعاً غالب باشد.**
+     *
+     * قاعدهٔ قبلی «سهم بالای ۴۰٪» بود، و آن دروازه **از نظر ریاضی هرگز
+     * بسته نمی‌شد**: با n گوینده، سهمِ پرحرف‌ترین همیشه دست‌کم ۱/n است، پس
+     * برای یک جلسهٔ دونفره همیشه ≥۵۰٪ و همیشه از ۴۰٪ رد می‌شد. یعنی دقیقاً
+     * همان حالتی که دروازه برایش ساخته شده بود، تنها حالتی بود که نمی‌گرفت.
+     *
+     * پنجم سپتامبر ۲۰۲۶ نتیجه‌اش دیده شد: جلسه‌ای دونفره با تقسیم ۵۱ به ۴۹،
+     * که در آن **دانشجو** چند صد کاراکتر بیشتر حرف زده بود و برچسب «استاد»
+     * گرفت. کل رونوشت وارونه شد و گزارش هم همان وارونگی را تکرار کرد —
+     * «استاد مسئله را مطرح کرد» در حالی که دانشجو مطرحش کرده بود.
+     *
+     * این یک جملهٔ اشتباه نبود؛ برچسبِ هر پاره‌گفتار غلط بود و مدل هم چاره‌ای
+     * جز باور کردنش نداشت.
+     *
+     * قاعدهٔ تازه دو شرط دارد و هر دو باید برقرار باشند:
+     *
+     * • **سهم مطلق** — دست‌کم ۶۰٪ کل گفتار. سخنرانی کلاسی معمولاً بالای ۷۰٪
+     *   است، پس این کف سخاوتمندانه است.
+     * • **فاصله از نفر دوم** — دست‌کم دو برابر. این همان شرطی است که حالت
+     *   دونفرهٔ متعادل را می‌گیرد و قاعدهٔ قبلی نداشت.
+     *
+     * وقتی برقرار نباشد هیچ‌کس نقش نمی‌گیرد و همه «گوینده N» می‌مانند. خروجی
+     * از این بابت لاغرتر می‌شود، ولی **نگفتن از غلط گفتن بهتر است**: کاربری
+     * که می‌بیند نقش‌ها معلوم نیست خودش می‌فهمد، ولی کاربری که «استاد» را
+     * وارونه می‌خواند هیچ راهی برای فهمیدنش ندارد.
+     */
     const share = totalSpeechMs > 0 ? speakers[0].speechMs / totalSpeechMs : 0;
-    // اگر پرحرف‌ترین گوینده کمتر از ۴۰٪ حرف زده، نقش‌دهی مطمئن نیست
-    speakers[0].role = share >= 0.4 ? "استاد" : "نامشخص";
-    for (const s of speakers.slice(1)) s.role = speakers[0].role === "استاد" ? "دانشجو" : "نامشخص";
+    const runnerUp = speakers[1]?.speechMs ?? 0;
+    const dominant = share >= 0.6 && (runnerUp === 0 || speakers[0].speechMs >= runnerUp * 2);
+    speakers[0].role = dominant ? "استاد" : "نامشخص";
+    for (const s of speakers.slice(1)) s.role = dominant ? "دانشجو" : "نامشخص";
   }
   const roleOf = new Map(speakers.map((s) => [s.speakerId, s.role]));
   for (const u of utterances) u.role = roleOf.get(u.speakerId) ?? "نامشخص";
@@ -341,4 +370,80 @@ export function verifyQuote(t: BuiltTranscript, quote: string, hintMs?: number):
   }
 
   return best;
+}
+
+/**
+ * نامی که در خروجی‌های انسانی برای یک گوینده به کار می‌رود.
+ *
+ * وقتی نقش معلوم نشده «گوینده ۱» می‌آید نه «استاد» — دلیلش در قاعدهٔ نقش‌دهی
+ * بالای همین فایل است.
+ */
+function speakerLabel(u: Utterance): string {
+  return u.role === "نامشخص" ? `گوینده ${u.speakerId}` : u.role;
+}
+
+/** یک نوبتِ حرف: چند پاره‌گفتارِ پشت سر همِ یک نفر، به هم چسبیده. */
+export interface Turn {
+  who: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+/**
+ * پاره‌گفتارها را به **نوبت‌های حرف** تبدیل می‌کند.
+ *
+ * موتور رونویسی هر جا مکث ببیند پاره‌گفتار تازه می‌سازد، پس حرفِ پیوستهٔ یک
+ * استاد به ده‌ها تکهٔ کوتاه خرد می‌شود. برای مدل خوب است (هر تکه مهر زمانی
+ * دقیق دارد) ولی برای خواندن فاجعه است: خواننده دویست خطِ بریده می‌بیند
+ * به‌جای چند بندِ پیوسته.
+ *
+ * پس تا وقتی گوینده عوض نشده، تکه‌ها به هم می‌چسبند — بریدن فقط جایی است که
+ * واقعاً کسی وسط حرف آمده.
+ */
+export function toTurns(t: BuiltTranscript): Turn[] {
+  const out: Turn[] = [];
+  for (const u of t.utterances) {
+    const who = speakerLabel(u);
+    const last = out[out.length - 1];
+    if (last && last.who === who) {
+      last.text += ` ${u.text}`;
+      last.endMs = u.endMs;
+    } else {
+      out.push({ who, startMs: u.startMs, endMs: u.endMs, text: u.text });
+    }
+  }
+  return out;
+}
+
+/** `hh:mm:ss,mmm` — قالبی که SRT می‌خواهد. */
+function srtTime(ms: number): string {
+  const t = Math.max(0, Math.round(ms));
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return (
+    `${p(Math.floor(t / 3_600_000))}:${p(Math.floor((t % 3_600_000) / 60_000))}:` +
+    `${p(Math.floor((t % 60_000) / 1000))},${p(t % 1000, 3)}`
+  );
+}
+
+/**
+ * رونوشت به قالب زیرنویس (SRT).
+ *
+ * **این فایلِ «کدام ثانیه چه گفته شد» است.** جای مهر زمانی در متنِ خواندنی
+ * نیست؛ آنجا فقط سد راه است. ولی خودِ اطلاعات ارزش دارد — برای پیداکردن یک
+ * لحظه، یا برای سوارکردن روی ویدیوی ضبط‌شدهٔ کلاس.
+ *
+ * SRT انتخاب شد نه یک متنِ زمان‌دارِ خودمانی، چون هر پخش‌کننده‌ای می‌فهمدش و
+ * با این حال یک فایل متنیِ ساده هم هست که مستقیم می‌شود خواندش.
+ *
+ * اینجا از پاره‌گفتارها استفاده می‌شود نه از نوبت‌ها: زیرنویسی که سه دقیقه
+ * روی صفحه بماند به درد نمی‌خورد.
+ */
+export function renderSrt(t: BuiltTranscript): string {
+  return t.utterances
+    .map(
+      (u, i) =>
+        `${i + 1}\n${srtTime(u.startMs)} --> ${srtTime(u.endMs)}\n${speakerLabel(u)}: ${u.text}\n`,
+    )
+    .join("\n");
 }

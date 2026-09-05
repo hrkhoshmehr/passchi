@@ -7,9 +7,10 @@ import { preprocess } from "./audio/preprocess.js";
 import { TimeMap, trimTo } from "./audio/ffmpeg.js";
 import { transcribe } from "./stt/soniox.js";
 import { lookup as cacheLookup, store as cacheStore, type CachedTranscript } from "./stt/cache.js";
-import { buildTranscript, renderPlain } from "./stt/transcript.js";
+import { buildTranscript, renderPlain, renderSrt, toTurns } from "./stt/transcript.js";
 import { analyzeClass, type SessionMeta } from "./analysis/analyze.js";
 import { renderPdf, pdfFileName } from "./pdf/render.js";
+import { renderTranscriptPdf } from "./pdf/transcript.js";
 import type { AnalysisReport } from "./analysis/schema.js";
 import {
   courseTerms, getCourse, mergeCourseTerms, updateSession,
@@ -49,6 +50,10 @@ export interface PipelineOutput {
   pdfPath: string | null;
   pdfName: string | null;
   transcriptPath: string;
+  /** نسخهٔ PDF رونوشت؛ `null` اگر ساختش شکست خورد. */
+  transcriptPdfPath: string | null;
+  /** فایل زیرنویس زمان‌دار؛ `null` اگر نوشتنش شکست خورد. */
+  transcriptSrtPath: string | null;
   /** متن رونوشت، برای وقتی که پیام مستقیماً از آن ساخته می‌شود */
   transcriptText: string;
   originalDurationMs: number;
@@ -166,6 +171,50 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
   await fs.writeFile(transcriptPath, transcriptText, "utf8");
   updateSession(sessionId, { transcript_txt: transcriptText.slice(0, 1_000_000) });
 
+  /**
+   * نسخهٔ PDF رونوشت — نسخه‌ای که واقعاً روی گوشی خوانده می‌شود.
+   *
+   * `.txt` سالم است و رمزگذاری‌اش هم صریح اعلام می‌شود، ولی نمایشگرِ سکو روی
+   * موبایل نه آن اعلام را می‌خواند و نه BOM را؛ جزئیاتش در `pdf/transcript.ts`.
+   * PDF قلم و رمزگذاری را داخل خودش می‌برد، پس دستِ نمایشگر باز نیست.
+   *
+   * شکستش مسیر را نمی‌شکند: رونوشتِ متنی همچنان هست و بقیهٔ خط لوله ادامه
+   * می‌دهد. یک PDF نساخته‌شده بهتر از جلسه‌ای است که کلاً شکست بخورد.
+   */
+  let transcriptPdfPath: string | null = null;
+  try {
+    const out = path.join(config.outDir, `${sessionId}.transcript.pdf`);
+    await renderTranscriptPdf(
+      {
+        sessionTitle: "رونوشت کامل جلسه",
+        courseName: inp.course?.name ?? null,
+        sessionDate: inp.sessionDate,
+        turns: toTurns(built),
+      },
+      out,
+    );
+    transcriptPdfPath = out;
+    updateSession(sessionId, { transcript_pdf: out });
+  } catch (e) {
+    logger.warn({ sessionId, err: String(e) }, "transcript pdf failed");
+  }
+
+  /**
+   * فایل زیرنویس — همان اطلاعاتی که از PDF برداشته شد.
+   *
+   * جدا نگه داشته می‌شود چون دو کارِ متفاوت‌اند: PDF برای خواندن، SRT برای
+   * پیداکردنِ یک لحظه یا سوارکردن روی ویدیوی ضبط‌شده.
+   */
+  let transcriptSrtPath: string | null = null;
+  try {
+    const out = path.join(config.outDir, `${sessionId}.transcript.srt`);
+    await fs.writeFile(out, renderSrt(built), "utf8");
+    transcriptSrtPath = out;
+    updateSession(sessionId, { transcript_srt: out });
+  } catch (e) {
+    logger.warn({ sessionId, err: String(e) }, "transcript srt failed");
+  }
+
   // فایل پردازش‌شده دیگر لازم نیست — فقط فایل اصلی برای کلیپ‌ها می‌ماند
   // فقط وقتی ترنسکد شده باشد فایل موقتی وجود دارد. اگر ترنسکد نشده،
   // processedFile خودِ فایل اصلی کاربر است و پاک‌کردنش یعنی از دست دادن
@@ -198,6 +247,8 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
       pdfPath: null,
       pdfName: null,
       transcriptPath,
+    transcriptPdfPath,
+    transcriptSrtPath,
       transcriptText,
       originalDurationMs: pre.originalDurationMs,
       skippedMs,
@@ -218,6 +269,20 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
     .map((s) => `${s.role === "نامشخص" ? `گوینده ${s.speakerId}` : s.role} (${fmtDuration(s.speechMs)})`)
     .join("، ");
 
+  /**
+   * وقتی نقش‌ها معلوم نشد، **هم به مدل بگو هم به کاربر**.
+   *
+   * `transcript.ts` عمداً نقش نمی‌دهد وقتی هیچ‌کس غالب نیست. ولی سکوت کافی
+   * نیست: مدل با دیدن «گوینده ۱» و «گوینده ۲» ممکن است باز هم خودش حدس
+   * بزند کدام استاد است و همان وارونگی را از راه دیگری بسازد. پس صریح
+   * ممنوع می‌شود.
+   */
+  const rolesUnknown = built.speakers.length > 1 && built.speakers.every((s) => s.role === "نامشخص");
+  const speakerNote = rolesUnknown
+    ? `${speakerSummary} — ⚠️ نقش گوینده‌ها مشخص نیست: حرف بین چند نفر تقسیم شده و هیچ‌کدام غالب نبوده. ` +
+      `هیچ‌کدام را «استاد» یا «دانشجو» ننام و در خروجی هم با همان «گوینده ۱/۲» به آنها اشاره کن.`
+    : speakerSummary;
+
   const qualityNote =
     pre.quality.level === "good"
       ? "خوب"
@@ -232,7 +297,7 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
     sessionDate: inp.sessionDate,
     originalDurationMs: pre.originalDurationMs,
     silenceMs: Math.max(0, pre.originalDurationMs - pre.billedDurationMs),
-    speakerSummary,
+    speakerSummary: speakerNote,
     qualityNote,
   };
 
@@ -288,13 +353,24 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
     pdfPath,
     pdfName,
     transcriptPath,
+    transcriptPdfPath,
+    transcriptSrtPath,
     transcriptText,
     originalDurationMs: pre.originalDurationMs,
     skippedMs,
     billedDurationMs: pre.billedDurationMs,
     savedMs: pre.savedMs,
     costUsd: analysis.usage.estimatedUsd,
-    qualityWarnings: pre.quality.warnings,
+    /**
+     * هشدارِ نقشِ نامعلوم **جلوتر از** هشدارهای کیفیت می‌آید، چون گزارش فقط
+     * اولین مورد را به کاربر نشان می‌دهد و این یکی مهم‌تر از نویزِ ضبط است.
+     */
+    qualityWarnings: rolesUnknown
+      ? [
+          "نتونستم مطمئن بشم کدوم گوینده استاده — حرف‌ها بین چند نفر تقسیم شده بود، پس به‌جای «استاد» نوشتم «گوینده ۱» و «گوینده ۲».",
+          ...pre.quality.warnings,
+        ]
+      : pre.quality.warnings,
     preprocessSteps: pre.steps,
     notesError: analysis.notesError,
   };

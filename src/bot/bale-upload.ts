@@ -219,12 +219,13 @@ export async function sendFileTo(
   platform: Platform,
   method: UploadMethod,
   source: { path: string; filename: string } | { bytes: Buffer; filename: string },
-  opts: { caption?: string; title?: string } = {},
+  opts: { caption?: string; title?: string; duration?: number } = {},
 ): Promise<{ message_id: number; fileId: string | null } | null> {
   if (platform === "bale") {
     const res = await baleSendFile(method, chatId, source, {
       caption: opts.caption ? htmlToPlain(opts.caption) : undefined,
       title: opts.title,
+      duration: opts.duration,
     });
     if (!res) return null;
     const fileId =
@@ -236,6 +237,7 @@ export async function sendFileTo(
   const extra = {
     ...(opts.caption ? { caption: opts.caption, parse_mode: "HTML" as const } : {}),
     ...(opts.title ? { title: opts.title } : {}),
+    ...(opts.duration ? { duration: opts.duration } : {}),
   };
   const sent =
     method === "sendAudio"

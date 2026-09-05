@@ -29,13 +29,14 @@ import fs from "node:fs";
 import { InputFile, type Api } from "grammy";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
-import { escapeHtml } from "../util/text.js";
+import { escapeHtml, transcriptBytes } from "../util/text.js";
 import { fmtDuration } from "../util/time.js";
 import { fmtCost } from "../billing/coins.js";
 import { getSession, updateSession, type SessionMode, type SessionRow } from "../db/index.js";
 import type { Platform } from "../db/identity.js";
 import type { AnalysisReport } from "../analysis/schema.js";
 import { transcodeForTelegram } from "../audio/ffmpeg.js";
+import { audioExt } from "../audio/container.js";
 import * as S from "./strings.js";
 
 /**
@@ -187,6 +188,16 @@ export async function archiveAudio(
   sessionId: string,
   source: AudioSource,
   caption: string,
+  /**
+   * مدت صوت، اگر می‌دانیم.
+   *
+   * **بدون این، صوتِ بایگانی پخش نمی‌شد.** فایلی که از بله می‌آید روی دیسک
+   * `.bin` نام دارد و گرامی هم نامِ فایل را از همان مسیر برمی‌داشت؛ تلگرام
+   * پسوند را باور می‌کند و برای ظرفی که نمی‌شناسد `duration: 0` می‌گذارد.
+   * صوتِ با مدتِ صفر نه پخش می‌شود و نه زمان‌های گزارشِ ریپلای‌شده را به
+   * لینکِ پخش تبدیل می‌کند — یعنی هر دو چیزی که این کانال برایش ساخته شده.
+   */
+  durationSec?: number,
 ): Promise<number | null> {
   if (!archiveEnabled()) return null;
   const chat = config.ARCHIVE_CHAT_ID!;
@@ -199,13 +210,18 @@ export async function archiveAudio(
     } else {
       const ready = await uploadable(sessionId, source.path);
       if (ready) {
-        payload = new InputFile(ready.file);
+        // نام با پسوندِ **واقعی** ساخته می‌شود، نه با آنچه روی دیسک است.
+        payload = new InputFile(ready.file, `${sessionId}${audioExt(ready.file)}`);
         if (ready.temp) temp = ready.file;
       }
     }
 
     const sent = payload
-      ? await tgApi!.sendAudio(chat, payload, { caption, parse_mode: "HTML" })
+      ? await tgApi!.sendAudio(chat, payload, {
+          caption,
+          parse_mode: "HTML",
+          ...(durationSec && durationSec > 0 ? { duration: Math.round(durationSec) } : {}),
+        })
       : await tgApi!.sendMessage(chat, `${caption}\n\n⚠️ صوت آپلود نشد.`, {
           parse_mode: "HTML",
           link_preview_options: { is_disabled: true },
@@ -288,6 +304,51 @@ export async function archiveReport(
     await send(S.timelineMessage(report, false));
   } catch (e) {
     logger.warn({ sessionId: s.id, err: String(e) }, "archive report failed");
+  }
+
+  /**
+   * جزوه و رونوشت هم می‌روند، نه فقط سه پیامِ متن.
+   *
+   * تا امروز بایگانی همان چیزی را داشت که کاربر **می‌خواند**، ولی نه چیزی را
+   * که کاربر **می‌گیرد**. یعنی وقتی کسی می‌گفت جزوه‌اش بد در آمده، ادمین
+   * فقط خلاصه را داشت و باید از پایگاه‌داده بازسازی می‌کرد — همان کاری که
+   * این ماژول برای نکردنش ساخته شده بود.
+   *
+   * سطر تازه از پایگاه‌داده خوانده می‌شود، نه از `s`. دلیلش همان دلیلِ
+   * `replyTo` است: آن سطر یک عکس لحظه‌ای است و ممکن است پیش از نوشته‌شدنِ
+   * `pdf_path` گرفته شده باشد.
+   *
+   * هرکدام catch جدا دارد تا شکستِ یکی دیگری را نبلعد — و هیچ‌کدام نباید
+   * چیزی را که قبلاً رفته باطل کند (قاعدهٔ ۱ بالای همین فایل).
+   */
+  const fresh = getSession(s.id) ?? s;
+  const chat = config.ARCHIVE_CHAT_ID!;
+
+  if (fresh.pdf_path && fs.existsSync(fresh.pdf_path)) {
+    await tgApi!
+      .sendDocument(chat, new InputFile(fresh.pdf_path, `${fresh.title ?? "جزوه"}.pdf`), {
+        caption: "📕 جزوه",
+        ...asReply,
+      })
+      .catch((e: unknown) => logger.warn({ sessionId: s.id, err: String(e) }, "archive pdf failed"));
+  }
+
+  // همان نسخه‌ای که کاربر می‌گیرد: PDF، و متن خام فقط وقتی PDF نبود.
+  const txFile =
+    fresh.transcript_pdf && fs.existsSync(fresh.transcript_pdf)
+      ? new InputFile(fresh.transcript_pdf, "رونوشت کامل.pdf")
+      : fresh.transcript_txt
+        ? new InputFile(transcriptBytes(fresh.transcript_txt), "رونوشت کامل.txt")
+        : null;
+  if (txFile) {
+    await tgApi!
+      .sendDocument(chat, txFile, {
+        caption: "📄 رونوشت کامل",
+        ...asReply,
+      })
+      .catch((e: unknown) =>
+        logger.warn({ sessionId: s.id, err: String(e) }, "archive transcript failed"),
+      );
   }
 }
 

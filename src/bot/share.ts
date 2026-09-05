@@ -3,7 +3,8 @@ import { InlineKeyboard, type Api, type Context } from "grammy";
 import { sendDoc, sendFileTo } from "./bale-upload.js";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
-import { escapeHtml } from "../util/text.js";
+import { escapeHtml, transcriptBytes } from "../util/text.js";
+import { audioExt } from "../audio/container.js";
 import { fmtDuration, toFaDigits } from "../util/time.js";
 import { fmtCost } from "../billing/coins.js";
 import { getCourse, getSession, sessionReport, updateSession, type SessionRow } from "../db/index.js";
@@ -106,7 +107,16 @@ export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyb
     "",
     "<b>چی گیرت میاد</b>",
     "• خلاصهٔ کلاس در یک نگاه",
-    `• ${toFaDigits(r?.key_points.length ?? 0)} نکتهٔ امتحانی با عین حرف استاد`,
+    /**
+     * فهرست خالی را **تبلیغ نکن**.
+     *
+     * قبلاً «۰ نکتهٔ امتحانی» چاپ می‌شد — یعنی همان دروازه‌هایی که برای
+     * اعتماد ساخته شده‌اند، به کارتِ دعوت شلیک می‌کردند. و «امتحانی» هم
+     * دقیق نبود: این فهرست تکلیف و مهلت و امور کلاس را هم دارد.
+     */
+    (r?.key_points.length ?? 0) > 0
+      ? `• ${toFaDigits(r!.key_points.length)} نکتهٔ کلیدی با عین حرف استاد`
+      : "• نکته‌های کلاس با عین حرف استاد",
     s.pdf_path ? "• جزوهٔ کامل PDF" : "",
     "• صوت و رونوشت کامل",
     "",
@@ -172,8 +182,14 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
         ctx.chat!.id,
         platformOf(ctx),
         "sendAudio",
-        { path: s.original_file, filename: `${s.title ?? "جلسه"}.mp3` },
-        { caption, ...(s.title ? { title: s.title } : {}) },
+        { path: s.original_file, filename: `${s.title ?? "جلسه"}${audioExt(s.original_file)}` },
+        {
+          caption,
+          ...(s.title ? { title: s.title } : {}),
+          // بدون مدت، صوت با `duration: 0` می‌نشیند و نه پخش می‌شود نه
+          // زمان‌های گزارش را زدنی می‌کند — همان باگی که در بایگانی دیده شد.
+          ...(s.original_ms > 0 ? { duration: Math.round(s.original_ms / 1000) } : {}),
+        },
       );
       audioMessageId = sent?.message_id ?? null;
       // `file_id` تازه مالِ سکوی همین کاربر است و دفعهٔ بعد کار می‌کند.
@@ -186,7 +202,8 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
   const asReply = audioMessageId
     ? { reply_parameters: { message_id: audioMessageId, allow_sending_without_reply: true } }
     : {};
-  const linkable = audioMessageId !== null;
+  // زمان‌های زدنی قابلیتِ تلگرام است و بله ندارد — وعده‌اش را به کاربر بله نده.
+  const linkable = audioMessageId !== null && platformOf(ctx) === "telegram";
 
   const send = async (text: string, extra: Record<string, unknown> = {}) => {
     if (!text) return;
@@ -215,10 +232,16 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
   if (s.pdf_path) {
     await sendDoc(ctx, s.pdf_path, "جزوه.pdf", { caption: "📕 جزوهٔ این جلسه" });
   }
-  if (s.transcript_txt) {
-    await sendDoc(ctx, Buffer.from(s.transcript_txt, "utf8"), "رونوشت کامل.txt", {
-      caption: "📄 رونوشت کامل با مهر زمانی",
+  // PDF ترجیح دارد چون فایل متنی روی موبایل خوانده نمی‌شود؛ `pdf/transcript.ts`.
+  if (s.transcript_pdf && fs.existsSync(s.transcript_pdf)) {
+    await sendDoc(ctx, s.transcript_pdf, "رونوشت کامل.pdf", { caption: "📄 رونوشت کامل" });
+  } else if (s.transcript_txt) {
+    await sendDoc(ctx, transcriptBytes(s.transcript_txt), "رونوشت کامل.txt", {
+      caption: "📄 رونوشت کامل",
     });
+  }
+  if (s.transcript_srt && fs.existsSync(s.transcript_srt)) {
+    await sendDoc(ctx, s.transcript_srt, "رونوشت زمان‌دار.srt", { caption: "⏱ نسخهٔ زمان‌دار" });
   }
 }
 

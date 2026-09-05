@@ -74,6 +74,13 @@ export interface ChatResult {
   costUsd: number;
   /** چند توکن از کش خوانده شد — صفر یعنی کش نخورده. */
   cachedTokens: number;
+  /**
+   * خروجی به سقف توکن خورده و وسط جمله بریده شده.
+   *
+   * `finish_reason` سال‌ها در نوعِ پاسخ بود ولی خوانده نمی‌شد، پس جزوهٔ
+   * نصفه دقیقاً مثل جزوهٔ سالم تحویل می‌شد. حالا دست‌کم در لاگ دیده می‌شود.
+   */
+  truncated: boolean;
 }
 
 interface CompletionResponse {
@@ -189,7 +196,14 @@ export async function chat(
         // مسیریابی به ارائه‌دهنده‌های مختلف قیمت را عوض می‌کند.
         costUsd: Number(body.usage?.cost ?? 0),
         cachedTokens: body.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+        truncated: body.choices?.[0]?.finish_reason === "length",
       };
+      if (result.truncated) {
+        logger.warn(
+          { model: result.model, out: result.outputTokens, max: payload.max_tokens },
+          "خروجی به سقف توکن خورد و بریده شد",
+        );
+      }
       logger.debug(
         {
           model: result.model,

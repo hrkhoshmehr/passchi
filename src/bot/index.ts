@@ -3,13 +3,24 @@ import path from "node:path";
 import { Bot, Composer, InlineKeyboard, InputFile, type Api, type Context } from "grammy";
 import { config, requireKey } from "../config.js";
 import { logger } from "../util/logger.js";
-import { chunkMessage, escapeHtml, htmlToPlain, shortId } from "../util/text.js";
+import {
+  chunkMessage,
+  escapeHtml,
+  htmlToPlain,
+  shortId,
+  transcriptBytes,
+} from "../util/text.js";
 import { declaredDurationSec, fmtClock, fmtDuration, toFaDigits } from "../util/time.js";
 import { extractClip, probe, TimeMap } from "../audio/ffmpeg.js";
 import { runPipeline } from "../pipeline.js";
 import { cancel as cancelJob, enqueue, isBusy, queueDepth } from "../queue.js";
 import * as S from "./strings.js";
-import { downloadLimitFor, downloadTelegramFile, FileTooLargeError } from "./download.js";
+import {
+  callWithDeadline,
+  downloadLimitFor,
+  downloadTelegramFile,
+  FileTooLargeError,
+} from "./download.js";
 import { commit, InsufficientCredit, grant, refund, reserve, totalShareRefunds } from "../billing/ledger.js";
 import {
   accessibleSessions, isMember, registerOwner, setShareEnabled, setShareTarget, shareStatus,
@@ -1355,6 +1366,49 @@ async function handleLink(ctx: Context, url: string): Promise<void> {
  * `null` یعنی نشد — و پیامِ مناسبش همین‌جا به کاربر داده شده، پس صدازننده
  * فقط باید برگردد.
  */
+/**
+ * پیامِ شکست باید برسد — حتی وقتی همان سکو خراب است.
+ *
+ * **این باگی بود که کاربر را روی «تلاش ۲» فریز کرد.** پنجم سپتامبر ۲۰۲۶، API
+ * بله یک دقیقه‌ای پایین رفت. تلاش‌های دانلود شکست خوردند و کد رفت سراغ پیامِ
+ * «نشد» — ولی آن `editMessageText` هیچ گاردی نداشت. همان سکویی که دانلود را
+ * رد کرده بود، ویرایش را هم رد کرد؛ خطا از دست‌کد بالا رفت، `bot.catch` فقط
+ * لاگش کرد، و پیامِ وضعیت تا ابد روی آخرین ویرایشِ موفق ماند.
+ *
+ * نکتهٔ اصلی این است: مسیرِ خبردادنِ شکست **همیشه** وقتی اجرا می‌شود که سکو
+ * ناسالم است. پس دقیقاً همان‌جا نباید به یک تماسِ بی‌گارد تکیه کرد.
+ *
+ * پس چند بار با فاصلهٔ فزاینده تلاش می‌شود، و اگر ویرایش نگرفت پیامِ **تازه**
+ * فرستاده می‌شود — چون شاید مشکل از خودِ آن پیام باشد، نه از سکو. و در نهایت
+ * خطا بالا نمی‌رود: خبرندادن بد است، ولی انداختنِ دست‌کد چیزی را بهتر نمی‌کند.
+ */
+async function tellFailure(
+  ctx: Context,
+  statusMessageId: number,
+  text: string,
+  extra: { parse_mode?: "HTML"; reply_markup?: InlineKeyboard } = {},
+): Promise<void> {
+  const chatId = ctx.chat!.id;
+  const gaps = [0, 1_500, 4_000, 8_000];
+  for (let i = 0; i < gaps.length; i++) {
+    if (gaps[i]) await new Promise((r) => setTimeout(r, gaps[i]));
+    try {
+      // تلاش آخر پیامِ تازه است نه ویرایش: اگر خودِ پیامِ وضعیت مشکل داشته
+      // باشد، هرچقدر هم ویرایش را تکرار کنیم همان جواب را می‌گیریم.
+      await callWithDeadline(15_000, "سکو به پیام شکست جواب نداد.", async (signal) => {
+        if (i < gaps.length - 1) {
+          await ctx.api.editMessageText(chatId, statusMessageId, text, extra, signal);
+        } else {
+          await ctx.api.sendMessage(chatId, text, extra, signal);
+        }
+      });
+      return;
+    } catch (e) {
+      logger.warn({ err: String(e), attempt: i + 1 }, "failure notice not delivered");
+    }
+  }
+}
+
 async function downloadMedia(
   ctx: Context,
   o: { sessionId: string; fileId: string; messageId: number; declaredSize: number },
@@ -1396,22 +1450,40 @@ async function downloadMedia(
      * او خواسته بودیم. فایل که همان‌جاست و `file_id` معتبر است؛ اگر شکست
      * گذرا باشد (شبکه، ۵xx) خودمان باید دوباره بزنیم.
      *
-     * **چرا شش تلاش و نه سه:** اندازه‌گیری روی بله نشان داد سرورِ فایل حدود
-     * یک‌سومِ مواقع اصلاً جواب نمی‌دهد، و این شکست **مستقل** است نه پایدار —
-     * در همان دوازده آزمون، هر شکست با تلاش بعدی جبران شد. با مهلت هشت
-     * ثانیه‌ایِ سرآیند، هر تلاشِ ناموفق ارزان است، پس تعداد بیشتر بهتر از
-     * تسلیم‌شدن زودهنگام است: با نرخ شکست یک‌سوم، سه تلاش یعنی ۳٫۷٪ شکستِ
-     * کامل ولی شش تلاش یعنی ۰٫۱۴٪ — بیست‌وشش برابر بهتر، به قیمت بدترین
-     * حالتِ حدود ۵۳ ثانیه به‌جای ۲۶.
+     * **بودجه زمانی است نه شماری — و این درسِ یک شکستِ واقعی است.**
      *
-     * تأخیر هم کوتاه و ثابت است. عقب‌نشینیِ نمایی برای سروری است که زیر بار
-     * است؛ اینجا شکست تصادفی است نه ازدحام، پس صبرِ بیشتر چیزی را بهتر
-     * نمی‌کند و فقط کاربر را پشت پیامِ ساکن نگه می‌دارد.
+     * اندازه‌گیری روی بله نشان داد سرورِ فایل حدود یک‌سومِ مواقع اصلاً جواب
+     * نمی‌دهد، و این شکست **مستقل** است نه پایدار: در همان دوازده آزمون، هر
+     * شکست با تلاش بعدی جبران شد. پس تلاشِ بیشتر بهتر از تسلیمِ زودهنگام
+     * است — تا اینجا درست بود.
+     *
+     * ولی نسخهٔ قبلی فقط تعداد را می‌شمرد (شش تلاش) و بدترین حالتش را ۵۳
+     * ثانیه حساب می‌کرد، چون فرض کرده بود هر شکست حدود هشت ثانیه — یعنی
+     * مهلتِ سرآیند — طول می‌کشد. آن فرض فقط برای یک حالت درست است.
+     *
+     * حالتِ دوم پنجم سپتامبر ۲۰۲۶ اتفاق افتاد: **خودِ API بله پایین بود**، نه
+     * فقط سرورِ فایل. آن‌وقت `getFile` در هشتاد میلی‌ثانیه رد می‌دهد نه در
+     * هشت ثانیه؛ شش تلاش در **۴٫۴ ثانیه** سوخت و ربات تسلیم شد، در حالی که
+     * سکو هنوز دقایقی پایین بود. یعنی دقیقاً وقتی شکست ارزان است، بودجهٔ
+     * شمارشی زودتر از همیشه تمام می‌شود.
+     *
+     * پس معیار زمانِ سپری‌شده است: تا یک دقیقه تلاش کن، هر چند تلاش که در آن
+     * جا شود. سقفِ شمارش فقط بندِ ایمنی است تا اگر شکست در یک میلی‌ثانیه
+     * برگردد سرور را چکش نکنیم.
+     *
+     * تأخیر هم به همین دلیل نمایی شد ولی با سقف: وقتی شکست فوری است، تنها
+     * چیزی که فاصله می‌سازد همین تأخیر است. سقفِ چهارثانیه‌ای طوری چیده شده
+     * که حالتِ اول دست‌نخورده بماند — آنجا هر تلاش خودش هشت ثانیه طول می‌کشد
+     * و باز هم شش تلاش در بودجه جا می‌شود، همان عددی که اندازه‌گیری اولیه به
+     * آن رسیده بود.
      *
      * `FileTooLargeError` استثناست: تکرارش قطعاً به همان نتیجه می‌رسد، پس
      * بلافاصله بالا می‌رود.
      */
-    const MAX_TRIES = 6;
+    const TRY_BUDGET_MS = 60_000;
+    const MAX_TRIES = 16;
+    const startedTrying = Date.now();
+    let gap = 800;
     let lastErr: unknown;
     let dl: Awaited<ReturnType<typeof downloadTelegramFile>> | null = null;
     for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
@@ -1423,26 +1495,29 @@ async function downloadMedia(
         if (e instanceof FileTooLargeError) throw e;
         lastErr = e;
         logger.warn({ err: String(e), attempt }, "download attempt failed");
-        if (attempt < MAX_TRIES) {
-          lastShown = 0;
-          /**
-           * پیام باید **تکان بخورد**.
-           *
-           * سرور بله یک‌سوم مواقع جواب نمی‌دهد و تلاش دوباره می‌تواند تا
-           * حدود یک دقیقه طول بکشد. پیامِ ساکنِ «دارم فایلو می‌گیرم…» در آن
-           * مدت دقیقاً همان چیزی است که کاربر «گیر کرده» می‌خواندش و فایل را
-           * دوباره می‌فرستد — که کار را بدتر می‌کند.
-           */
-          void ctx.api
-            .editMessageText(
-              ctx.chat!.id,
-              statusMsg.message_id,
-              `⬇️ سرور ${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} جواب نداد، ` +
-                `دارم دوباره تلاش می‌کنم… (${toFaDigits(attempt + 1)} از ${toFaDigits(MAX_TRIES)})`,
-            )
-            .catch(() => {});
-          await new Promise((r) => setTimeout(r, 800));
-        }
+        if (attempt === MAX_TRIES || Date.now() - startedTrying + gap >= TRY_BUDGET_MS) break;
+        lastShown = 0;
+        /**
+         * پیام باید **تکان بخورد**.
+         *
+         * سرور بله یک‌سوم مواقع جواب نمی‌دهد و تلاش دوباره می‌تواند تا حدود
+         * یک دقیقه طول بکشد. پیامِ ساکنِ «دارم فایلو می‌گیرم…» در آن مدت
+         * دقیقاً همان چیزی است که کاربر «گیر کرده» می‌خواندش و فایل را دوباره
+         * می‌فرستد — که کار را بدتر می‌کند.
+         *
+         * شمارهٔ کل دیگر گفته نمی‌شود چون دیگر عددِ ثابتی نیست؛ «از ۶» وقتی
+         * بودجه زمانی است یعنی وعده‌ای که ممکن است دروغ دربیاید.
+         */
+        void ctx.api
+          .editMessageText(
+            ctx.chat!.id,
+            statusMsg.message_id,
+            `⬇️ سرور ${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} جواب نداد، ` +
+              `دارم دوباره تلاش می‌کنم… (تلاش ${toFaDigits(attempt + 1)})`,
+          )
+          .catch(() => {});
+        await new Promise((r) => setTimeout(r, gap));
+        gap = Math.min(gap * 2, 4_000);
       }
     }
     if (!dl) throw lastErr;
@@ -1474,8 +1549,8 @@ async function downloadMedia(
       if (config.PUBLIC_URL.startsWith("https://")) {
         kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
       }
-      await ctx.api.editMessageText(
-        ctx.chat!.id,
+      await tellFailure(
+        ctx,
         statusMsg.message_id,
         `❌ این فایل ${toFaDigits(gotMb)} مگه و ${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} ` +
           `بیشتر از ${toFaDigits(limitMb)} مگ رو به ربات نمی‌ده.\n\n` +
@@ -1489,8 +1564,8 @@ async function downloadMedia(
     if (config.PUBLIC_URL.startsWith("https://")) {
       kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
     }
-    await ctx.api.editMessageText(
-      ctx.chat!.id,
+    await tellFailure(
+      ctx,
       statusMsg.message_id,
       `❌ چند بار تلاش کردم ولی سرور ${platformOf(ctx) === "bale" ? "بله" : "تلگرام"} فایلو نداد.\n\n` +
         `<b>مشکل از سمت منه نه تو.</b> از دکمهٔ پایین امتحان کن — مسیرش جداست.`,
@@ -1701,9 +1776,9 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
     ...(spec.sourceUrl ? { sourceUrl: spec.sourceUrl } : {}),
   });
   if (platform === "bale" || !spec.fileId) {
-    void archiveAudio(sessionId, { path: audioFile }, caption);
+    void archiveAudio(sessionId, { path: audioFile }, caption, effectiveSec);
   } else {
-    await archiveAudio(sessionId, { fileId: spec.fileId }, caption);
+    await archiveAudio(sessionId, { fileId: spec.fileId }, caption, effectiveSec);
   }
 
   /**
@@ -2045,9 +2120,9 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
       origin: platform,
     });
     if (platform === "bale" || !s.audio_file_id) {
-      void archiveAudio(sessionId, { path: audioFile }, caption);
+      void archiveAudio(sessionId, { path: audioFile }, caption, durationSec);
     } else {
-      await archiveAudio(sessionId, { fileId: s.audio_file_id }, caption);
+      await archiveAudio(sessionId, { fileId: s.audio_file_id }, caption, durationSec);
     }
   }
 
@@ -2141,7 +2216,7 @@ handlers.callbackQuery(/^txt:([a-f0-9]+)$/, async (ctx) => {
     await ctx.reply("رونوشت این جلسه موجود نیست.");
     return;
   }
-  await sendDoc(ctx, Buffer.from(s.transcript_txt, "utf8"), "رونوشت کامل.txt", {
+  await sendDoc(ctx, transcriptBytes(s.transcript_txt), "رونوشت کامل.txt", {
     caption: "📄 رونوشت کامل با مهر زمانی",
   });
 });
@@ -2206,7 +2281,9 @@ handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
     }),
   );
   await reply(ctx, S.extractedMessage(r), asReply);
-  const timeline = S.timelineMessage(r, Boolean(s.audio_message_id));
+  // زدنی‌بودن زمان‌ها قابلیتِ **تلگرام** است؛ بله ندارد. بدون این شرط، کاربر
+  // بله وعده‌ای می‌خواند که سکویش نمی‌تواند انجام دهد.
+  const timeline = S.timelineMessage(r, Boolean(s.audio_message_id) && platformOf(ctx) === "telegram");
   if (timeline) await reply(ctx, timeline, asReply);
 });
 
@@ -2372,7 +2449,17 @@ async function sendResults(
    * (روی اندروید و آی‌اواس کار می‌کند؛ در نسخهٔ دسکتاپ فعلاً متن ساده می‌ماند.)
    */
   const audioMsgId = s?.audio_message_id ?? null;
-  const linkable = audioMsgId !== null;
+  /**
+   * **زدنی‌بودن زمان‌ها فقط روی تلگرام است.**
+   *
+   * بله چنین قابلیتی ندارد؛ ریپلای‌کردنِ پیام روی صوت هیچ زمانی را به لینکِ
+   * پخش تبدیل نمی‌کند. شرط قبلی فقط «صوتی هست؟» بود، پس کاربر بله خطِ «رو هر
+   * زمان بزنی، صوت از همون‌جا پخش میشه» را می‌خواند و هرچه می‌زد هیچ اتفاقی
+   * نمی‌افتاد — بدترین نوع باگ، چون کاربر فکر می‌کند خودش بلد نیست.
+   *
+   * ریپلای اما روی هر دو سکو می‌ماند: آنجا فقط به گزارش زمینه می‌دهد.
+   */
+  const linkable = audioMsgId !== null && platformOf(ctx) === "telegram";
   const asReply = linkable
     ? { reply_parameters: { message_id: audioMsgId, allow_sending_without_reply: true } }
     : {};
@@ -2409,9 +2496,26 @@ async function sendResults(
     );
   }
 
-  await sendDoc(ctx, out.transcriptPath, "رونوشت کامل.txt", {
-    caption: "📄 رونوشت کامل با مهر زمانی",
-  });
+  /**
+   * رونوشت **PDF** فرستاده می‌شود، نه `.txt`.
+   *
+   * فایل متنی روی موبایلِ بله ناخوانا در می‌آمد و هیچ چیزی داخل خودش این را
+   * درست نمی‌کرد — نه BOM، نه اعلامِ رمزگذاری (هر پنج ترکیب آزموده شد و بله
+   * همه را `text/plain; charset=utf-8` ثبت کرد). PDF قلم و رمزگذاری را با
+   * خودش می‌برد. متنِ خام همچنان با دکمهٔ «رونوشت» در تاریخچه در دسترس است.
+   */
+  await sendDoc(
+    ctx,
+    out.transcriptPdfPath ?? out.transcriptPath,
+    out.transcriptPdfPath ? "رونوشت کامل.pdf" : "رونوشت کامل.txt",
+    { caption: "📄 <b>رونوشت کامل</b>\n<i>همهٔ حرف‌های جلسه، پشت سر هم.</i>", parse_mode: "HTML" },
+  );
+  if (out.transcriptSrtPath) {
+    await sendDoc(ctx, out.transcriptSrtPath, "رونوشت زمان‌دار.srt", {
+      caption: "⏱ <b>نسخهٔ زمان‌دار</b>\n<i>برای پیدا کردن یک لحظه، یا زیرنویسِ ویدیوی کلاس.</i>",
+      parse_mode: "HTML",
+    });
+  }
 
   const u = getUser(uid(ctx));
   const cost = Math.round(out.originalDurationMs / 1000);

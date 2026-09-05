@@ -115,6 +115,13 @@ const IMPORTANCE_MARKERS = [
   "امتحان", "میان ترم", "میانترم", "پایان ترم", "پایانترم", "کوییز", "نمره", "سوال میاد",
   "مهم", "اهمیت", "حتما", "یاد بگیر", "یادبگیر", "بلد باش", "حفظ کن", "دقت کن",
   "توجه کن", "یادداشت کن", "تاکید", "فراموش نکن", "کلیدی", "اساسی", "جدی بگیر",
+  // دستهٔ دوم: جمله‌هایی که اهمیت را می‌رسانند بدون آنکه کلمهٔ «مهم» را
+  // داشته باشند — «سر جلسه ازتون می‌پرسم»، «قطعاً میاد»، «علامت بزنید».
+  // بی این‌ها دروازه نکته‌های درست را هم می‌انداخت.
+  "میپرسم", "بپرسم", "لازم", "قطعا", "صددرصد", "علامت بزن", "خط بکش", "تمرکز", "بارم",
+  // «هر ترم سؤال می‌دم» پیش‌بینی‌کننده‌ترین جملهٔ ممکن است و می‌افتاد، چون
+  // فقط صورتِ «سوال میاد» در فهرست بود. صرف‌های فعلی هم باید بیایند.
+  "سوال میدم", "سوال بدم", "سوال میارم", "میارم تو امتحان", "امتحانی",
 ].map((m) => normalizeFa(m).split(" ").filter(Boolean));
 
 /**
@@ -124,7 +131,14 @@ const IMPORTANCE_MARKERS = [
  * بگیرد و «مهم» باید «مهمه» و «مهم‌ترین» را. ولی «ان» عمداً **نیست** — با آن،
  * «مهمان» هم نشانهٔ اهمیت حساب می‌شد.
  */
-const INFLECTIONS = ["", "ه", "ی", "یی", "تر", "ترین", "ید", "ند", "یم", "م", "د", "ت", "ها", "های"];
+const INFLECTIONS = [
+  "", "ه", "ی", "یی", "تر", "ترین", "ید", "ند", "یم", "م", "د", "ت", "ها", "های",
+  // ضمیرهای ملکیِ چسبان — «بارمش بالاست»، «تمرکزتون رو بذارید». بدون این‌ها
+  // نشانه فقط شکلِ خشکِ کلمه را می‌گرفت، در حالی که استاد محاوره حرف می‌زند.
+  "ش", "تون", "شون", "مون", "تان", "شان",
+  // رابطهٔ محاوره‌ای: «۸ نمره‌ست»، «لازمست». بی این، بارم‌بندی صریح هم رد می‌شد.
+  "ست",
+];
 
 /** نفیِ بلافاصله‌ای که ادعا را وارونه می‌کند: «این اصلا مهم نیست». */
 const NEGATIONS = new Set(["نیست", "نیستش", "نیستند", "نبود", "نداره", "ندارد", "نه", "نمیاد"]);
@@ -152,24 +166,60 @@ function matchesMarkerToken(word: string, marker: string): boolean {
  * «تأکید استاد» او را به آن نمی‌رساند. برچسبِ درست، پیدا کردنش را آسان
  * می‌کند.
  *
- * ترتیب بررسی اهمیت دارد — نمره پیش از ترتیب کلاس، چون «هر کی قانون همراهش
- * نباشه دو نمره کم می‌کنم» هر دو نشانه را دارد و اثرش روی نمره مهم‌تر است.
+ * ترتیب بررسی اهمیت دارد — تکلیف پیش از همه، چون «این کتاب رو تهیه کنید و
+ * تا امتحان بخونید» هر سه نشانه را دارد ولی کاری که دانشجو باید انجام دهد
+ * از هر برچسب دیگری کاربردی‌تر است. بعد نمره، بعد ترتیب کلاس.
  */
+const HOMEWORK_HINTS = [
+  "تهیه کنید", "تهیه بکنید", "تهیه بفرمایید", "بخرید", "بخونید", "بخوانید", "مطالعه کنید",
+  "مطالعه بفرمایید", "نگاه بکنید", "نگاه کنید", "حل کنید", "حل بکنید", "تمرین",
+  "ترجمه کنید", "تحقیق کنید", "آماده کنید", "بنویسید", "جواب بدید", "جواب بدهید",
+].map((m) => normalizeFa(m).split(" ").filter(Boolean));
+
 const GRADING_HINTS = [
   "نمره", "بارم", "نمرات", "تصحیح", "مردود", "قبولی", "پاس کردن",
-  "تستی", "تشریحی", "کتاب باز", "میان ترم", "میانترم", "پایان ترم", "پایانترم",
-].map(normalizeFa);
+  "تستی", "تشریحی", "کتاب باز",
+  // «میان ترم» و «پایان ترم» عمداً **نیستند**: اشارهٔ زمانی‌اند، نه ادعای
+  // نمره. با آنها «چون در پایان ترم ممکنه متضرر بشید» برچسبِ «نمره و بارم»
+  // می‌گرفت، در حالی که یک کلمه دربارهٔ نمره نمی‌گوید. جمله‌ای که واقعاً
+  // دربارهٔ بارمِ میان‌ترم باشد، کلمهٔ «نمره» یا «بارم» را هم دارد.
+].map((m) => normalizeFa(m).split(" ").filter(Boolean));
 
 const LOGISTICS_HINTS = [
   "همراه", "بیارید", "بیاورید", "سر جلسه", "سر کلاس", "کلاس بعد", "جلسه بعد",
   "کلاس نداریم", "تشکیل نمیشود", "تشکیل نمی شود", "جبرانی", "لغو", "تعطیل",
   "ساعت کلاس", "سامانه", "ثبت نام", "تحویل بدید", "تحویل بدهید",
-].map(normalizeFa);
+].map((m) => normalizeFa(m).split(" ").filter(Boolean));
 
-export function classifyKeyPointKind(quote: string, title: string): "grading" | "logistics" | null {
-  const q = normalizeFa(`${title} ${quote}`);
-  if (GRADING_HINTS.some((m) => q.includes(m))) return "grading";
-  if (LOGISTICS_HINTS.some((m) => q.includes(m))) return "logistics";
+/**
+ * تطبیق روی **مرز توکن**، نه زیررشته.
+ *
+ * نسخهٔ اول `includes` می‌زد و نتیجه‌اش این بود که «چون در پایان ترم ممکنه
+ * خودتون متضرر بشید» برچسبِ «نمره و بارم» می‌گرفت — چون «پایان ترم» زیررشتهٔ
+ * آن است، در حالی که جمله یک کلمه دربارهٔ نمره نمی‌گوید. همان اشتباهی که یک
+ * بار در دروازهٔ اهمیت («مهم» داخل «مهمان») رفع شد و اینجا مانده بود.
+ */
+function hasHint(words: string[], hints: string[][]): boolean {
+  for (const hint of hints) {
+    for (let i = 0; i + hint.length <= words.length; i++) {
+      let hit = true;
+      for (let k = 0; k < hint.length - 1; k++) {
+        if (words[i + k] !== hint[k]) { hit = false; break; }
+      }
+      if (hit && matchesMarkerToken(words[i + hint.length - 1]!, hint[hint.length - 1]!)) return true;
+    }
+  }
+  return false;
+}
+
+export function classifyKeyPointKind(
+  quote: string,
+  title: string,
+): "homework" | "grading" | "logistics" | null {
+  const words = normalizeFa(`${title} ${quote}`).split(" ").filter(Boolean);
+  if (hasHint(words, HOMEWORK_HINTS)) return "homework";
+  if (hasHint(words, GRADING_HINTS)) return "grading";
+  if (hasHint(words, LOGISTICS_HINTS)) return "logistics";
   return null;
 }
 
@@ -470,12 +520,21 @@ export async function analyzeClass(
   };
 
   // ── راستی‌آزمایی نقل‌قول‌ها ────────────────────────────────────────────
-  let dropped = 0;
+  /**
+   * سه شمارنده، نه یکی.
+   *
+   * پیش‌تر هر سه علتِ حذف یک عدد را بالا می‌بردند، و نتیجه‌اش این بود که
+   * وقتی روی دادهٔ واقعی پرسیدیم «کدام دروازه دارد نکته‌ها را می‌کشد؟»
+   * جوابی نداشتیم و مجبور شدیم حدس بزنیم. تفکیک، ابزارِ تصمیمِ بعدی است.
+   */
+  let droppedUnverified = 0;
+  let droppedImportance = 0;
+  let demotedActions = 0;
   const keyPoints: AnalysisReport["key_points"] = [];
   for (const kp of parsed.key_points) {
     const ev = verifyEvidence(transcript, kp.evidence);
     if (!ev || !ev.verified) {
-      dropped++;
+      droppedUnverified++;
       logger.debug({ title: kp.title, score: ev?.score }, "نقل‌قول تأیید نشد — نکته حذف شد");
       continue; // بدون منبعِ تأییدشده، نکته نمایش داده نمی‌شود
     }
@@ -492,22 +551,27 @@ export async function analyzeClass(
      * دقیقاً همان چیزهایی حذف می‌شوند که دانشجوی غایب بیشتر از همه می‌خواهد.
      * برای آنها همان دروازهٔ اول — «جمله واقعاً گفته شده» — کافی است.
      */
-    if ((kp.kind === "exam" || kp.kind === "emphasis") && !statesImportance(ev.quote)) {
-      dropped++;
-      logger.debug({ title: kp.title, quote: kp.evidence.quote }, "نقل‌قول ادعای تأکید را ثابت نمی‌کند");
-      continue;
-    }
     /**
-     * تصحیح نوع بر پایهٔ محتوا.
+     * تصحیح نوع بر پایهٔ محتوا — **پیش از** دروازه، و این ترتیب عمدی است.
      *
-     * فقط روی `emphasis` اعمال می‌شود: بقیهٔ نوع‌ها را مدل درست تشخیص
-     * می‌دهد، و `exam` هم صریح‌تر از آن است که اشتباه شود. بعد از دروازه
-     * می‌آید تا نکته‌ای که واقعاً تأکید نبوده اول حذف شود، نه اینکه با
-     * تغییر برچسب از دروازه فرار کند.
+     * قبلاً بعد از دروازه بود، با این استدلال که «نکته نتواند با تغییر
+     * برچسب از دروازه فرار کند». ولی استدلال وارونه بود: نکته‌ای که واقعاً
+     * تکلیف است **باید** فرار کند، چون اصلاً ادعای تأکید نمی‌کند. دروازه
+     * برای محافظت از ادعای «استاد گفت مهم است» ساخته شده؛ وقتی برچسب عوض
+     * شد، آن ادعا دیگر در کار نیست.
+     *
+     * بهای ترتیب قبلی روی دادهٔ واقعی دیده شد: «کتاب رو تهیه بکنید و به
+     * تدریج بخونید» نشانهٔ اهمیت ندارد، پس سرِ دروازه کشته می‌شد و هرگز به
+     * تصحیح نمی‌رسید — و چک‌لیست به دانشجو می‌گفت «تکلیفی نداد».
      */
     const fixed = kp.kind === "emphasis" ? (classifyKeyPointKind(ev.quote, kp.title) ?? kp.kind) : kp.kind;
     if (fixed !== kp.kind) {
       logger.debug({ title: kp.title, from: kp.kind, to: fixed }, "نوع نکته بر پایهٔ محتوا تصحیح شد");
+    }
+    if ((fixed === "exam" || fixed === "emphasis") && !statesImportance(ev.quote)) {
+      droppedImportance++;
+      logger.debug({ title: kp.title, quote: kp.evidence.quote }, "نقل‌قول ادعای تأکید را ثابت نمی‌کند");
+      continue;
     }
     keyPoints.push({ ...kp, kind: fixed, evidence: ev });
   }
@@ -515,12 +579,52 @@ export async function analyzeClass(
   const professorActions = parsed.professor_actions.map((a) => {
     const ev = verifyEvidence(transcript, a.evidence);
     if (a.happened && (!ev || !ev.verified)) {
-      dropped++;
+      demotedActions++;
       // ادعای «انجام شد» بدون شاهد تأییدشده به «نامعلوم» تنزل می‌کند
       return { ...a, happened: false, detail: `${a.detail} (شاهد تأیید نشد)`, evidence: null };
     }
     return { ...a, evidence: ev };
   });
+
+  /**
+   * چک‌لیست را با نکته‌های **تأییدشده** آشتی بده.
+   *
+   * پرامپت این را می‌خواهد («جواب منفی فقط وقتی مجاز است که در فهرست نکته‌ها
+   * هیچ موردی از آن نوع نباشد») ولی تا امروز هیچ‌چیز اجرایش نمی‌کرد، و در
+   * پنج جلسهٔ واقعی نتیجه‌اش این شد: چک‌لیست گفت «تکلیفی نداد» در حالی که
+   * در همان خروجی یک موردِ تأییدشده می‌گفت استاد خواسته کتاب قانون را تهیه
+   * کنند.
+   *
+   * این تطبیق هیچ ادعای تازه‌ای نمی‌سازد — فقط نکته‌ای که **قبلاً از هر دو
+   * دروازه گذشته** را به چک‌لیست می‌رساند. و چون منفیِ چک‌لیست به دانشجو
+   * قطعی نشان داده می‌شود («تکلیفی نداد»، نه «چیزی پیدا نکردم»)، همین
+   * تطبیق است که آن قطعیت را قابل دفاع می‌کند.
+   */
+  const KIND_TO_ACTION: Record<string, string> = {
+    homework: "homework",
+    deadline: "deadline",
+    grading: "grading",
+    exam: "exam_info",
+  };
+  for (const kp of keyPoints) {
+    const action = KIND_TO_ACTION[kp.kind];
+    if (!action) continue;
+    const existing = professorActions.find((a) => a.action === action);
+    if (existing?.happened) continue;
+    if (existing) {
+      logger.info({ action, title: kp.title }, "چک‌لیست با نکتهٔ تأییدشده آشتی داده شد");
+      existing.happened = true;
+      existing.detail = kp.title;
+      existing.evidence = kp.evidence;
+    } else {
+      professorActions.push({
+        action: action as (typeof parsed.professor_actions)[number]["action"],
+        happened: true,
+        detail: kp.title,
+        evidence: kp.evidence,
+      });
+    }
+  }
 
   const report: AnalysisReport = {
     ...parsed,
@@ -528,7 +632,10 @@ export async function analyzeClass(
     professor_actions: professorActions,
     composition: computeComposition(parsed.chapters, meta.originalDurationMs, meta.silenceMs),
     silenceMs: meta.silenceMs,
-    droppedCitations: dropped,
+    droppedCitations: droppedUnverified + droppedImportance + demotedActions,
+    droppedUnverified,
+    droppedImportance,
+    demotedActions,
   };
 
   let notesMarkdown = "";
@@ -549,7 +656,16 @@ export async function analyzeClass(
     const skeleton = `### تحلیل ساختاریافتهٔ همین جلسه\n\n\`\`\`json\n${JSON.stringify(
       {
         topics: parsed.topics,
-        key_points: keyPoints,
+        /**
+         * `at_clock` فیلدِ خام نیست — اینجا ساخته می‌شود چون جزوه ساعت
+         * می‌خواهد (`⟨HH:MM:SS⟩`) و اسکلت فقط میلی‌ثانیه دارد. بدون آن،
+         * دستورِ «زمان را از اسکلت بردار» به `⟨102300⟩` در PDF می‌رسید،
+         * و قاعدهٔ ۸ سیستم هم صریح تبدیل‌کردن را ممنوع کرده است.
+         */
+        key_points: keyPoints.map((k) => ({
+          ...k,
+          evidence: { ...k.evidence, at_clock: fmtClock(k.evidence.at_ms, true) },
+        })),
         glossary: parsed.glossary,
         open_questions: parsed.open_questions,
       },
@@ -617,7 +733,7 @@ export async function analyzeClass(
       pass2Cache: usage2
         ? { write: usage2.cache_creation_input_tokens, read: usage2.cache_read_input_tokens }
         : null,
-      dropped,
+      dropped: { unverified: droppedUnverified, importance: droppedImportance, actions: demotedActions },
     },
     "analysis done",
   );
@@ -641,11 +757,21 @@ export async function analyzeClass(
   };
 }
 
-/** مدل‌های رایگان گاهی کل جزوه را داخل بلوک کد می‌گذارند. */
+/**
+ * مدل‌های رایگان گاهی کل جزوه را داخل بلوک کد می‌گذارند.
+ *
+ * شاخهٔ دوم برای بلوکِ **بسته‌نشده** است: اگر خروجی به سقف توکن بخورد،
+ * جزوه وسط بلوک قطع می‌شود و ``` پایانی هرگز نمی‌آید. آن‌وقت markdown-it
+ * کل جزوه را یک بلوک کدِ چپ‌به‌راست رندر می‌کند و PDF از دست می‌رود — یعنی
+ * یک قطعِ کوچک به خرابیِ کامل تبدیل می‌شود.
+ */
 function stripFence(text: string): string {
   const t = text.trim();
   const m = /^```(?:markdown|md)?\s*\n([\s\S]*?)\n?```$/.exec(t);
-  return (m?.[1] ?? t).trim();
+  if (m?.[1] !== undefined) return m[1].trim();
+  const open = /^```(?:markdown|md)?\s*\n([\s\S]*)$/.exec(t);
+  if (open?.[1] !== undefined && !open[1].includes("```")) return open[1].trim();
+  return t;
 }
 
 /** شکل Usage آنتروپیک، پر شده از شمارش OpenRouter — تا بقیهٔ کد یک مسیر بماند. */

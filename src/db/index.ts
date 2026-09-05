@@ -74,6 +74,10 @@ for (const [column, ddl] of [
   ["audio_chat_id", "ALTER TABLE sessions ADD COLUMN audio_chat_id INTEGER"],
   ["audio_message_id", "ALTER TABLE sessions ADD COLUMN audio_message_id INTEGER"],
   ["download_route", "ALTER TABLE sessions ADD COLUMN download_route TEXT"],
+  // مسیر PDF رونوشت — چون نمایشگرِ فایل متنی روی گوشیِ بله متن فارسی را
+  // ناخوانا نشان می‌دهد و PDF قلم و رمزگذاری را با خودش می‌برد.
+  ["transcript_pdf", "ALTER TABLE sessions ADD COLUMN transcript_pdf TEXT"],
+  ["transcript_srt", "ALTER TABLE sessions ADD COLUMN transcript_srt TEXT"],
   // شناسهٔ فایل در تلگرام: ارسال دوباره به کسی که به جلسه می‌پیوندد رایگان و
   // فوری است، و بدون آن لینک‌های زمانی برای او کار نمی‌کنند.
   ["audio_file_id", "ALTER TABLE sessions ADD COLUMN audio_file_id TEXT"],
@@ -298,6 +302,8 @@ export interface SessionRow {
   notes_md: string | null;
   transcript_txt: string | null;
   pdf_path: string | null;
+  transcript_pdf: string | null;
+  transcript_srt: string | null;
   cost_usd: number;
   error: string | null;
   created_at: string;
@@ -389,7 +395,7 @@ type Updatable = Partial<
     SessionRow,
     | "status" | "title" | "session_date" | "original_file" | "original_ms" | "billed_ms"
     | "silence_ms" | "time_map_json" | "report_json" | "notes_md" | "transcript_txt"
-    | "pdf_path" | "cost_usd" | "error" | "finished_at" | "course_id"
+    | "pdf_path" | "transcript_pdf" | "transcript_srt" | "cost_usd" | "error" | "finished_at" | "course_id"
     | "audio_chat_id" | "audio_message_id" | "download_route"
     | "audio_file_id" | "share_enabled" | "share_target" | "mode" | "archive_message_id"
   >

@@ -132,13 +132,20 @@ export const ClassAnalysis = z.object({
    * حالا `topics` جلوتر می‌آید: مدل اول سرفصل‌ها را به ترتیب زمانی می‌شمارد
    * (که مجبورش می‌کند تا انتهای رونوشت برود) و بعد از روی همان‌ها بخش‌های
    * درشت را می‌بُرد.
+   *
+   * و به همین دلیل `professor_actions` **بعد از** `key_points` آمد.
+   * پیش‌تر جلوتر بود، یعنی مدل به «تکلیف نداد» متعهد می‌شد پیش از آنکه به
+   * فهرست نکته‌ها برسد و همان‌جا تکلیف را پیدا کند. در پنج جلسهٔ واقعی
+   * دقیقاً همین شد: چک‌لیست گفت «تکلیفی نداد» و چند خط پایین‌تر یک موردِ
+   * تأییدشده می‌گفت استاد خواسته کتاب قانون را تهیه کنند. حالا چک‌لیست
+   * **جمع‌بندیِ** چیزی است که مدل همین الان نوشته، نه یک حدس مستقل.
    */
   topics: z.array(Topic),
   chapters: z
     .array(Chapter)
     .describe("۴ تا ۶ بخش درشت که پشت سر هم کل صوت را بپوشانند؛ بخش آخر باید در نیمهٔ دوم صوت شروع شود"),
-  professor_actions: z.array(ProfessorAction),
   key_points: z.array(KeyPoint),
+  professor_actions: z.array(ProfessorAction),
   glossary: z.array(GlossaryEntry),
   open_questions: z.array(z.string()).describe("بخش نامفهوم صوت یا سؤال بی‌جواب"),
   next_session_hint: z.string().nullable(),
@@ -167,4 +174,8 @@ export interface AnalysisReport extends Omit<ClassAnalysis, "key_points" | "prof
   composition: TimelineStats[];
   silenceMs: number;
   droppedCitations: number;
+  /** تفکیکِ همان عدد، برای اینکه بشود فهمید کدام دروازه چه چیزی را کشت. */
+  droppedUnverified: number;
+  droppedImportance: number;
+  demotedActions: number;
 }

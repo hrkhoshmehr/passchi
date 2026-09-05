@@ -48,7 +48,17 @@ export async function closeBrowser(): Promise<void> {
 }
 
 export async function renderPdf(doc: NoteDocument, outFile: string): Promise<string> {
-  const html = buildHtml(doc);
+  return htmlToPdf(buildHtml(doc), outFile);
+}
+
+/**
+ * هر HTML ای را با همان تنظیماتِ چاپِ جزوه به PDF تبدیل می‌کند.
+ *
+ * از دلِ `renderPdf` بیرون کشیده شد چون حالا رونوشت هم PDF می‌شود
+ * (`pdf/transcript.ts`) و آن تنظیمات — انتظار برای آماده‌شدن قلم، حاشیه‌ها،
+ * شمارهٔ صفحه — نباید در دو جا نگه‌داری شوند.
+ */
+export async function htmlToPdf(html: string, outFile: string): Promise<string> {
   // صفحه از یک فایل موقت باز می‌شود تا رفتار چاپ Chromium پایدار باشد
   const htmlFile = outFile.replace(/\.pdf$/i, "") + ".html";
   await fs.mkdir(path.dirname(outFile), { recursive: true });

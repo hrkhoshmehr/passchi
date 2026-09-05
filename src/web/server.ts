@@ -1161,6 +1161,7 @@ async function confirmSession(res: Res, userId: number, sessionId: string): Prom
       courseName: s.course_id ? (getCourse(s.course_id)?.name ?? null) : null,
       origin: "web",
     }),
+    sec,
   );
 
   /**

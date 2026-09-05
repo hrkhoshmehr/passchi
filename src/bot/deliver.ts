@@ -16,8 +16,9 @@
 import fs from "node:fs";
 import { sendFileTo } from "./bale-upload.js";
 import { config } from "../config.js";
+import { audioExt } from "../audio/container.js";
 import { logger } from "../util/logger.js";
-import { escapeHtml } from "../util/text.js";
+import { escapeHtml, transcriptBytes } from "../util/text.js";
 import { transcodeForTelegram } from "../audio/ffmpeg.js";
 import { getCourse, sessionReport, updateSession, type SessionRow } from "../db/index.js";
 import { deliveryChannel } from "./notify.js";
@@ -92,10 +93,19 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
         ch.chatId,
         ch.platform,
         "sendAudio",
-        { path: audio.file, filename: `${s.title ?? "جلسه"}.mp3` },
+        { path: audio.file, filename: `${s.title ?? "جلسه"}${audioExt(audio.file)}` },
         {
           caption: `🎧 ${escapeHtml(s.title ?? "صوت جلسه")}`,
           ...(s.title ? { title: s.title } : {}),
+          /**
+           * مدت **صریح** گفته می‌شود، نه اینکه به تشخیصِ تلگرام سپرده شود.
+           *
+           * برای فایلی که ظرفش با پسوندش نمی‌خواند، تلگرام مدت را صفر
+           * برمی‌گرداند — و صوتِ با مدتِ صفر نه پخش می‌شود نه زمان‌های گزارش
+           * را به لینکِ پخش تبدیل می‌کند. پسوند که با `audioExt` درست شد این
+           * را حل می‌کند، ولی عددی که خودمان داریم ارزان‌تر و قطعی‌تر است.
+           */
+          ...(s.original_ms > 0 ? { duration: Math.round(s.original_ms / 1000) } : {}),
         },
       );
       audioMessageId = sent?.message_id ?? null;
@@ -151,15 +161,27 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
       { caption: "📕 جزوهٔ این جلسه" },
     ).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver pdf failed"));
   }
-  if (s.transcript_txt) {
+  // رونوشت به شکل PDF؛ دلیلش در `pdf/transcript.ts`. اگر PDF نبود، متن خام.
+  const tx =
+    s.transcript_pdf && fs.existsSync(s.transcript_pdf)
+      ? ({ path: s.transcript_pdf, filename: "رونوشت کامل.pdf" } as const)
+      : s.transcript_txt
+        ? ({ bytes: transcriptBytes(s.transcript_txt), filename: "رونوشت کامل.txt" } as const)
+        : null;
+  if (tx) {
+    await sendFileTo(ch.api, ch.chatId, ch.platform, "sendDocument", tx, {
+      caption: "📄 رونوشت کامل — همهٔ حرف‌های جلسه، پشت سر هم.",
+    }).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver transcript failed"));
+  }
+  if (s.transcript_srt && fs.existsSync(s.transcript_srt)) {
     await sendFileTo(
       ch.api,
       ch.chatId,
       ch.platform,
       "sendDocument",
-      { bytes: Buffer.from(s.transcript_txt, "utf8"), filename: "رونوشت کامل.txt" },
-      { caption: "📄 رونوشت کامل با مهر زمانی" },
-    ).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver transcript failed"));
+      { path: s.transcript_srt, filename: "رونوشت زمان‌دار.srt" },
+      { caption: "⏱ نسخهٔ زمان‌دار — برای پیدا کردن یک لحظه یا زیرنویسِ ویدیو." },
+    ).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver srt failed"));
   }
 
   logger.info({ sessionId: s.id, userId, platform: ch.platform }, "delivered to bot");

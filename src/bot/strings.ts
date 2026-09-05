@@ -221,8 +221,17 @@ export function extractedMessage(r: AnalysisReport): string {
    * نقل‌قول و دقیقه آنجا. نسخهٔ پایینی همیشه بهتر است، پس بالایی کنار
    * می‌رود.
    */
+  /**
+   * رشتهٔ خالی نباید وارد این مجموعه شود.
+   *
+   * نسخهٔ قبلی هر نکتهٔ غیرِ logistics/grading را به «» نگاشت می‌کرد و همان
+   * «» را داخل مجموعه می‌گذاشت. پایین‌تر هر کاری که در `ACTION_TO_KIND`
+   * نبود هم به «» می‌رسید — یعنی به‌محض وجود یک نکتهٔ تکلیف در فهرست،
+   * موردِ «سایر» پوشش‌داده‌شده حساب می‌شد و بی‌صدا حذف. دقیقاً همان چیزی که
+   * می‌خواستیم رفعش کنیم، از یک نگاشتِ پیش‌فرض برمی‌گشت.
+   */
   const coveredByPoints = new Set<string>(
-    r.key_points.map((k) => (k.kind === "logistics" || k.kind === "grading" ? k.kind : "")),
+    r.key_points.filter((k) => k.kind === "logistics" || k.kind === "grading").map((k) => k.kind),
   );
   const ACTION_TO_KIND: Record<string, string> = {
     grading: "grading",
@@ -231,9 +240,20 @@ export function extractedMessage(r: AnalysisReport): string {
   };
   for (const a of r.professor_actions) {
     if (CORE_ACTIONS.includes(a.action as (typeof CORE_ACTIONS)[number])) continue;
-    if (!a.happened || a.action === "other") continue;
-    if (coveredByPoints.has(ACTION_TO_KIND[a.action] ?? "")) continue;
-    out.push(`✅ <b>${ACTION_LABEL[a.action] ?? a.action}</b>${a.detail ? ` — ${escapeHtml(a.detail)}` : ""}`);
+    if (!a.happened) continue;
+    const kind = ACTION_TO_KIND[a.action];
+    if (kind && coveredByPoints.has(kind)) continue;
+    /**
+     * «سایر» هم چاپ می‌شود، و این عوض شد.
+     *
+     * پیش‌تر بی‌صدا کنار می‌رفت، و مدل از آن به‌عنوان درِ فرار استفاده می‌کرد:
+     * در پنج جلسهٔ واقعی، «استاد بر لزوم تهیهٔ کتاب قانون تأکید کرد» در
+     * «سایر» نشست و ناپدید شد، در حالی که چک‌لیست بالای همان پیام می‌گفت
+     * «تکلیفی نداد». هر چیزی که شاهد تأییدشده دارد باید به دانشجو برسد —
+     * برچسبِ نامناسب دلیلِ حذف نیست.
+     */
+    const label = a.action === "other" ? "نکتهٔ دیگر" : (ACTION_LABEL[a.action] ?? a.action);
+    out.push(`✅ <b>${label}</b>${a.detail ? ` — ${escapeHtml(a.detail)}` : ""}`);
   }
 
   const points = sortedKeyPoints(r);
