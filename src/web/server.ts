@@ -1197,6 +1197,8 @@ const MIME: Record<string, string> = {
    * نشان‌دادن متن، دانلودش می‌کرد — و بعضی راستی‌آزماها همان را رد می‌کنند.
    */
   ".txt": "text/plain; charset=utf-8",
+  /** برای `sitemap.xml`؛ با `octet-stream` گوگل نقشه را نمی‌خواند. */
+  ".xml": "application/xml; charset=utf-8",
 };
 
 async function serveStatic(req: http.IncomingMessage, res: Res, pathname: string): Promise<void> {
@@ -1227,19 +1229,29 @@ async function serveStatic(req: http.IncomingMessage, res: Res, pathname: string
      * تلاش بیشتر.
      *
      * پس هر مسیری که پسوند فایل دارد و پیدا نشد، صادقانه ۴۰۴ می‌گیرد.
-     * مسیرهای بی‌پسوند همچنان به صفحهٔ اپ می‌روند.
      *
      * مسیرهای نقطه‌دار جداگانه بررسی می‌شوند، و بررسی روی **هر قطعه**
      * است نه فقط نام فایل. `extname` برای `.htaccess` رشتهٔ خالی می‌دهد
      * (نقطه پیشوند است نه پسوند) و `basename(".git/config")` هم برابر
      * `config` است — پس هر دو از تور در می‌رفتند، در حالی که دقیقاً
      * همین‌ها پرتکرارترین هدف اسکنرها هستند.
+     *
+     * **مسیرِ بی‌پسوندِ ناشناس هم ۴۰۴ می‌گیرد، نه لندینگ‌پیج.** قبلاً هر
+     * چیزی به `index.html` می‌رسید و **۲۰۰** می‌گرفت — یعنی بی‌نهایت آدرسِ
+     * جعلی که همگی بایت‌به‌بایت همان صفحهٔ اصلی بودند. گوگل اسمش را
+     * «soft 404» و «تکراری بدون کنونیکالِ انتخاب‌شده» می‌گذارد و به‌جای
+     * ایندکسِ صفحهٔ اصلی، همه را کنار می‌گذارد.
+     *
+     * این فالبک برای مسیریابی سمت کلاینت گذاشته شده بود، ولی چنین
+     * مسیریابی‌ای هرگز ساخته نشد: هیچ `pushState`ای در `public/` نیست و
+     * مینی‌اپ نماها را داخل یک صفحه عوض می‌کند. پس فقط `/app` می‌ماند.
      */
-    if (path.extname(rel) || rel.split("/").some((seg) => seg.startsWith("."))) {
+    const isApp = pathname === "/app" || pathname.startsWith("/app/");
+    if (!isApp || path.extname(rel) || rel.split("/").some((seg) => seg.startsWith("."))) {
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("not found");
       return;
     }
-    file = path.join(publicDir, pathname.startsWith("/app") ? "app.html" : "index.html");
+    file = path.join(publicDir, "app.html");
   }
   if (!fs.existsSync(file)) {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("not found");

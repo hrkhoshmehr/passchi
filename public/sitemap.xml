@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  یک آدرس، چون سایت واقعاً یک صفحه است. لنگرهای داخل صفحه (#how، #price)
+  آدرس جدا نیستند و اینجا نمی‌آیند — آوردنشان همان تکراری‌ای را می‌سازد که
+  می‌خواهیم از آن دور بمانیم.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://passchi.ir/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>
