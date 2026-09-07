@@ -156,22 +156,120 @@ function glossaryHtml(r: AnalysisReport): string {
 }
 
 /**
- * نقل‌قول‌های «نکتهٔ امتحانی» را از نقل‌قول معمولی جدا می‌کند.
+ * نقل‌قول‌های برچسب‌دار را از نقل‌قول معمولی جدا می‌کند.
  *
- * جزوه دیگر بخش جداگانه‌ای برای امتحان ندارد — نکته همان‌جا می‌آید که مبحثش
- * آمده. برای اینکه چشم در یک صفحهٔ پر از متن پیدایش کند، فقط رنگش فرق می‌کند.
+ * جزوه بخش جداگانه‌ای برای امتحان ندارد — نکته همان‌جا می‌آید که مبحثش آمده.
+ * برای اینکه چشم در یک صفحهٔ پر از متن پیدایش کند، فقط رنگش فرق می‌کند.
  * markdown-it کلاسی روی blockquote نمی‌گذارد، پس روی خروجی‌اش برچسب می‌زنیم.
+ *
+ * برچسب **باید اولین `<strong>` همان کادر باشد.** با `includes` روی کل متن،
+ * کلمهٔ عادیِ «مثال» یا «تعریف» در وسطِ یک نقل‌قول کافی بود تا کادر رنگ
+ * عوض کند؛ برچسب یعنی چیزی که مدل عمداً اول کادر گذاشته، نه هر جای متن.
  */
+const QUOTE_KINDS: ReadonlyArray<readonly [string, string]> = [
+  ["در امتحان می‌آید", "exam"],
+  ["تأکید استاد", "emph"],
+  // «خارج از کلاس» باید *متفاوت* دیده شود، نه برجسته: خواننده باید در یک
+  // نگاه بفهمد این جمله را استاد نگفته و اعتبارش با بقیهٔ جزوه یکی نیست.
+  ["خارج از کلاس", "outside"],
+  ["تعریف", "def"],
+  ["مثال", "example"],
+];
+
 function markHighlights(html: string): string {
   return html.replace(/<blockquote>([\s\S]*?)<\/blockquote>/g, (m, inner: string) => {
-    if (inner.includes("در امتحان می‌آید")) return `<blockquote class="exam">${inner}</blockquote>`;
-    if (inner.includes("تأکید استاد")) return `<blockquote class="emph">${inner}</blockquote>`;
-    // «خارج از کلاس» باید *متفاوت* دیده شود، نه برجسته: خواننده باید در یک
-    // نگاه بفهمد این جمله را استاد نگفته و اعتبارش با بقیهٔ جزوه یکی نیست.
-    if (inner.includes("خارج از کلاس")) return `<blockquote class="outside">${inner}</blockquote>`;
-    return m;
+    const at = /^([\s\S]*?)<strong>([^<]*)<\/strong>/.exec(inner);
+    // پیش از برچسب فقط تگ، فاصله و شکلک مجاز است؛ هر کلمه‌ای یعنی این پررنگ
+    // وسطِ جمله است نه برچسبِ کادر. سنجه «خط» است نه \p{L}: بعضی شکلک‌ها
+    // (مثلاً ℹ️ که U+2139 است) از نظر یونیکد حرف حساب می‌شوند.
+    const before = at?.[1]?.replace(/<[^>]+>/g, "") ?? "x";
+    const label = /[\p{Script=Arabic}\p{Script=Latin}\p{Nd}]/u.test(before) ? undefined : at?.[2]?.trim();
+    const kind = label && QUOTE_KINDS.find(([text]) => label.startsWith(text))?.[1];
+    return kind ? `<blockquote class="${kind}">${inner}</blockquote>` : m;
   });
 }
+
+/**
+ * دو «شکل» که جزوه اجازه دارد بکشد: زنجیرهٔ فرایند و درختِ دسته‌بندی.
+ *
+ * ## چرا نه یک کتابخانهٔ نمودار
+ *
+ * رندر با کرومیومِ آفلاین انجام می‌شود (فایل `file://`, بدون شبکه)، پس هر
+ * کتابخانهٔ نمودار باید کامل داخل HTML جاسازی شود و برای دو شکلِ ساده صدها
+ * کیلوبایت جاوااسکریپت به هر جزوه اضافه کند. این دو شکل با CSS خالص در
+ * می‌آیند و — مهم‌تر — اگر مدل ورودی خراب بدهد، خروجی همچنان متنِ خوانا است
+ * نه یک بلوکِ شکسته.
+ *
+ * نحو، عمداً همان چیزی است که مدل بلد است: بلوک کد با زبانِ `flow` یا `tree`.
+ */
+function flowHtml(src: string): string {
+  const rows = src
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const nodes = line
+        .split(/\s*(?:→|←|->|=>|<-)\s*/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (nodes.length === 0) return "";
+      // در متن راست‌به‌چپ، «بعدی» سمت چپ است، پس پیکان هم به چپ می‌رود
+      const inner = nodes
+        .map((n) => `<span class="flow-node">${escapeHtml(n)}</span>`)
+        .join(`<span class="flow-arrow">←</span>`);
+      return `<div class="flow-row">${inner}</div>`;
+    })
+    .filter(Boolean);
+  return rows.length ? `<div class="flow">${rows.join("")}</div>` : "";
+}
+
+function treeHtml(src: string): string {
+  interface Node { text: string; depth: number; children: Node[] }
+  const roots: Node[] = [];
+  const stack: Node[] = [];
+
+  for (const raw of src.split("\n")) {
+    if (!raw.trim()) continue;
+    const indent = /^[ \t]*/.exec(raw)![0].replace(/\t/g, "  ").length;
+    const text = raw.trim().replace(/^[-*•]\s*/, "");
+    if (!text) continue;
+    const node: Node = { text, depth: Math.floor(indent / 2), children: [] }; // هر دو فاصله یک پله
+    while (stack.length && stack[stack.length - 1]!.depth >= node.depth) stack.pop();
+    if (stack.length === 0) roots.push(node);
+    else stack[stack.length - 1]!.children.push(node);
+    stack.push(node);
+  }
+
+  const render = (nodes: Node[]): string =>
+    nodes.length === 0
+      ? ""
+      : `<ul>${nodes
+          .map((n) => `<li><span class="tree-node">${escapeHtml(n.text)}</span>${render(n.children)}</li>`)
+          .join("")}</ul>`;
+
+  return roots.length ? `<div class="tree">${render(roots)}</div>` : "";
+}
+
+const FENCE_RENDERERS: Record<string, (src: string) => string> = {
+  flow: flowHtml,
+  فلو: flowHtml,
+  زنجیره: flowHtml,
+  tree: treeHtml,
+  درخت: treeHtml,
+};
+
+const defaultFence = md.renderer.rules.fence!;
+md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+  const token = tokens[idx]!;
+  const lang = token.info.trim().split(/\s+/)[0] ?? "";
+  const custom = FENCE_RENDERERS[lang];
+  if (custom) {
+    const out = custom(token.content);
+    // بلوکِ خراب نباید ناپدید شود؛ به بلوک کدِ معمولی برمی‌گردد
+    if (out) return out;
+  }
+  return defaultFence(tokens, idx, options, env, self);
+};
 
 export function buildHtml(doc: NoteDocument): string {
   const r = doc.report;
@@ -215,7 +313,9 @@ body{
 .fa-formula{font-family:inherit;direction:rtl;unicode-bidi:isolate;white-space:normal}
 .fa-formula-block{display:block;margin:.9em 0;text-align:center;font-weight:600;
   background:#f7f9fb;border-radius:6px;padding:.5em .8em}
-.katex-display{margin:.9em 0;direction:ltr;unicode-bidi:isolate;text-align:center}
+/* فرمولِ بلوکی روی نوارِ کم‌رنگ می‌نشیند تا در ستون متنِ فشرده گم نشود */
+.katex-display{margin:1em 0;direction:ltr;unicode-bidi:isolate;text-align:center;
+  background:#f7f9fb;border-radius:6px;padding:.6em .8em;break-inside:avoid}
 .katex-display>.katex{display:block;text-align:center}
 
 /* ── جلد ─────────────────────────────────────────────── */
@@ -232,6 +332,10 @@ body{
 /* ── عناوین ──────────────────────────────────────────── */
 h1,h2,h3,h4{line-height:1.6;font-weight:700;break-after:avoid}
 h2{font-size:15pt;margin:1.9em 0 .6em;padding-bottom:.3em;border-bottom:2px solid var(--line)}
+/* یک میلهٔ کوچکِ رنگی سرِ هر سرفصل: در فهرست‌کردنِ صفحه‌ها با انگشت،
+   سرفصل‌ها را از خطِ پررنگِ معمولی جدا می‌کند */
+h2::before{content:"";display:inline-block;width:.26em;height:.8em;background:var(--accent);
+  border-radius:2px;margin-left:.45em;vertical-align:-.02em}
 h3{font-size:12.5pt;margin:1.4em 0 .4em;color:#22303c}
 h4{font-size:11pt;margin:1.1em 0 .3em}
 p{margin:.55em 0}
@@ -249,16 +353,51 @@ blockquote.emph strong{color:#975a16}
 /* گفتهٔ استاد نیست: خاکستری و با حاشیهٔ خط‌چین، عمداً کم‌رنگ‌تر از متن جزوه */
 blockquote.outside{background:#fafbfc;border-right:2px dashed #a0aec0;color:#4a5568;font-size:9.6pt}
 blockquote.outside strong{color:#718096}
+/* تعریف و مثال، برخلاف سه‌تای بالا، «هشدار» نیستند — بخشی از خودِ درس‌اند.
+   پس رنگشان آرام است و فقط کار پیداکردنِ دوباره‌شان را در مرور راحت می‌کند. */
+blockquote.def{background:var(--accent-soft);border-right-color:var(--accent)}
+blockquote.def strong{color:#1a56b8}
+blockquote.example{background:#f2fbf6;border-right-color:#2f855a}
+blockquote.example strong{color:#276749}
 blockquote p{margin:.2em 0}
+
+/* ── شکل‌ها: زنجیرهٔ فرایند و درختِ دسته‌بندی ─────────────── */
+.flow{margin:1em 0;break-inside:avoid;text-align:center}
+.flow-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:.4em;margin:.4em 0}
+.flow-node{border:1px solid #c7d7f0;background:var(--accent-soft);color:#1a3d6d;
+  border-radius:6px;padding:.35em .8em;font-size:9.6pt;font-weight:600;line-height:1.5}
+.flow-arrow{color:var(--accent);font-size:11pt;line-height:1}
+
+.tree{margin:1em 0;break-inside:avoid;font-size:9.8pt}
+.tree ul{list-style:none;margin:0;padding:0 1.1em 0 0}
+.tree>ul{padding:0}
+.tree li{position:relative;padding:.18em 1.1em .18em 0}
+.tree>ul>li{padding-right:0}
+/* خط‌های اتصال: عمودی از بالای شاخه تا پایین، افقی به هر گره.
+   در RTL همه‌چیز آینه است، پس تکیه‌گاه «right» است نه «left». */
+.tree ul ul>li::before{content:"";position:absolute;top:.95em;right:0;width:.75em;
+  border-top:1px solid #cbd5e0}
+.tree ul ul>li::after{content:"";position:absolute;top:0;right:0;height:100%;
+  border-right:1px solid #cbd5e0}
+.tree ul ul>li:last-child::after{height:.95em}
+.tree-node{display:inline-block;border:1px solid var(--line);background:#f7f9fb;
+  border-radius:5px;padding:.2em .6em;line-height:1.6}
+.tree>ul>li>.tree-node{background:var(--accent-soft);border-color:#c7d7f0;
+  color:#1a3d6d;font-weight:600}
 code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9em;background:#f4f6f8;
   padding:.1em .35em;border-radius:3px;direction:ltr;display:inline-block}
 pre{background:#f4f6f8;padding:.8em 1em;border-radius:6px;overflow-x:auto;direction:ltr;text-align:left}
 pre code{background:none;padding:0}
 hr{border:none;border-top:1px solid var(--line);margin:1.6em 0}
 
-table{width:100%;border-collapse:collapse;margin:.9em 0;font-size:9.8pt;break-inside:avoid}
+table{width:100%;border-collapse:collapse;margin:1em 0;font-size:9.8pt;break-inside:avoid}
 th,td{border:1px solid var(--line);padding:.5em .65em;text-align:right;vertical-align:top}
-th{background:#f7f9fb;font-weight:600;color:#3d4852}
+/* سرستون رنگِ لهجهٔ سند را می‌گیرد و ردیف‌ها یک‌درمیان تیره می‌شوند — روی
+   جدولِ مقایسه‌ایِ چندستونه، چشم بدون این دو تا سطر را گم می‌کند. */
+th{background:var(--accent-soft);font-weight:700;color:#1a3d6d;
+  border-bottom:2px solid #c7d7f0}
+tbody tr:nth-child(even){background:#fafbfc}
+tbody td:first-child{font-weight:600;color:#22303c}
 
 /* ── جدول واژه‌نامه ───────────────────────────────────── */
 .gloss td:first-child{width:24%}

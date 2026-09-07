@@ -35,6 +35,7 @@ const tests = [
   "internal-id",
   "price-sync",
   "pdf-math",
+  "pdf-blocks",
   "miniapp-detect",
   "bale-plain",
   "download-routing",

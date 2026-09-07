@@ -66,6 +66,24 @@ console.log(`کلمه بر دقیقهٔ کلاس: ${(words / Math.max(1, minutes
 console.log(`تأکیدها: ${emphLines.length} بلوک، ${emphWords} کلمه (٪${Math.round((emphWords / words) * 100)} جزوه)`);
 console.log(`«خارج از کلاس»: ${(md.match(/خارج از کلاس/g) ?? []).length}   (حداکثر ۳)`);
 console.log(`ریاضی: ${inlineMath.length} درون‌خطی، ${blockMath.length} بلوکی، ${faMath.length} با کلمهٔ فارسی`);
+
+// ابزارهای دیداری سهمیه دارند و سهمیه سقف است نه هدف — عدد صفر هشدار نیست،
+// عددِ بالای سقف هست: یعنی جزوه دارد به کادر تبدیل می‌شود.
+const countLabel = (label) =>
+  md.split("\n").filter((l) => l.trimStart().startsWith(">") && l.includes(`**${label}**`)).length;
+const visuals = {
+  "کادر تعریف": [countLabel("تعریف"), 4],
+  "کادر مثال": [countLabel("مثال"), 4],
+  جدول: [(md.match(/^\s*\|.*\|\s*$/gm) ?? []).length ? (md.match(/^\s*\|\s*:?-+/gm) ?? []).length : 0, 3],
+  درخت: [(md.match(/^```\s*(tree|درخت)\s*$/gm) ?? []).length, 2],
+  زنجیره: [(md.match(/^```\s*(flow|فلو|زنجیره)\s*$/gm) ?? []).length, 2],
+};
+console.log(
+  "ابزار دیداری: " +
+    Object.entries(visuals)
+      .map(([k, [n, cap]]) => `${k} ${n}/${cap}${n > cap ? " ⚠️" : ""}`)
+      .join(" · "),
+);
 console.log(`واژه‌نامه: ${report.glossary.length} · نکات باز: ${report.open_questions.length}`);
 console.log("\nسرفصل‌های سطح دو:");
 for (const h of md.match(/^## .+$/gm) ?? []) console.log("  " + h.replace(/^## /, ""));
