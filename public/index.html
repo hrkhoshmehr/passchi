@@ -21,13 +21,13 @@
   ⚠️ عدد را دوباره در عنوان نگذار: تا وقتی آنجا بود، عنوان سایت در نتایج
   گوگل هم فقط یک عدد بود — صفحه‌ای بی‌عنوان از دید موتور جستجو.
 -->
-<title>پاسچی — دیگه لازم نیست سر کلاس جزوه بنویسی</title>
+<title>پاسچی — با پاسچی راحت درسات رو پاس شو</title>
 <meta name="description" content="صوت کلاست رو بفرست: خلاصهٔ جلسه، نکته‌های امتحانی با عین حرف استاد، و جزوهٔ کامل PDF.">
 <link rel="canonical" href="https://passchi.ir/">
 <meta name="theme-color" content="#b8562f" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#14130f" media="(prefers-color-scheme: dark)">
 
-<meta property="og:title" content="پاسچی — دستیار درسی">
+<meta property="og:title" content="پاسچی — با پاسچی راحت درسات رو پاس شو">
 <meta property="og:description" content="صوت کلاست رو بفرست: خلاصهٔ جلسه، نکته‌های امتحانی با عین حرف استاد، و جزوهٔ کامل PDF.">
 <meta property="og:type" content="website">
 <meta property="og:locale" content="fa_IR">
@@ -90,6 +90,12 @@
   font-size: clamp(16.5px, 2.3vw, 20px);
   color: var(--text-soft); margin-top: 20px;
   max-width: 620px; margin-inline: auto;
+}
+/* شعار برند. یک خط است نه یک بند، پس از زیرعنوان بزرگ‌تر نیست ولی پررنگ‌تر
+   است — جمله‌ای که باید بماند، نه توضیحی که خوانده می‌شود. */
+.slogan {
+  margin-top: 18px; font-weight: 700;
+  font-size: clamp(16px, 2.1vw, 19px); color: var(--brand);
 }
 .hero-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 34px; }
 .hero-note { margin-top: 16px; font-size: 13.5px; color: var(--text-dim); }
@@ -222,6 +228,7 @@ footer {
 .foot-in { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
 .foot-in a { text-decoration: none; color: var(--text-soft); }
 .foot-in a:hover { color: var(--text); }
+.foot-slogan { color: var(--text-dim); }
 .foot-links { margin-inline-start: auto; display: flex; gap: 18px; flex-wrap: wrap; }
 .foot-seal img { height: 90px; width: auto; border-radius: 8px; }
 </style>
@@ -248,6 +255,7 @@ footer {
       صوت کلاس رو بفرست. خلاصهٔ جلسه، نکته‌های امتحانی با عین حرف استاد،
       تکلیف‌ها و مهلت‌ها، و یک جزوهٔ کامل PDF تحویل بگیر.
     </p>
+    <p class="slogan">با پاسچی راحت درسات رو پاس شو.</p>
     <div class="hero-cta">
       <a class="btn btn-primary" href="/app">🎧 صوت کلاسمو بفرستم</a>
       <a class="btn btn-ghost" href="#how">چطور کار می‌کنه؟</a>
@@ -505,7 +513,7 @@ footer {
   <div class="wrap">
     <div class="card">
       <h2>صوت کلاس امروزت رو بفرست</h2>
-      <p><span data-trial-coins>۲۰</span> سکه هدیهٔ شروع — بدون پرداخت، خودت ببین چه تحویل می‌گیری.</p>
+      <p><span data-trial-coins>۲۰</span> سکه هدیهٔ شروع — بدون پرداخت، خودت ببین چه تحویل می‌گیری.<br>با پاسچی راحت درسات رو پاس شو.</p>
       <div class="hero-cta">
         <a class="btn btn-primary" href="/app">🎧 شروع کن</a>
       </div>
@@ -516,6 +524,7 @@ footer {
 <footer>
   <div class="wrap foot-in">
     <a class="logo" href="/"><span class="logo-mark">📓</span> پاسچی</a>
+    <span class="foot-slogan">با پاسچی راحت درسات رو پاس شو</span>
     <div class="foot-links">
       <a href="#how">چطور کار می‌کنه</a>
       <a href="#price">قیمت</a>
