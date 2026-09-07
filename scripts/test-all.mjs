@@ -23,6 +23,7 @@ const tests = [
   "quote-gate",
   "emphasis",
   "keypoint-kind",
+  "categories",
 
   "timeline",
   "duration",

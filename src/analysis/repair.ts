@@ -121,10 +121,22 @@ export function repairAnalysis(input: unknown): Obj {
       }))
       .filter((c) => c.end_ms > c.start_ms),
 
+    /**
+     * کارِ ناشناخته **حذف** می‌شود، نه اینکه به «سایر» برگردد.
+     *
+     * تا وقتی «سایر» در اسکیما بود، این خط هر برچسبِ ازخوددرآوردهٔ مدل را به
+     * آن می‌ریخت و چک‌لیست یک ردیفِ عمومی چاپ می‌کرد. حالا که «سایر» رفته،
+     * چنین نگاشتی اصلاً معتبر نیست و افتادنِ مورد تنها رفتار درست است.
+     *
+     * چیزی از دست نمی‌رود: هر واقعیتی که ارزش نمایش دارد از راه key_points
+     * می‌آید — با نقل‌قول و دقیقه و برچسبِ درست — و چک‌لیست خودش پایین‌تر با
+     * همان نکته‌های تأییدشده آشتی داده می‌شود.
+     */
     professor_actions: arr(r.professor_actions)
       .filter(isObj)
+      .filter((a) => ACTION_KINDS.has(String(a.action)))
       .map((a) => ({
-        action: ACTION_KINDS.has(String(a.action)) ? a.action : "other",
+        action: a.action,
         happened: Boolean(a.happened),
         detail: asString(a.detail) ?? "",
         evidence: evidence(a.evidence),

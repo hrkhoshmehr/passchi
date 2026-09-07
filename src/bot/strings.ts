@@ -79,7 +79,6 @@ const ACTION_LABEL: Record<string, string> = {
   grading: "نمره و بارم",
   makeup_class: "کلاس جبرانی",
   class_cancelled: "لغو جلسه",
-  other: "سایر",
 };
 
 export const KP_LABEL: Record<string, string> = {
@@ -89,6 +88,10 @@ export const KP_LABEL: Record<string, string> = {
   deadline: "⏳ مهلت",
   grading: "💯 نمره و بارم",
   logistics: "📣 حواست باشه",
+  syllabus: "🗂 محدودهٔ درس",
+  resource: "📚 منبع",
+  contact: "☎️ راه ارتباطی",
+  correction: "✏️ تصحیح استاد",
 };
 
 /** نوار ترکیب زمانی با کاراکترهای بلوکی — در تلگرام بدون تصویر خوانا است */
@@ -244,16 +247,19 @@ export function extractedMessage(r: AnalysisReport): string {
     const kind = ACTION_TO_KIND[a.action];
     if (kind && coveredByPoints.has(kind)) continue;
     /**
-     * «سایر» هم چاپ می‌شود، و این عوض شد.
+     * دیگر خطی با برچسبِ عمومی چاپ نمی‌شود.
      *
-     * پیش‌تر بی‌صدا کنار می‌رفت، و مدل از آن به‌عنوان درِ فرار استفاده می‌کرد:
-     * در پنج جلسهٔ واقعی، «استاد بر لزوم تهیهٔ کتاب قانون تأکید کرد» در
-     * «سایر» نشست و ناپدید شد، در حالی که چک‌لیست بالای همان پیام می‌گفت
-     * «تکلیفی نداد». هر چیزی که شاهد تأییدشده دارد باید به دانشجو برسد —
-     * برچسبِ نامناسب دلیلِ حذف نیست.
+     * یک دوره «سایر» را هم چاپ می‌کردیم، با این استدلال که «برچسبِ نامناسب
+     * دلیلِ حذف نیست» — و آن استدلال برای همان روز درست بود، چون «تأکید بر
+     * تهیهٔ کتاب قانون» در سایر می‌نشست و ناپدید می‌شد. ولی راه‌حلش چاپِ
+     * سایر نبود؛ ساختنِ خانه برای آن واقعیت بود. حالا که خانه‌ها ساخته شده
+     * (تکلیف، حواست باشه، منبع، راه ارتباطی، تصحیح استاد) دستهٔ سایر هم از
+     * اسکیما رفته و اینجا فقط کارهای نام‌دار می‌مانند.
      */
-    const label = a.action === "other" ? "نکتهٔ دیگر" : (ACTION_LABEL[a.action] ?? a.action);
-    out.push(`✅ <b>${label}</b>${a.detail ? ` — ${escapeHtml(a.detail)}` : ""}`);
+    out.push(
+      `✅ <b>${ACTION_LABEL[a.action] ?? a.action}</b>` +
+        (a.detail ? ` — ${escapeHtml(a.detail)}` : ""),
+    );
   }
 
   const points = sortedKeyPoints(r);
@@ -310,7 +316,11 @@ export function extractedMessage(r: AnalysisReport): string {
  */
 function sortedKeyPoints(r: AnalysisReport) {
   const order: Record<string, number> = {
-    exam: 0, deadline: 1, homework: 2, logistics: 3, grading: 4, emphasis: 5,
+    exam: 0, deadline: 1, homework: 2, logistics: 3, grading: 4,
+    // تصحیح بالا می‌نشیند چون جزوهٔ جلسهٔ قبلِ دانشجو را باطل می‌کند؛ منبع و
+    // راه ارتباطی اقدامِ فوری نمی‌خواهند ولی اطلاعاتِ سختِ ترم‌اند (اسم کتاب،
+    // ساعت دفتر) — پس بالاتر از تأکیدهای درسی می‌نشینند.
+    correction: 5, syllabus: 6, resource: 7, contact: 8, emphasis: 9,
   };
   return [...r.key_points].sort(
     (a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9) || a.evidence.at_ms - b.evidence.at_ms,
