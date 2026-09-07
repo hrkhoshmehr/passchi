@@ -335,6 +335,70 @@ export function statesImportance(quote: string): boolean {
   return false;
 }
 
+/**
+ * بودجهٔ کلمهٔ هر بخش را **حساب‌شده** به پاس دوم می‌دهد.
+ *
+ * ## چرا در کد و نه در پرامپت
+ *
+ * قاعدهٔ «هر ده دقیقه تدریس، چهارصد کلمه» ماه‌ها در پرامپت بود و رعایت
+ * نمی‌شد: روی یک کلاس ۹۴ دقیقه‌ای با ۷۳ دقیقه تدریس، جزوه‌ها بین ۱۴۰۰ تا
+ * ۱۹۰۰ کلمه درمی‌آمدند در حالی که قاعده ۲۹۲۰ می‌خواست. افزودنِ «طولت را
+ * بسنج» به پرامپت هیچ اثری نداشت.
+ *
+ * دلیلش این بود که رسیدن به آن عدد از مدل **حساب** می‌خواست، و اسکلتی که
+ * به پاس دوم می‌رفت اصلاً `chapters` نداشت — یعنی داده‌ای که این حساب روی
+ * آن انجام شود در دسترسش نبود. حالا جدولِ آماده می‌رود: هر بخش، مدتش، و
+ * کفِ کلمه‌اش.
+ *
+ * بخش‌هایی که درس نیستند صفر می‌گیرند و اصلاً در جدول نمی‌آیند، پس کلاسی
+ * که نصفش حاشیه بوده جریمه نمی‌شود.
+ */
+const NOTES_WORDS_PER_MIN = 40;
+
+/**
+ * بخش‌هایی که در جزوه سهم دارند، با مدت و کفِ کلمه‌شان.
+ *
+ * `qa` هم می‌آید: پرسش و پاسخ دربارهٔ همان درس است و استاد در جوابش مطلب
+ * می‌گوید. آنچه سهم ندارد `admin` و `offtopic` و `technical` و `break` است —
+ * هرکدام kind خودشان را دارند، پس لازم نیست حدس بزنیم.
+ *
+ * **صادرشده تا `scripts/notes-check.mjs` هم از همین تابع بخواند.** سنجهٔ
+ * جدا همان چیزی بود که این باگ را پنهان کرد: پرامپت چهل کلمه بر دقیقهٔ
+ * تدریس می‌خواست و سنجه دوازده کلمه بر دقیقهٔ کلاس را کافی می‌دانست، پس
+ * جزوه‌ای که یک‌سومِ خواسته بود «✅ سالم» می‌گرفت.
+ */
+export function notesBudget(
+  chapters: ClassAnalysis["chapters"],
+): { title: string; kind: string; minutes: number; floor: number }[] {
+  return chapters
+    .filter((c) => c.kind === "teaching" || c.kind === "qa")
+    .map((c) => ({
+      title: c.title,
+      kind: c.kind,
+      minutes: Math.max(0, c.end_ms - c.start_ms) / 60_000,
+    }))
+    .filter((c) => c.minutes >= 1)
+    .map((c) => ({ ...c, floor: Math.round(c.minutes * NOTES_WORDS_PER_MIN) }));
+}
+
+function budgetBlock(chapters: ClassAnalysis["chapters"]): string {
+  const rows = notesBudget(chapters);
+  if (rows.length === 0) return "";
+
+  const total = rows.reduce((s, c) => s + c.floor, 0);
+  const lines = rows.map(
+    (c) => `- ${c.title} (${c.kind}) — ${Math.round(c.minutes)} دقیقه — کف ${c.floor} کلمه`,
+  );
+
+  return `### بودجهٔ کلمهٔ هر بخش
+
+این جدول از روی مدت واقعی بخش‌های همین کلاس حساب شده است. عددها **کف**‌اند نه سقف:
+
+${lines.join("\n")}
+
+جمع: دست‌کم ${total} کلمه. بخش‌هایی که درس نبوده‌اند (اطلاعیه، حاشیه، مشکل فنی، وقفه) اینجا نیامده‌اند و در جزوه هم نمی‌آیند.`;
+}
+
 function computeComposition(
   chapters: ClassAnalysis["chapters"],
   originalDurationMs: number,
@@ -745,7 +809,7 @@ export async function analyzeClass(
       },
       null,
       1,
-    )}\n\`\`\``;
+    )}\n\`\`\`\n\n${budgetBlock(parsed.chapters)}`;
 
     logger.info({ provider: config.NOTES_PROVIDER }, "analysis pass 2 (جزوه)");
 
