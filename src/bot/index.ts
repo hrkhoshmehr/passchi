@@ -50,7 +50,7 @@ import {
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
   getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, pendingSessions,
-  countSessions, getGift, listGifts, pendingTopups, purgeSession, revokeGift, sessionReport,
+  countSessions, getGift, listGifts, overview, pendingTopups, purgeSession, revokeGift, sessionReport,
   sessionTimeMap, updateSession,
   type SessionMode,
   type SessionRow,
@@ -1059,9 +1059,28 @@ handlers.command("forget", async (ctx) => {
 handlers.command("stats", async (ctx) => {
   if (!isAdmin(ctx)) return;
   const q = queueDepth();
+  const o = overview();
+
+  /**
+   * نام سکو فارسی می‌شود چون این پیام را آدم می‌خواند نه ماشین. سکوی ناشناخته
+   * با نام خامش می‌آید تا اگر روزی سکوی سومی اضافه شد، بی‌صدا از آمار نیفتد.
+   */
+  const platformName: Record<string, string> = { telegram: "تلگرام", bale: "بله", web: "وب" };
+  const platforms = o.byPlatform
+    .map((p) => `${platformName[p.platform] ?? p.platform} ${toFaDigits(p.users)}`)
+    .join("، ");
+
   await reply(
     ctx,
-    `صف: ${toFaDigits(q.active)} فعال، ${toFaDigits(q.pending)} در انتظار.\n` +
+    `<b>کاربران</b>\n` +
+      `کل: ${toFaDigits(o.users)}\n` +
+      `${platforms || "—"}\n` +
+      `تازه: امروز ${toFaDigits(o.usersToday)}، هفت روز ${toFaDigits(o.users7d)}\n\n` +
+      `<b>استفاده</b>\n` +
+      `کسانی که دست‌کم یک جلسه ساختند: ${toFaDigits(o.activeUsers)}\n` +
+      `جلسه‌ها: ${toFaDigits(o.sessions)} کل، ${toFaDigits(o.sessionsDone)} کامل\n\n` +
+      `<b>حالا</b>\n` +
+      `صف: ${toFaDigits(q.active)} فعال، ${toFaDigits(q.pending)} در انتظار\n` +
       `شارژهای بی‌تکلیف: ${toFaDigits(pendingTopups(50).length)}`,
   );
 });

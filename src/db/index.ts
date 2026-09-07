@@ -166,6 +166,48 @@ CREATE TABLE IF NOT EXISTS gift_claims (
 CREATE INDEX IF NOT EXISTS idx_claims_user ON gift_claims(tg_id, claimed_at DESC);
 `);
 
+
+/**
+ * آمار کلی برای `/stats` — «چند نفر ربات را استارت کردند».
+ *
+ * دو عدد جدا گزارش می‌شود و این عمدی است: **ثبت‌نام** و **استفاده**. هرکس
+ * `/start` بزند یک ردیف در `users` می‌گیرد، حتی اگر هیچ‌وقت صوتی نفرستد. اگر
+ * فقط عدد اول را نشان بدهیم، رشدِ توخالی را با رشد واقعی اشتباه می‌گیریم.
+ *
+ * شمارش سکو از `identities` می‌آید نه از `users`، چون `users.tg_id` امروز
+ * شناسهٔ داخلی است و دیگر نمی‌گوید کاربر از کجا آمده. یک کاربر می‌تواند چند
+ * هویت داشته باشد، پس `DISTINCT user_id` — وگرنه کسی که از دو سکو آمده دو بار
+ * شمرده می‌شود و جمعِ سکوها از کل بیشتر درمی‌آید.
+ */
+export interface Overview {
+  users: number;
+  usersToday: number;
+  users7d: number;
+  byPlatform: Array<{ platform: string; users: number }>;
+  activeUsers: number;
+  sessions: number;
+  sessionsDone: number;
+}
+
+export function overview(): Overview {
+  const one = (sql: string): number =>
+    Number((db.prepare(sql).get() as unknown as { n: number } | undefined)?.n ?? 0);
+
+  return {
+    users: one(`SELECT COUNT(*) AS n FROM users`),
+    usersToday: one(`SELECT COUNT(*) AS n FROM users WHERE date(created_at) = date('now')`),
+    users7d: one(`SELECT COUNT(*) AS n FROM users WHERE created_at >= datetime('now', '-7 days')`),
+    byPlatform: db
+      .prepare(
+        `SELECT platform, COUNT(DISTINCT user_id) AS users
+           FROM identities GROUP BY platform ORDER BY users DESC`,
+      )
+      .all() as unknown as Array<{ platform: string; users: number }>,
+    activeUsers: one(`SELECT COUNT(DISTINCT tg_id) AS n FROM sessions`),
+    sessions: one(`SELECT COUNT(*) AS n FROM sessions`),
+    sessionsDone: one(`SELECT COUNT(*) AS n FROM sessions WHERE status = 'done'`),
+  };
+}
 // ─── users ───────────────────────────────────────────────────────────────────
 
 export interface UserRow {
