@@ -39,7 +39,9 @@ import {
 import {
   archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption, setArchiveApi,
 } from "./archive.js";
-import { beginTopup, cancelTopup, decide, paymentConfigured, receiveReceipt } from "./topup.js";
+import {
+  beginTopup, cancelTopup, decide, gatewayConfigured, paymentConfigured, receiveReceipt, settleTopup,
+} from "./topup.js";
 import {
   DEFAULT_GIFT_COINS, claim as claimGiftCode, claimedMessage, describeUser, giftSummary,
   mintGift, refusalMessage,
@@ -50,7 +52,7 @@ import {
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
   getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, pendingSessions,
-  countSessions, getGift, listGifts, overview, pendingTopups, purgeSession, revokeGift, sessionReport,
+  countSessions, getGift, getTopup, listGifts, overview, pendingTopups, purgeSession, revokeGift, sessionReport,
   sessionTimeMap, updateSession,
   type SessionMode,
   type SessionRow,
@@ -1205,7 +1207,9 @@ handlers.on(["message:photo", "message:document"], async (ctx, next) => {
   await reply(
     ctx,
     `این عکسه 🤔 من فایل <b>صوتی</b> می‌خوام.\n\n` +
-      `<i>اگه رسید پرداخته، اول از «${BTN.account}» پکیجت رو انتخاب کن، بعد رسید رو بفرست.</i>`,
+      (gatewayConfigured()
+        ? `<i>برای شارژ حساب، از «${BTN.account}» پکیجت رو انتخاب کن — پرداخت آنلاینه و رسید لازم نیست.</i>`
+        : `<i>اگه رسید پرداخته، اول از «${BTN.account}» پکیجت رو انتخاب کن، بعد رسید رو بفرست.</i>`),
   );
 });
 
@@ -1926,13 +1930,50 @@ handlers.callbackQuery("newcourse", async (ctx) => {
  */
 handlers.callbackQuery(/^buy:(\w+)$/, async (ctx) => {
   touchUser(ctx);
-  const out = beginTopup(uid(ctx), ctx.match![1]!);
+  let out;
+  try {
+    out = await beginTopup(uid(ctx), ctx.match![1]!);
+  } catch (e) {
+    // زیبال جواب نداد و کارتی هم برای پشتیبان نیست. کاربر باید بداند مشکل
+    // از ما بود نه از او، و اینکه دوباره تلاش‌کردن معنا دارد.
+    logger.error({ err: String(e) }, "topup start failed");
+    await ctx.answerCallbackQuery();
+    await reply(
+      ctx,
+      "درگاه پرداخت الان جواب نمی‌ده 😕 چند دقیقهٔ دیگه دوباره امتحان کن." +
+        (config.SUPPORT_USERNAME ? `\n\nاگه تکرار شد به @${config.SUPPORT_USERNAME} بگو.` : ""),
+      { reply_markup: withBack(new InlineKeyboard().text("🔄 دوباره", "topup"), null) },
+    );
+    return;
+  }
   if (!out) {
     await ctx.answerCallbackQuery({ text: "این پکیج دیگر موجود نیست." });
     return;
   }
   await ctx.answerCallbackQuery();
   await reply(ctx, out.text, { reply_markup: out.keyboard });
+});
+
+/**
+ * «بررسی پرداخت» — برای وقتی که بازگشت از درگاه گم شده.
+ *
+ * همان `settleTopup` که مسیر بازگشت صدا می‌زند؛ اگر پرداخت معتبر باشد و
+ * هنوز واریز نشده، همین‌جا واریز می‌شود. پیام واریز را `creditTopup`
+ * خودش می‌فرستد، پس اینجا فقط toast لازم است.
+ */
+handlers.callbackQuery(/^pcheck:([a-f0-9]+)$/, async (ctx) => {
+  const t = getTopup(ctx.match![1]!);
+  if (!t || t.tg_id !== uid(ctx)) {
+    await ctx.answerCallbackQuery({ text: "این سفارش پیدا نشد." });
+    return;
+  }
+  const r = await settleTopup({ topupId: t.id });
+  if (r.outcome === "credited" || r.outcome === "already") {
+    await ctx.answerCallbackQuery({ text: r.detail });
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+    return;
+  }
+  await ctx.answerCallbackQuery({ text: r.detail, show_alert: r.outcome === "error" });
 });
 
 handlers.callbackQuery(/^bcancel:([a-f0-9]+)$/, async (ctx) => {

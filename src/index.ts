@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import { logger } from "./util/logger.js";
 import { bot, baleBot, cleanupOldAudio } from "./bot/index.js";
 import { setNotifyApis } from "./bot/notify.js";
+import { gatewayConfigured } from "./bot/topup.js";
 import { startWebServer } from "./web/server.js";
 import { closeBrowser } from "./pdf/render.js";
 import { disconnect as mtprotoDisconnect } from "./bot/mtproto.js";
@@ -138,6 +139,13 @@ logger.info(
     sms: config.SMS_ENDPOINT
       ? config.SMS_PROVIDER || "روشن"
       : "خاموش — ورود با شماره بسته است، هویت از شناسهٔ سکو",
+    // شارژ هم بی‌صدا خاموش می‌ماند: بدون ZIBAL_MERCHANT یا PUBLIC_URL درگاه
+    // نیست و کاربر یا کارت‌به‌کارت می‌بیند یا «فعلاً فعال نیست».
+    payment: gatewayConfigured()
+      ? "درگاه زیبال"
+      : config.CARD_NUMBER
+        ? "کارت‌به‌کارت (تأیید دستی) — ZIBAL_MERCHANT یا PUBLIC_URL خالی است"
+        : "⚠️ خاموش — نه ZIBAL_MERCHANT هست نه CARD_NUMBER",
   },
   `${APP_NAME} در حال اجراست`,
 );

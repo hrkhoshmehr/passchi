@@ -18,7 +18,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
-import { shortId } from "../util/text.js";
+import { escapeHtml, shortId } from "../util/text.js";
+import { beginTopup, gatewayConfigured, settleTopup } from "../bot/topup.js";
+import { APP_NAME } from "../bot/menu.js";
 import {
   createSessionToken, loginFromMiniApp, OtpError, phoneLoginEnabled, purgeExpiredSessions,
   requestOtp, revokeToken, userIdFromToken, verifyOtp,
@@ -257,7 +259,39 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
     }
 
     case "GET /api/packages":
-      return json(res, 200, { packages: PACKAGES, coinsPerMinute: COINS_PER_MINUTE });
+      return json(res, 200, {
+        packages: PACKAGES,
+        coinsPerMinute: COINS_PER_MINUTE,
+        // مینی‌اپ فقط وقتی دکمهٔ «پرداخت» می‌سازد که درگاه واقعاً هست؛ وگرنه
+        // کاربر را به ربات می‌فرستد که مسیر کارت‌به‌کارت آنجاست.
+        gateway: gatewayConfigured(),
+      });
+
+    /**
+     * شروع شارژ از مینی‌اپ — همان `beginTopup` ربات، فقط لینکش برمی‌گردد.
+     *
+     * پیام ربات هم فرستاده نمی‌شود: کاربر داخل اپ است و لینک را همان‌جا باز
+     * می‌کند. خبرِ واریز اما به ربات می‌رود (`creditTopup`)، چون بعد از
+     * پرداخت معلوم نیست کاربر به اپ برگردد.
+     */
+    case "POST /api/topups": {
+      const uid = requireUser(req, res);
+      if (uid === null) return;
+      if (!gatewayConfigured()) {
+        return json(res, 400, { error: "پرداخت آنلاین فعال نیست — از ربات شارژ کن." });
+      }
+      const body = (await readJson(req)) as { packageId?: string };
+      let out;
+      try {
+        out = await beginTopup(uid, String(body.packageId ?? ""));
+      } catch (e) {
+        logger.error({ err: String(e) }, "topup start failed (web)");
+        return json(res, 502, { error: "درگاه پرداخت الان جواب نمی‌دهد. چند دقیقهٔ دیگر دوباره امتحان کن." });
+      }
+      if (!out) return json(res, 404, { error: "این پکیج موجود نیست." });
+      if (!out.payUrl) return json(res, 400, { error: "پرداخت آنلاین فعال نیست — از ربات شارژ کن." });
+      return json(res, 200, { id: out.id, payUrl: out.payUrl });
+    }
 
     /**
      * چه چیزهایی در این نصب روشن است.
@@ -1371,6 +1405,69 @@ async function stampAssets(html: string): Promise<string> {
   return html;
 }
 
+// ─── بازگشت از درگاه ────────────────────────────────────────────────────────
+
+function sendPage(res: Res, status: number, html: string): void {
+  res.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+  });
+  res.end(html);
+}
+
+/**
+ * صفحهٔ نتیجهٔ پرداخت — ایستا و بی‌وابستگی.
+ *
+ * پوستهٔ اپ بار نمی‌شود چون این صفحه ممکن است داخل وب‌ویوی بانک یا تلگرام
+ * باز شود و تنها کارش گفتنِ یک جمله و دادنِ یک راه برگشت است. لینک ربات از
+ * `getMe` می‌آید نه از HTML سفت‌شده.
+ */
+function payPage(o: { ok: boolean; title: string; body: string }): string {
+  const links = botLinks();
+  const back = [
+    links.telegram ? `<a class="b" href="${links.telegram}">برگشت به ربات تلگرام</a>` : "",
+    links.bale ? `<a class="b g" href="${links.bale}">برگشت به ربات بله</a>` : "",
+    `<a class="b g" href="/app">بازکردن اپ</a>`,
+  ].join("");
+  return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>${escapeHtml(o.title)} — ${APP_NAME}</title>
+<style>
+body{margin:0;font-family:Vazirmatn,system-ui,sans-serif;background:#f6f7f9;color:#1c1f24;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+.c{background:#fff;border-radius:18px;padding:28px 24px;max-width:420px;width:100%;box-shadow:0 8px 30px rgba(0,0,0,.06);text-align:center}
+.i{font-size:48px;line-height:1}h1{font-size:22px;margin:14px 0 8px}p{margin:0 0 20px;line-height:1.9;color:#4b5563}
+.b{display:block;padding:12px;border-radius:12px;background:#2563eb;color:#fff;text-decoration:none;font-weight:700;margin-top:10px}
+.b.g{background:#eef2f7;color:#1c1f24}
+</style></head><body><div class="c"><div class="i">${o.ok ? "✅" : "❌"}</div>
+<h1>${escapeHtml(o.title)}</h1><p>${escapeHtml(o.body)}</p>${back}</div></body></html>`;
+}
+
+async function handlePayCallback(url: URL, res: Res): Promise<void> {
+  const trackId = url.searchParams.get("trackId") ?? "";
+  const cancelled = url.searchParams.get("success") === "0";
+  if (!/^\d+$/.test(trackId)) {
+    return sendPage(res, 400, payPage({ ok: false, title: "لینک نامعتبر", body: "این آدرس بازگشتِ درگاه نیست." }));
+  }
+
+  // `success=0` یعنی کاربر در درگاه انصراف داده؛ verify هم همین را می‌گوید
+  // ولی سفارش با آن بسته می‌شود تا در ربات باز نماند.
+  const r = await settleTopup({ trackId }, { closeIfUnpaid: cancelled });
+  const coins = r.topup ? fmtCoins(r.topup.coins) : "";
+
+  switch (r.outcome) {
+    case "credited":
+      return sendPage(res, 200, payPage({ ok: true, title: "پرداخت موفق", body: `${coins} به حسابت اضافه شد. برگرد به ربات و صوت کلاست رو بفرست.` }));
+    case "already":
+      return sendPage(res, 200, payPage({ ok: true, title: "قبلاً تسویه شده", body: `${coins} همون موقع به حسابت اضافه شده بود.` }));
+    case "unpaid":
+      return sendPage(res, 200, payPage({ ok: false, title: "پرداخت انجام نشد", body: cancelled ? "از پرداخت انصراف دادی. هر وقت خواستی از ربات دوباره شروع کن." : r.detail }));
+    case "error":
+      return sendPage(res, 502, payPage({ ok: false, title: "درگاه جواب نداد", body: r.detail }));
+    default:
+      return sendPage(res, 404, payPage({ ok: false, title: "سفارش پیدا نشد", body: "اگر پرداخت کردی، در ربات «بررسی پرداخت» را بزن یا به پشتیبانی بگو." }));
+  }
+}
+
 // ─── راه‌اندازی ─────────────────────────────────────────────────────────────
 
 /**
@@ -1447,6 +1544,18 @@ export function createWebServer(): http.Server {
       });
       return void res.end();
     }
+    /**
+     * بازگشت از درگاه. صفحهٔ HTML است نه JSON، چون مرورگرِ کاربر (یا
+     * وب‌ویوی تلگرام) مستقیم به اینجا می‌آید.
+     */
+    if (url.pathname === "/pay/zibal/callback" && req.method === "GET") {
+      handlePayCallback(url, res).catch((e: unknown) => {
+        logger.error({ err: String(e) }, "pay callback error");
+        if (!res.headersSent) sendPage(res, 500, payPage({ ok: false, title: "خطا", body: "مشکلی پیش آمد. اگر پرداخت کردی، در ربات «بررسی پرداخت» را بزن." }));
+      });
+      return;
+    }
+
     if (url.pathname.startsWith("/api/")) {
       res.setHeader("access-control-allow-origin", "*");
       handleApi(req, res, url).catch((e: unknown) => {

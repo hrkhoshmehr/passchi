@@ -1,18 +1,29 @@
 /**
- * شارژ حساب با کارت‌به‌کارت.
+ * شارژ حساب — درگاه زیبال، و کارت‌به‌کارت به‌عنوان پشتیبان.
  *
- * درگاه پرداختی در کار نیست، پس زنجیره این است: کاربر پکیج را انتخاب می‌کند،
- * ربات شمارهٔ کارت و مبلغ *دقیق* را می‌دهد، کاربر عکس رسید را می‌فرستد، و
- * ادمین با یک دکمه تأیید یا رد می‌کند. سکه فقط پس از تأیید واریز می‌شود.
+ * ## مسیر درگاه (از ۲۰۲۶-۰۹-۰۹)
+ *
+ * کاربر پکیج را انتخاب می‌کند → سفارش ساخته و در زیبال ثبت می‌شود → دکمهٔ
+ * «پرداخت» به صفحهٔ درگاه می‌برد → درگاه کاربر را به
+ * `/pay/zibal/callback` برمی‌گرداند → سرور `verify` می‌زند → سکه واریز و
+ * به کاربر در ربات خبر داده می‌شود.
  *
  * دو تصمیم که عمدی‌اند:
  *
- * • **سفارش پیش از پرداخت ساخته می‌شود، نه بعدش.** بدون سطر سفارش، عکسِ رسیدی
- *   که می‌رسد معلوم نیست بابت چه مبلغی است و ادمین باید حدس بزند.
+ * • **بازگشت از درگاه مدرک نیست؛ `verify` مدرک است.** آدرس بازگشت را هرکسی
+ *   می‌تواند با `success=1` باز کند. `settleTopup` تنها راهِ واریز است و
+ *   همیشه از درگاه می‌پرسد.
  *
- * • **اتصال رسید به سفارش از روی «آخرین سفارشِ باز» است.** کاربر عکس را خالی
- *   می‌فرستد و هیچ شناسه‌ای همراهش نیست؛ خواستن کد سفارش از او، یک قدم اضافه
- *   است که نیمی از آدم‌ها همان‌جا رها می‌کنند.
+ * • **دکمهٔ «بررسی پرداخت» در ربات هست، چون بازگشت همیشه اتفاق نمی‌افتد.**
+ *   کاربر بعد از پرداخت مرورگر را می‌بندد، یا CDN لحظه‌ای ۵۰۲ می‌دهد، و
+ *   پولی که رفته سکه نشده. همان `settleTopup` از ربات هم صدا می‌شود؛ واریزِ
+ *   دوباره را `claimTopupPaid` در پایگاه‌داده می‌گیرد، نه دست‌کد.
+ *
+ * ## مسیر کارت‌به‌کارت (وقتی درگاه تنظیم نیست)
+ *
+ * ربات شمارهٔ کارت و مبلغ *دقیق* را می‌دهد، کاربر عکس رسید را می‌فرستد، و
+ * ادمین با یک دکمه تأیید یا رد می‌کند. سفارش پیش از پرداخت ساخته می‌شود تا
+ * رسید بی‌شناسه به «آخرین سفارشِ باز» بچسبد.
  */
 
 import { randomBytes } from "node:crypto";
@@ -21,26 +32,89 @@ import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml } from "../util/text.js";
 import { isBale } from "./identity.js";
-import { coinsToSec, findPackage, fmtBalance, fmtCoins, fmtToman } from "../billing/coins.js";
-import { grant } from "../billing/ledger.js";
 import {
-  awaitingCreditSessions, createTopup, getTopup, getUser, openTopup, setTopupStatus,
-  type TopupRow,
+  coinsToSec, findPackage, fmtBalance, fmtCoins, fmtToman, type CoinPackage,
+} from "../billing/coins.js";
+import { grant } from "../billing/ledger.js";
+import { ZibalError, zibalConfigured, zibalRequest, zibalVerify } from "../billing/zibal.js";
+import {
+  awaitingCreditSessions, claimTopupPaid, createTopup, getTopup, getTopupByTrackId, getUser,
+  openTopup, setTopupStatus, setTopupTrackId, type TopupRow,
 } from "../db/index.js";
 import { uid } from "./identity.js";
-import { notifyUser } from "./notify.js";
+import { notifyAdmins, notifyUser } from "./notify.js";
+import { APP_NAME } from "./menu.js";
 
 const orderId = () => randomBytes(4).toString("hex");
 
-export function paymentConfigured(): boolean {
-  return Boolean(config.CARD_NUMBER);
+export function gatewayConfigured(): boolean {
+  return zibalConfigured();
 }
 
-/** کاربر پکیج را انتخاب کرد: سفارش ساخته می‌شود و دستور پرداخت داده می‌شود. */
-export function beginTopup(tgId: number, packageId: string): { text: string; keyboard: InlineKeyboard } | null {
+export function paymentConfigured(): boolean {
+  return gatewayConfigured() || Boolean(config.CARD_NUMBER);
+}
+
+export interface TopupStart {
+  text: string;
+  keyboard: InlineKeyboard;
+  /** لینک درگاه — فقط در مسیر درگاه؛ مینی‌اپ همین را باز می‌کند */
+  payUrl?: string;
+  id: string;
+}
+
+/**
+ * کاربر پکیج را انتخاب کرد.
+ *
+ * اگر درگاه تنظیم است، سفارش در زیبال ثبت می‌شود و لینک پرداخت برمی‌گردد.
+ * اگر زیبال جواب نداد (شبکه، IP مجاز نبودن، مرچنت غیرفعال) و کارت هم هست،
+ * به کارت‌به‌کارت می‌افتد تا کاربری که پول در دست دارد بی‌راه نماند؛ وگرنه
+ * پرتاب می‌کند و صداکننده پیام خطا می‌دهد.
+ */
+export async function beginTopup(tgId: number, packageId: string): Promise<TopupStart | null> {
   const p = findPackage(packageId);
   if (!p) return null;
 
+  if (gatewayConfigured()) {
+    try {
+      return await beginGateway(tgId, p);
+    } catch (e) {
+      logger.error({ tgId, pkg: p.id, err: String(e) }, "zibal request failed");
+      if (!config.CARD_NUMBER) throw e;
+    }
+  }
+  return beginCard(tgId, p);
+}
+
+async function beginGateway(tgId: number, p: CoinPackage): Promise<TopupStart> {
+  const t = createTopup(orderId(), tgId, p.id, p.coins, p.price, "awaiting_payment");
+  const { trackId, payUrl } = await zibalRequest({
+    amountToman: p.price,
+    orderId: t.id,
+    description: `${APP_NAME} — ${p.title} (${fmtCoins(p.coins)})`,
+  });
+  setTopupTrackId(t.id, String(trackId));
+
+  return {
+    id: t.id,
+    payUrl,
+    text: [
+      `🧾 <b>${escapeHtml(p.title)}</b> — ${fmtCoins(p.coins)}`,
+      `مبلغ: <b>${fmtToman(p.price)}</b>`,
+      "",
+      "روی «پرداخت» بزن؛ صفحهٔ بانک باز می‌شه. بعد از پرداخت، سکه‌ها خودکار به حسابت می‌آد و همین‌جا خبرش رو می‌دم.",
+      "",
+      "<i>اگه پرداخت کردی ولی خبری نشد، «بررسی پرداخت» رو بزن.</i>",
+    ].join("\n"),
+    keyboard: new InlineKeyboard()
+      .url("💳 پرداخت", payUrl)
+      .row()
+      .text("🔄 بررسی پرداخت", `pcheck:${t.id}`)
+      .text("انصراف", `bcancel:${t.id}`),
+  };
+}
+
+function beginCard(tgId: number, p: CoinPackage): TopupStart {
   // سفارشِ بازِ قبلی بسته می‌شود: اتصال رسید از روی «آخرین سفارش باز» است و
   // دو سفارشِ همزمان یعنی نصف احتمال اینکه رسید به مبلغ درست بچسبد.
   const stale = openTopup(tgId);
@@ -50,10 +124,11 @@ export function beginTopup(tgId: number, packageId: string): { text: string; key
   const holder = config.CARD_HOLDER ? `\nبه نام: <b>${escapeHtml(config.CARD_HOLDER)}</b>` : "";
 
   return {
+    id: t.id,
     text: [
       `🧾 <b>سفارش</b> <code>${t.id}</code>`,
       "",
-      `${fmtCoins(p.coins)} — مبلغ <b>${fmtToman(p.price)}</b>`,
+      `${escapeHtml(p.title)} — ${fmtCoins(p.coins)} — مبلغ <b>${fmtToman(p.price)}</b>`,
       "",
       "مبلغ را به این کارت واریز کن:",
       `<code>${escapeHtml(config.CARD_NUMBER)}</code>${holder}`,
@@ -65,6 +140,118 @@ export function beginTopup(tgId: number, packageId: string): { text: string; key
     keyboard: new InlineKeyboard().text("انصراف", `bcancel:${t.id}`),
   };
 }
+
+// ─── تسویه با درگاه ─────────────────────────────────────────────────────────
+
+export type SettleOutcome =
+  /** همین حالا تأیید و واریز شد */
+  | "credited"
+  /** پیش‌تر واریز شده بود — پیام موفقیت، بدون واریز دوباره */
+  | "already"
+  /** درگاه می‌گوید پرداخت نشده یا کاربر لغو کرده */
+  | "unpaid"
+  /** سفارش پیدا نشد یا مال این کاربر نیست */
+  | "unknown"
+  /** زیبال جواب نداد */
+  | "error";
+
+export interface SettleResult {
+  outcome: SettleOutcome;
+  topup: TopupRow | null;
+  /** توضیح کوتاه برای صفحهٔ بازگشت یا toast — همیشه قابل نمایش به کاربر */
+  detail: string;
+}
+
+/**
+ * تنها راهِ واریز سکهٔ درگاهی.
+ *
+ * `topup` را با شناسهٔ سفارش یا شناسهٔ پیگیری زیبال پیدا می‌کند، از درگاه
+ * می‌پرسد، و اگر معتبر بود یک بار واریز می‌کند. با `closeIfUnpaid` سفارشِ
+ * پرداخت‌نشده بسته می‌شود — برای بازگشت با `success=0` که یعنی کاربر در
+ * درگاه لغو کرده؛ از ربات بسته نمی‌شود چون شاید هنوز در حال پرداخت باشد.
+ */
+export async function settleTopup(
+  ref: { topupId?: string; trackId?: string },
+  opt: { closeIfUnpaid?: boolean } = {},
+): Promise<SettleResult> {
+  const t = ref.topupId ? getTopup(ref.topupId) : ref.trackId ? getTopupByTrackId(ref.trackId) : null;
+  if (!t || !t.track_id) return { outcome: "unknown", topup: null, detail: "این سفارش پیدا نشد." };
+
+  if (t.status === "approved") return { outcome: "already", topup: t, detail: "این سفارش قبلاً تسویه شده." };
+  if (t.status !== "awaiting_payment") {
+    return { outcome: "unpaid", topup: t, detail: "این سفارش بسته شده. یک سفارش تازه بساز." };
+  }
+
+  let v;
+  try {
+    v = await zibalVerify(t.track_id);
+  } catch (e) {
+    logger.error({ topup: t.id, err: String(e) }, "zibal verify failed");
+    return {
+      outcome: "error",
+      topup: t,
+      detail: "درگاه جواب نداد. اگر پرداخت کردی نگران نباش — چند دقیقهٔ دیگر «بررسی پرداخت» را بزن.",
+    };
+  }
+
+  if (!v.paid) {
+    if (opt.closeIfUnpaid) setTopupStatus(t.id, "rejected");
+    logger.info({ topup: t.id, result: v.result, status: v.status }, "zibal: unpaid");
+    return { outcome: "unpaid", topup: t, detail: `پرداخت انجام نشد (${v.message}).` };
+  }
+
+  /**
+   * مبلغ هم سنجیده می‌شود. درگاه با همان مبلغی که فرستادیم می‌سازد، پس
+   * اختلاف یعنی چیزی جای دیگری غلط است — لاگ می‌شود ولی جلوی واریز را
+   * نمی‌گیرد، چون پولِ کاربر واقعاً رفته و نگه‌داشتنش بدتر است.
+   */
+  if (v.amountToman != null && v.amountToman !== t.price_toman) {
+    logger.warn({ topup: t.id, expected: t.price_toman, got: v.amountToman }, "zibal amount mismatch");
+  }
+
+  if (!claimTopupPaid(t.id, v.refNumber)) {
+    return { outcome: "already", topup: getTopup(t.id), detail: "این سفارش قبلاً تسویه شده." };
+  }
+
+  await creditTopup(t);
+  logger.info({ topup: t.id, tgId: t.tg_id, coins: t.coins, ref: v.refNumber }, "topup paid via zibal");
+  void notifyAdmins(
+    `💳 <b>شارژ آنلاین</b>\n` +
+      `${fmtCoins(t.coins)} — ${fmtToman(t.price_toman)}\n` +
+      `کاربر: ${escapeHtml(getUser(t.tg_id)?.name ?? String(t.tg_id))} — <code>${t.tg_id}</code>\n` +
+      `مرجع: <code>${escapeHtml(v.refNumber ?? "—")}</code>`,
+  );
+  return { outcome: "credited", topup: getTopup(t.id), detail: `${fmtCoins(t.coins)} به حسابت اضافه شد.` };
+}
+
+/**
+ * واریز سکه و خبر به کاربر — مشترک بین تأیید ادمین و تأیید درگاه.
+ *
+ * اگر فایلی منتظر شارژ مانده، **همان را یادآوری کن** نه «صوتتو بفرست».
+ * کاربری که فایل ۱۳۰ دقیقه‌ای‌اش را فرستاده و پیام «سکه‌ات کمه» گرفته، بعد
+ * از شارژ همین پیام را می‌دید و گمان می‌کرد باید از نو بفرستد — و می‌فرستاد.
+ * در حالی که فایلش سالم روی دیسک بود.
+ */
+async function creditTopup(t: TopupRow): Promise<void> {
+  grant(t.tg_id, coinsToSec(t.coins), "topup");
+  const balance = getUser(t.tg_id)?.credit_sec ?? 0;
+
+  const waiting = awaitingCreditSessions(t.tg_id);
+  const enough = waiting.find((s) => balance >= Math.round(s.original_ms / 1000));
+  await notifyUser(
+    t.tg_id,
+    `🪙 <b>${fmtCoins(t.coins)}</b> به حسابت اضافه شد!\n\n` +
+      `موجودی جدیدت: <b>${fmtBalance(balance)}</b>\n\n` +
+      (enough
+        ? `<b>فایلی که فرستاده بودی هنوز اینجاست.</b> بزن تا ادامه بدم 👇`
+        : "صوت کلاستو بفرست 🎧"),
+    enough
+      ? { reply_markup: new InlineKeyboard().text("▶️ ادامهٔ همون فایل", `resume:${enough.id}`) }
+      : {},
+  );
+}
+
+// ─── کارت‌به‌کارت ───────────────────────────────────────────────────────────
 
 /**
  * عکسی رسیده و کاربر سفارشِ باز دارد.
@@ -83,11 +270,11 @@ export async function receiveReceipt(ctx: Context, fileId: string): Promise<bool
       `${fmtCoins(t.coins)} به‌محض تأیید به حسابت اضافه می‌شود. خبرش را همین‌جا می‌دهم.`,
     { parse_mode: "HTML" },
   );
-  await notifyAdmins(ctx.api, { ...t, receipt_file_id: fileId, status: "pending" });
+  await notifyAdminsReceipt(ctx.api, { ...t, receipt_file_id: fileId, status: "pending" });
   return true;
 }
 
-async function notifyAdmins(api: Api, t: TopupRow): Promise<void> {
+async function notifyAdminsReceipt(api: Api, t: TopupRow): Promise<void> {
   const u = getUser(t.tg_id);
   const who = [u?.name, u?.username ? `@${u.username}` : null].filter(Boolean).join(" ");
   const caption = [
@@ -140,7 +327,7 @@ export interface DecisionResult {
   adminNote?: string;
 }
 
-/** تصمیم ادمین. تنها جایی که سکهٔ خریداری‌شده واریز می‌شود. */
+/** تصمیم ادمین دربارهٔ رسید کارت‌به‌کارت. */
 export async function decide(
   api: Api,
   topupId: string,
@@ -156,29 +343,7 @@ export async function decide(
   setTopupStatus(topupId, approved ? "approved" : "rejected", { decidedBy: adminId });
 
   if (approved) {
-    grant(t.tg_id, coinsToSec(t.coins), "topup");
-    const balance = getUser(t.tg_id)?.credit_sec ?? 0;
-
-    /**
-     * اگر فایلی منتظر شارژ مانده، **همان را یادآوری کن** نه «صوتتو بفرست».
-     *
-     * کاربری که فایل ۱۳۰ دقیقه‌ای‌اش را فرستاده و پیام «سکه‌ات کمه» گرفته،
-     * بعد از شارژ همین پیام را می‌دید و گمان می‌کرد باید از نو بفرستد — و
-     * می‌فرستاد. در حالی که فایلش سالم روی دیسک بود.
-     */
-    const waiting = awaitingCreditSessions(t.tg_id);
-    const enough = waiting.find((s) => balance >= Math.round(s.original_ms / 1000));
-    await notifyUser(
-      t.tg_id,
-      `🪙 <b>${fmtCoins(t.coins)}</b> به حسابت اضافه شد!\n\n` +
-        `موجودی جدیدت: <b>${fmtBalance(balance)}</b>\n\n` +
-        (enough
-          ? `<b>فایلی که فرستاده بودی هنوز اینجاست.</b> بزن تا ادامه بدم 👇`
-          : "صوت کلاستو بفرست 🎧"),
-      enough
-        ? { reply_markup: new InlineKeyboard().text("▶️ ادامهٔ همون فایل", `resume:${enough.id}`) }
-        : {},
-    );
+    await creditTopup(t);
     logger.info({ topup: topupId, tgId: t.tg_id, coins: t.coins }, "topup approved");
     return { toast: "تأیید شد و سکه واریز شد.", adminNote: `✅ تأیید شد — ${fmtCoins(t.coins)}` };
   }
@@ -194,9 +359,13 @@ export async function decide(
   return { toast: "رد شد.", adminNote: "❌ رد شد" };
 }
 
+/** انصراف کاربر — برای هر دو مسیر، تا وقتی که پرداختی ثبت نشده. */
 export function cancelTopup(topupId: string, tgId: number): boolean {
   const t = getTopup(topupId);
-  if (!t || t.tg_id !== tgId || t.status !== "awaiting_receipt") return false;
+  if (!t || t.tg_id !== tgId) return false;
+  if (t.status !== "awaiting_receipt" && t.status !== "awaiting_payment") return false;
   setTopupStatus(topupId, "rejected", { decidedBy: tgId });
   return true;
 }
+
+export { ZibalError };

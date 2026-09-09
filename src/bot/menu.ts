@@ -14,7 +14,7 @@ import { InlineKeyboard, Keyboard } from "grammy";
 import { config } from "../config.js";
 import type { Platform } from "../db/identity.js";
 import {
-  PACKAGES, RATE_LINE, classesFor, coinsAsMinutes, fmtCoins, fmtToman,
+  PACKAGES, RATE_LINE, classesFor, coinsAsMinutes, fmtCoins, fmtToman, type CoinPackage,
 } from "../billing/coins.js";
 import { toFaDigits } from "../util/time.js";
 
@@ -199,30 +199,37 @@ export function supportKeyboard(platform: Platform = "telegram"): InlineKeyboard
 
 // ─── حساب و شارژ ────────────────────────────────────────────────────────────
 
+/**
+ * دکمه‌ها با **عنوان** شروع می‌شوند، نه با عدد سکه.
+ *
+ * «یک جلسه — ۱۱۸ هزار» جوابِ «کدام را بخرم؟» است؛ «۱۰۰ سکه — ۱۱۸ هزار»
+ * کاربر را وامی‌دارد اول حساب کند صد سکه چند کلاس می‌شود.
+ */
 export function packagesKeyboard(): InlineKeyboard {
   const kb = new InlineKeyboard();
   for (const p of PACKAGES) {
-    kb.text(
-      `${fmtCoins(p.coins)} — ${fmtToman(p.price)}${p.tag ? ` · ${p.tag}` : ""}`,
-      `buy:${p.id}`,
-    ).row();
+    kb.text(`${p.title} · ${fmtCoins(p.coins)} — ${fmtToman(p.price)}`, `buy:${p.id}`).row();
   }
   return kb;
+}
+
+/** «۱۶ کلاس ۹۰ دقیقه‌ای» یا برای پکیج کوچک، معادل دقیقه‌ای. */
+export function packageWorth(p: CoinPackage): string {
+  const classes = classesFor(p.coins);
+  return classes >= 1 ? `${toFaDigits(classes)} کلاس ۹۰ دقیقه‌ای` : coinsAsMinutes(p.coins);
 }
 
 export function packagesMessage(): string {
   const out = ["<b>🪙 شارژ حساب</b>", "", `<b>${RATE_LINE}.</b>`, ""];
   for (const p of PACKAGES) {
-    const classes = classesFor(p.coins);
-    const worth = classes >= 1 ? `${toFaDigits(classes)} کلاس ۹۰ دقیقه‌ای` : coinsAsMinutes(p.coins);
     out.push(
-      `• <b>${fmtCoins(p.coins)}</b> — ${fmtToman(p.price)}` +
-        `${p.tag ? ` · ${p.tag}` : ""}\n  <i>${worth}</i>`,
+      `<b>${p.title}</b> — ${fmtCoins(p.coins)} · ${fmtToman(p.price)}`,
+      `<i>${p.blurb}</i>`,
+      "",
     );
   }
   out.push(
-    "",
-    `💰 <b>قبل از خرید اینو بدون:</b> لازم نیست خرج کلاس رو تنها بدی. بعد از هر تحلیل یه دکمه ` +
+    `💰 <b>لازم نیست خرج کلاس رو تنها بدی.</b> بعد از هر تحلیل یه دکمه ` +
       `می‌بینی که جزوه رو برای بچه‌های کلاس می‌فرسته. سهم هر هم‌کلاسی ثابته و برمی‌گرده به حسابت، ` +
       `تا نصفِ هزینه — بعدش هم‌کلاسی‌های بعدی رایگان برش می‌دارن.`,
     "",

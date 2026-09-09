@@ -12,6 +12,7 @@
  */
 
 import type { Api } from "grammy";
+import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { identitiesOf, type Platform } from "../db/identity.js";
 
@@ -50,6 +51,28 @@ export function deliveryChannel(
     if (Number.isFinite(chatId)) return { api, chatId, platform };
   }
   return null;
+}
+
+/**
+ * یک خبر متنی به همهٔ ادمین‌ها، روی هر دو سکو.
+ *
+ * برای جایی که `ctx` در کار نیست — مثل بازگشت از درگاه پرداخت که از وب‌سرور
+ * می‌آید. شناسهٔ ادمین‌ها به تفکیک سکوست (`ADMIN_IDS` تلگرام، `BALE_ADMIN_IDS`
+ * بله)، چون یک عدد در دو سکو دو نفر متفاوت است.
+ *
+ * شکست بلعیده می‌شود: خبر به ادمین نباید کارِ کاربر را بشکند.
+ */
+export async function notifyAdmins(text: string, extra: Record<string, unknown> = {}): Promise<void> {
+  const targets: Channel[] = [];
+  if (telegramApi) for (const id of config.ADMIN_IDS) targets.push({ api: telegramApi, chatId: id });
+  if (baleApi) for (const id of config.BALE_ADMIN_IDS) targets.push({ api: baleApi, chatId: id });
+  for (const t of targets) {
+    try {
+      await t.api.sendMessage(t.chatId, text, { parse_mode: "HTML", ...extra });
+    } catch (e) {
+      logger.warn({ admin: t.chatId, err: String(e) }, "notify admin failed");
+    }
+  }
 }
 
 /** همهٔ راه‌هایی که می‌شود به این کاربر پیام داد. */

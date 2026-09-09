@@ -13,7 +13,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 /** آزمون‌هایی که به پایگاه‌دادهٔ تازه نیاز دارند. */
-const NEEDS_DB = new Set(["gift", "identity", "archive-routing", "interrupted-recovery", "sharing"]);
+const NEEDS_DB = new Set([
+  "gift", "identity", "archive-routing", "interrupted-recovery", "sharing", "topup-gateway",
+]);
 
 const tests = [
   // ── دروازه‌های راستی‌آزمایی ──────────────────────────────────────────────
@@ -53,6 +55,7 @@ const tests = [
   "sharing",
   "gift",
   "identity",
+  "topup-gateway",
 ];
 
 const tmpRoot = path.join("data", `tmp-test-${process.pid}`);

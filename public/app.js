@@ -1343,7 +1343,7 @@ async function loadAccount() {
   const box = $("acct");
   box.innerHTML = '<div class="empty"><span class="spinner"></span></div>';
   try {
-    const [u, { packages }] = await Promise.all([loadMe(), api.call("/api/packages")]);
+    const [u, { packages, gateway }] = await Promise.all([loadMe(), api.call("/api/packages")]);
 
     box.innerHTML = `
       <div class="card" style="text-align:center">
@@ -1362,24 +1362,31 @@ async function loadAccount() {
         <div class="stack">
           ${packages
             .map(
-              (p) => `<div class="item">
+              (p) => `<button type="button" class="item pkg" data-pkg="${esc(p.id)}" style="text-align:start;width:100%;cursor:pointer">
                 <div style="display:flex;align-items:center;gap:12px">
                   <div>
-                    <div class="item-title num">${faGroup(p.coins)} سکه</div>
+                    <div class="item-title">
+                      ${esc(p.title)} <span class="dim num">· ${faGroup(p.coins)} سکه</span>
+                      ${p.featured ? `<span class="badge">پیشنهاد</span>` : ""}
+                    </div>
                     <div class="item-meta">
-                      ${p.tag ? `<span class="badge">${esc(p.tag)}</span>` : ""}
                       <span class="num">${faGroup(p.price)} تومان</span>
                       <span class="dim">· ${pkgWorth(p.coins, u.coinsPerMinute)}</span>
                     </div>
+                    <div class="dim" style="margin-top:4px;line-height:1.7">${esc(p.blurb)}</div>
                   </div>
                   <div style="margin-inline-start:auto" class="dim">›</div>
                 </div>
-              </div>`,
+              </button>`,
             )
             .join("")}
         </div>
-        <p class="dim" style="margin-top:12px">
-          برای شارژ، از ربات تلگرام یا بله اقدام کن — پرداخت کارت‌به‌کارت آنجا انجام می‌شود.
+        <p class="dim" id="pkg-note" style="margin-top:12px">
+          ${
+            gateway
+              ? "روی پکیج بزن؛ صفحهٔ بانک باز می‌شود و بعد از پرداخت، سکه‌ها خودکار به حسابت می‌آید."
+              : "برای شارژ، از ربات تلگرام یا بله اقدام کن — پرداخت آنجا انجام می‌شود."
+          }
         </p>
       </div>
 
@@ -1390,6 +1397,33 @@ async function loadAccount() {
 
       <button class="btn btn-ghost btn-block" id="logout" type="button">خروج از حساب</button>
     `;
+
+    /**
+     * شروع پرداخت. سفارش در سرور ساخته می‌شود و لینک درگاه برمی‌گردد؛ خودِ
+     * صفحه به درگاه می‌رود (نه پنجرهٔ تازه، که وب‌ویوی تلگرام و بله رویش
+     * قابل اتکا نیستند). بازگشت از درگاه به صفحهٔ نتیجه روی همین دامنه است.
+     */
+    for (const btn of box.querySelectorAll(".pkg")) {
+      btn.addEventListener("click", async () => {
+        const note = $("pkg-note");
+        if (!gateway) {
+          note.textContent = "پرداخت آنلاین فعال نیست — از ربات شارژ کن.";
+          return;
+        }
+        btn.disabled = true;
+        note.textContent = "یه لحظه…";
+        try {
+          const { payUrl } = await api.call("/api/topups", {
+            method: "POST",
+            body: { packageId: btn.dataset.pkg },
+          });
+          location.href = payUrl;
+        } catch (e) {
+          btn.disabled = false;
+          note.textContent = e.message;
+        }
+      });
+    }
 
     $("logout").addEventListener("click", async () => {
       await api.call("/api/auth/logout", { method: "POST" }).catch(() => {});

@@ -176,6 +176,7 @@ section { padding: 78px 0; }
 .price-coins { font-size: 33px; font-weight: 800; margin: 10px 0 2px; letter-spacing: -.02em; }
 .price-toman { font-size: 19px; font-weight: 700; color: var(--brand-text); }
 .price-worth { color: var(--text-dim); font-size: 13.5px; margin-top: 8px; }
+.price-blurb { color: var(--text-dim); font-size: 13.5px; line-height: 1.8; margin: 6px 0 14px; }
 .price .btn { margin-top: 20px; }
 
 .split-note {
@@ -396,25 +397,28 @@ footer {
         scripts/test-price-sync.mjs همین را می‌سنجد.
       -->
       <article class="card price">
-        <h3>یک کلاس</h3>
+        <h3>یک جلسه</h3>
         <div class="price-coins num">۱۰۰</div>
         <div class="price-toman num">۱۱۸٬۰۰۰ تومان</div>
         <p class="price-worth">۱ کلاس ۹۰ دقیقه‌ای</p>
+        <p class="price-blurb">برای اینکه امتحانش کنی — یک کلاس ۹۰ دقیقه‌ای، با کمی اضافه.</p>
         <a class="btn btn-ghost btn-block" href="/app">انتخاب</a>
       </article>
       <article class="card price featured">
-        <span class="pill price-tag">محبوب</span>
-        <h3>چند جلسه</h3>
-        <div class="price-coins num">۲۸۵</div>
-        <div class="price-toman num">۳۰۷٬۰۰۰ تومان</div>
-        <p class="price-worth">۳ کلاس ۹۰ دقیقه‌ای</p>
+        <span class="pill price-tag">پیشنهاد</span>
+        <h3>یک ماه</h3>
+        <div class="price-coins num">۳۶۰</div>
+        <div class="price-toman num">۳۸۹٬۰۰۰ تومان</div>
+        <p class="price-worth">۴ کلاس ۹۰ دقیقه‌ای</p>
+        <p class="price-blurb">چهار جلسهٔ ۹۰ دقیقه‌ای — یک درسِ هفتگی تا آخر ماه.</p>
         <a class="btn btn-primary btn-block" href="/app">انتخاب</a>
       </article>
       <article class="card price">
-        <h3>یک ترم</h3>
-        <div class="price-coins num">۷۱۵</div>
-        <div class="price-toman num">۷۰۱٬۰۰۰ تومان</div>
-        <p class="price-worth">۷ کلاس ۹۰ دقیقه‌ای</p>
+        <h3>کل ترم</h3>
+        <div class="price-coins num">۱٬۴۴۰</div>
+        <div class="price-toman num">۱٬۴۴۰٬۰۰۰ تومان</div>
+        <p class="price-worth">۱۶ کلاس ۹۰ دقیقه‌ای</p>
+        <p class="price-blurb">۱۶ جلسه — یک درس تا آخر ترم. با بچه‌های کلاس شریک شید: یک نفر بخره، هر جلسه رو بفرسته و جزوه رو تو گروه درس بذاره.</p>
         <a class="btn btn-ghost btn-block" href="/app">انتخاب</a>
       </article>
     </div>
@@ -567,19 +571,20 @@ fetch("/api/packages")
   .then(r => r.ok ? r.json() : Promise.reject())
   .then(({ packages, coinsPerMinute }) => {
     if (!Array.isArray(packages) || !packages.length) return;
-    const featured = packages.findIndex(p => p.tag === "محبوب");
-    document.getElementById("prices").innerHTML = packages.map((p, i) => {
+    const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    document.getElementById("prices").innerHTML = packages.map((p) => {
       const classes = Math.floor(p.coins / (90 * coinsPerMinute));
       const worth = classes >= 1
         ? `${fa(classes)} کلاس ۹۰ دقیقه‌ای`
         : `${fa(Math.floor(p.coins / coinsPerMinute))} دقیقه صوت`;
-      const hot = i === featured;
+      const hot = Boolean(p.featured);
       return `<article class="card price${hot ? " featured" : ""}">
-        ${p.tag ? `<span class="pill price-tag">${p.tag}</span>` : ""}
-        <h3>${p.tag ?? "پکیج"}</h3>
+        ${hot ? `<span class="pill price-tag">پیشنهاد</span>` : ""}
+        <h3>${esc(p.title)}</h3>
         <div class="price-coins num">${fa(p.coins)}</div>
         <div class="price-toman num">${fa(p.price)} تومان</div>
         <p class="price-worth">${worth}</p>
+        <p class="price-blurb">${esc(p.blurb)}</p>
         <a class="btn ${hot ? "btn-primary" : "btn-ghost"} btn-block" href="/app">انتخاب</a>
       </article>`;
     }).join("");

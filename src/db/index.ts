@@ -135,6 +135,24 @@ CREATE TABLE IF NOT EXISTS topups (
   decided_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_topups_user ON topups(tg_id, created_at DESC);
+`);
+
+/**
+ * ستون‌های درگاه — افزایشی، چون جدول شارژ پیش از درگاه ساخته شده بود.
+ *
+ * `track_id` شناسهٔ پیگیری زیبال است (وضعیت `awaiting_payment`)؛
+ * `ref_number` شمارهٔ مرجع بانکی پس از تأیید. سفارش کارت‌به‌کارت هر دو را
+ * خالی دارد.
+ */
+for (const [column, ddl] of [
+  ["track_id", "ALTER TABLE topups ADD COLUMN track_id TEXT"],
+  ["ref_number", "ALTER TABLE topups ADD COLUMN ref_number TEXT"],
+] as const) {
+  const cols = db.prepare("PRAGMA table_info(topups)").all() as unknown as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) db.exec(ddl);
+}
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_topups_track ON topups(track_id);
 
 -- کد هدیه: ادمین سکه می‌سازد و لینکش را می‌دهد؛ گیرنده با زدن روی لینک
 -- سکه‌ها را برمی‌دارد.
@@ -504,7 +522,13 @@ export function clearAudioPath(id: string): void {
 
 // ─── شارژ (کارت‌به‌کارت) ─────────────────────────────────────────────────────
 
-export type TopupStatus = "awaiting_receipt" | "pending" | "approved" | "rejected";
+/**
+ * دو مسیر، یک جدول:
+ *
+ *   کارت‌به‌کارت:  awaiting_receipt → pending → approved | rejected
+ *   درگاه:         awaiting_payment → approved | rejected
+ */
+export type TopupStatus = "awaiting_receipt" | "awaiting_payment" | "pending" | "approved" | "rejected";
 
 export interface TopupRow {
   id: string;
@@ -517,6 +541,8 @@ export interface TopupRow {
   decided_by: number | null;
   created_at: string;
   decided_at: string | null;
+  track_id: string | null;
+  ref_number: string | null;
 }
 
 export function createTopup(
@@ -525,16 +551,50 @@ export function createTopup(
   packageId: string,
   coins: number,
   priceToman: number,
+  status: "awaiting_receipt" | "awaiting_payment" = "awaiting_receipt",
 ): TopupRow {
   db.prepare(
     `INSERT INTO topups (id, tg_id, package_id, coins, price_toman, status)
-     VALUES (?, ?, ?, ?, ?, 'awaiting_receipt')`,
-  ).run(id, tgId, packageId, coins, priceToman);
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(id, tgId, packageId, coins, priceToman, status);
   return getTopup(id)!;
 }
 
 export function getTopup(id: string): TopupRow | null {
   return (db.prepare(`SELECT * FROM topups WHERE id = ?`).get(id) as unknown as TopupRow | undefined) ?? null;
+}
+
+export function getTopupByTrackId(trackId: string): TopupRow | null {
+  return (
+    (db.prepare(`SELECT * FROM topups WHERE track_id = ?`).get(trackId) as unknown as TopupRow | undefined) ??
+    null
+  );
+}
+
+export function setTopupTrackId(id: string, trackId: string): void {
+  db.prepare(`UPDATE topups SET track_id = ? WHERE id = ?`).run(trackId, id);
+}
+
+/**
+ * سفارشِ درگاهی را «پرداخت‌شده» می‌کند — **یک بار**.
+ *
+ * دو راه به تأیید می‌رسند و می‌توانند همزمان باشند: بازگشت از درگاه و دکمهٔ
+ * «بررسی پرداخت» در ربات. هر دو `verify` می‌زنند و هر دو «معتبر» می‌گیرند
+ * (بار دوم با کد ۲۰۱). اگر دروازه در دست‌کد بود، هر دو سکه واریز می‌کردند.
+ *
+ * پس دروازه همین `UPDATE … WHERE status = 'awaiting_payment'` است: SQLite
+ * نوشتن را سریال می‌کند و فقط یکی `changes = 1` می‌گیرد. صداکننده **فقط**
+ * وقتی `true` گرفت سکه واریز می‌کند.
+ */
+export function claimTopupPaid(id: string, refNumber: string | null): boolean {
+  const r = db
+    .prepare(
+      `UPDATE topups SET status = 'approved', ref_number = COALESCE(?, ref_number),
+         decided_at = datetime('now')
+       WHERE id = ? AND status = 'awaiting_payment'`,
+    )
+    .run(refNumber, id);
+  return Number(r.changes) === 1;
 }
 
 /**

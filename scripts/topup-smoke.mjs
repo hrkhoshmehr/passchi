@@ -16,7 +16,7 @@ const TG = 4242;
 upsertUser(TG, "دانشجوی نمونه", "student");
 console.log("موجودی اولیه:", balanceCoins(getUser(TG).credit_sec), "سکه");
 
-const order = beginTopup(TG, "p2");
+const order = await beginTopup(TG, "p2");
 console.log("\n— پیام پرداخت —\n" + order.text.replace(/<\/?[a-z][^>]*>/g, ""));
 
 const open = openTopup(TG);
