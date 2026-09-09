@@ -1,4 +1,4 @@
-import type { AnalysisReport } from "../analysis/schema.js";
+import { keyPointRank, type AnalysisReport } from "../analysis/schema.js";
 import { config } from "../config.js";
 import { chunkMessage, escapeHtml } from "../util/text.js";
 import { fmtClockLink, fmtDuration, toFaDigits } from "../util/time.js";
@@ -211,6 +211,12 @@ export function extractedMessage(r: AnalysisReport): string {
     // و اگر رخ داده بود ثبت می‌شد. پس همان جملهٔ قطعی، نه یک حالت سومِ مبهم.
     if (a?.happened) {
       out.push(`✅ <b>${label}</b>${a.detail ? ` — ${escapeHtml(a.detail)}` : ""}`);
+    } else if (
+      key === "homework" &&
+      r.key_points.some((k) => k.kind === "homework" && k.obligation === "recommended")
+    ) {
+      // «تکلیفی نداد» اینجا دروغ می‌شد: استاد کاری خواسته، ولی با لحن توصیه.
+      out.push("⬜️ تکلیف اجباری نداد — ولی توصیهٔ مطالعه داشت (پایین‌تر)");
     } else {
       out.push(`⬜️ ${negative}`);
     }
@@ -292,9 +298,14 @@ export function extractedMessage(r: AnalysisReport): string {
        * حالی که کلِ ارزشِ «عین حرف استاد، دقیقهٔ فلان» همین است که بشود
        * شنیدش. حالا کنارِ عنوان است، بی‌قالب و در خطِ خودش.
        */
+      // توصیه برچسب خودش را دارد: زیر «📝 تکلیف» آمدنش یعنی دانشجو کاری را
+      // واجب بخواند که استاد فقط پیشنهادش کرده.
+      const label =
+        k.kind === "homework" && k.obligation === "recommended"
+          ? "📌 توصیهٔ استاد (اختیاری)"
+          : (KP_LABEL[k.kind] ?? "•");
       out.push(
-        `${KP_LABEL[k.kind] ?? "•"} <b>${escapeHtml(k.title)}</b>` +
-          (k.due ? ` — مهلت: ${escapeHtml(k.due)}` : ""),
+        `${label} <b>${escapeHtml(k.title)}</b>` + (k.due ? ` — مهلت: ${escapeHtml(k.due)}` : ""),
       );
       out.push(fmtClockLink(k.evidence.at_ms));
       const inner: string[] = [];
@@ -308,22 +319,15 @@ export function extractedMessage(r: AnalysisReport): string {
 }
 
 /**
- * ترتیب نمایش، بر اساس «چقدر فوری است».
- *
- * اول چیزهایی که مهلت یا اقدام دارند (امتحان، مهلت، تکلیف، کاری که باید
- * بکند)، بعد اطلاعات نمره، و آخر تأکیدهای درسی که فوریت ندارند و برای
- * وقت مطالعه‌اند.
+ * ترتیب نمایش، بر اساس «چقدر فوری است» — تعریفش در schema.js است چون اعمالِ
+ * سقف در تحلیل هم به همان ترتیب نیاز دارد و دو نسخه شدنش یعنی سقف چیزی را
+ * ببُرد که کاربر انتظار دارد بالای فهرست باشد.
  */
 function sortedKeyPoints(r: AnalysisReport) {
-  const order: Record<string, number> = {
-    exam: 0, deadline: 1, homework: 2, logistics: 3, grading: 4,
-    // تصحیح بالا می‌نشیند چون جزوهٔ جلسهٔ قبلِ دانشجو را باطل می‌کند؛ منبع و
-    // راه ارتباطی اقدامِ فوری نمی‌خواهند ولی اطلاعاتِ سختِ ترم‌اند (اسم کتاب،
-    // ساعت دفتر) — پس بالاتر از تأکیدهای درسی می‌نشینند.
-    correction: 5, syllabus: 6, resource: 7, contact: 8, emphasis: 9,
-  };
   return [...r.key_points].sort(
-    (a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9) || a.evidence.at_ms - b.evidence.at_ms,
+    (a, b) =>
+      keyPointRank(a.kind, a.obligation) - keyPointRank(b.kind, b.obligation) ||
+      a.evidence.at_ms - b.evidence.at_ms,
   );
 }
 

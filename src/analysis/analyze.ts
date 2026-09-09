@@ -13,6 +13,8 @@ import {
   type SegmentKind,
   type TimelineStats,
   type VerifiedEvidence,
+  MAX_KEY_POINTS,
+  keyPointRank,
 } from "./schema.js";
 import { SYSTEM_COMMON, TASK_ANALYSIS, TASK_NOTES, transcriptBlock } from "./prompts.js";
 import { cached, chat as orChat, extractJson } from "./openrouter.js";
@@ -182,9 +184,45 @@ function matchesMarkerToken(word: string, marker: string): boolean {
  */
 const HOMEWORK_HINTS = [
   "تهیه کنید", "تهیه بکنید", "تهیه بفرمایید", "بخرید", "بخونید", "بخوانید", "مطالعه کنید",
-  "مطالعه بفرمایید", "نگاه بکنید", "نگاه کنید", "حل کنید", "حل بکنید", "تمرین",
+  "مطالعه بفرمایید", "نگاه بکنید", "نگاه کنید", "نگاهی بندازید", "نگاه بندازید", "حل کنید", "حل بکنید", "تمرین",
   "ترجمه کنید", "تحقیق کنید", "آماده کنید", "بنویسید", "جواب بدید", "جواب بدهید",
 ].map((m) => normalizeFa(m).split(" ").filter(Boolean));
+
+/**
+ * «خواستم» در برابر «پیشنهاد می‌کنم» — تصمیم روی خودِ نقل‌قول، نه روی برداشت.
+ *
+ * ## چرا این تصمیم به کد آمد
+ *
+ * شدتِ درخواست تنها جایی است که مدل هر بار می‌تواند صادقانه جور دیگری
+ * قضاوت کند: «فلان کتاب رو بخونید خوبه» برای یک اجرا تکلیف است و برای اجرای
+ * بعدی توصیه. و بهایش کوچک نیست — چک‌لیست به دانشجو **قطعی** می‌گوید «تکلیف
+ * داد»، پس یک توصیه که تیک بخورد او را می‌فرستد سراغ کاری که استاد نخواسته،
+ * و شاید کارِ واقعی را جا بیندازد. با این دو فهرست، ده اجرا روی یک نقل‌قول
+ * ده جواب یکسان می‌دهد.
+ */
+const DUTY_MARKERS = [
+  "باید", "حتما", "موظف", "اجباری", "الزامی", "ازتون میخوام", "میخوام که",
+  "تحویل بدید", "تحویل بدهید", "نمره داره", "نمره دارد",
+].map((m) => normalizeFa(m).split(" ").filter(Boolean));
+
+const ADVISORY_MARKERS = [
+  "پیشنهاد میکنم", "پیشنهاد من", "توصیه میکنم", "توصیه من",
+  "بهتره", "بهتر است", "خوبه", "خوب است", "بد نیست", "ضرری نداره",
+  "میتونید", "میتوانید", "اختیاری", "اگه دوست داشتید", "اگر دوست داشتید",
+  "اگه خواستید", "اگر خواستید",
+].map((m) => normalizeFa(m).split(" ").filter(Boolean));
+
+/**
+ * پیش‌فرض «اجباری» است و این عمدی است: فعل امریِ بی‌نرم‌کننده («فصل سه رو
+ * بخونید») واقعاً درخواست است. فقط وقتی به توصیه تنزل می‌کند که خودِ استاد
+ * کلمهٔ نرم‌کننده را گفته باشد و هیچ کلمهٔ الزامی کنارش نباشد — یعنی سکوت
+ * هرگز یک تکلیفِ واقعی را به توصیه تبدیل نمی‌کند.
+ */
+export function obligationOf(quote: string): "required" | "recommended" {
+  const words = normalizeFa(quote).split(" ").filter(Boolean);
+  if (hasHint(words, DUTY_MARKERS)) return "required";
+  return hasHint(words, ADVISORY_MARKERS) ? "recommended" : "required";
+}
 
 const GRADING_HINTS = [
   "نمره", "بارم", "نمرات", "تصحیح", "مردود", "قبولی", "پاس کردن",
@@ -711,7 +749,9 @@ export async function analyzeClass(
       logger.debug({ title: kp.title, quote: kp.evidence.quote }, "نقل‌قول ادعای تأکید را ثابت نمی‌کند");
       continue;
     }
-    keyPoints.push({ ...kp, kind: fixed, evidence: ev });
+    // شدت فقط برای تکلیف معنا دارد؛ بقیهٔ نوع‌ها گزارشِ واقعیت‌اند نه درخواست.
+    const obligation = fixed === "homework" ? obligationOf(ev.quote) : "required";
+    keyPoints.push({ ...kp, kind: fixed, obligation, evidence: ev });
   }
 
   const professorActions = parsed.professor_actions.map((a) => {
@@ -723,6 +763,38 @@ export async function analyzeClass(
     }
     return { ...a, evidence: ev };
   });
+
+  /**
+   * تکراری‌زدایی و سقف هشت — **در کد، بعد از هر دو دروازه**.
+   *
+   * سقف تا امروز در پرامپت بود و نتیجه‌اش این: وقتی نُه نامزد وجود داشت،
+   * اینکه کدام هشت‌تا بماند سلیقهٔ همان اجرا بود و دو اجرا روی یک صوت دو
+   * فهرست می‌دادند. حالا انتخاب با همان ترتیبی است که در پیام چاپ می‌شود،
+   * یعنی فوری‌ترین‌ها می‌مانند و انتخاب تکرارپذیر است.
+   */
+  const seen = new Set<string>();
+  const deduped = keyPoints.filter((k) => {
+    const key = `${k.kind}|${k.evidence.at_ms}|${normalizeFa(k.evidence.quote)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const capped =
+    deduped.length <= MAX_KEY_POINTS
+      ? deduped
+      : [...deduped]
+          .sort(
+            (a, b) =>
+              keyPointRank(a.kind, a.obligation) - keyPointRank(b.kind, b.obligation) ||
+              a.evidence.at_ms - b.evidence.at_ms,
+          )
+          .slice(0, MAX_KEY_POINTS);
+  if (capped.length < keyPoints.length) {
+    logger.debug(
+      { from: keyPoints.length, to: capped.length },
+      "نکته‌های تکراری یا مازاد بر سقف حذف شدند",
+    );
+  }
 
   /**
    * چک‌لیست را با نکته‌های **تأییدشده** آشتی بده.
@@ -744,7 +816,10 @@ export async function analyzeClass(
     grading: "grading",
     exam: "exam_info",
   };
-  for (const kp of keyPoints) {
+  for (const kp of capped) {
+    // توصیه تیکِ «تکلیف داد» نمی‌گیرد: آن تیک قطعی است و دانشجو آن را کارِ
+    // واجب می‌خواند. خودِ نکته سر جایش می‌ماند و با برچسبِ توصیه دیده می‌شود.
+    if (kp.kind === "homework" && kp.obligation === "recommended") continue;
     const action = KIND_TO_ACTION[kp.kind];
     if (!action) continue;
     const existing = professorActions.find((a) => a.action === action);
@@ -766,7 +841,7 @@ export async function analyzeClass(
 
   const report: AnalysisReport = {
     ...parsed,
-    key_points: keyPoints,
+    key_points: capped,
     professor_actions: professorActions,
     composition: computeComposition(parsed.chapters, meta.originalDurationMs, meta.silenceMs),
     silenceMs: meta.silenceMs,

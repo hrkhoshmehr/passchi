@@ -230,8 +230,50 @@ export interface TimelineStats {
   pct: number;
 }
 
+/**
+ * سقف نکته‌ها — **در کد اعمال می‌شود، نه در پرامپت**.
+ *
+ * تا وقتی انتخابِ «کدام هشت‌تا» با مدل بود، دو اجرا روی یک صوت دو فهرست
+ * می‌دادند. حالا سقف بعد از دروازه‌ها و با ترتیبِ نمایش اعمال می‌شود.
+ */
+export const MAX_KEY_POINTS = 8;
+
+/**
+ * ترتیب نمایش نکته‌ها، بر اساس «چقدر فوری است».
+ *
+ * اول چیزهایی که مهلت یا اقدام دارند، بعد اطلاعات نمره، و آخر تأکیدهای درسی
+ * که فوریت ندارند. اینجا نشسته چون هم تحلیل (برای اعمال سقف) و هم نمایش به
+ * آن نیاز دارند و دو نسخه شدنش یعنی سقف چیزی را ببُرد که کاربر بالای فهرست
+ * می‌بیند.
+ */
+const KEY_POINT_ORDER: Record<string, number> = {
+  exam: 0, deadline: 1, homework: 2, logistics: 3, grading: 4,
+  // تصحیح بالا می‌نشیند چون جزوهٔ جلسهٔ قبلِ دانشجو را باطل می‌کند؛ منبع و
+  // راه ارتباطی اقدامِ فوری نمی‌خواهند ولی اطلاعاتِ سختِ ترم‌اند (اسم کتاب،
+  // ساعت دفتر) — پس بالاتر از تأکیدهای درسی می‌نشینند.
+  correction: 5, syllabus: 6, resource: 7, contact: 8, emphasis: 9,
+};
+
+/**
+ * توصیه ده رتبه پایین‌تر از همتای اجباری‌اش می‌نشیند: کاری که استاد خواسته
+ * همیشه باید بالاتر از کاری باشد که فقط پیشنهاد کرده — و اگر سقف قرار است
+ * چیزی را ببُرد، اول توصیه‌ها بریده شوند.
+ */
+export function keyPointRank(kind: string, obligation?: string): number {
+  return (KEY_POINT_ORDER[kind] ?? 9) + (obligation === "recommended" ? 10 : 0);
+}
+
 export interface AnalysisReport extends Omit<ClassAnalysis, "key_points" | "professor_actions"> {
-  key_points: Array<Omit<z.infer<typeof KeyPoint>, "evidence"> & { evidence: VerifiedEvidence }>;
+  key_points: Array<
+    Omit<z.infer<typeof KeyPoint>, "evidence"> & {
+      evidence: VerifiedEvidence;
+      /**
+       * از روی نقل‌قولِ تأییدشده حساب می‌شود، نه از مدل. نبودنش (گزارش‌های
+       * قدیمیِ بایگانی) یعنی «اجباری» — همان رفتار پیش از این تغییر.
+       */
+      obligation?: "required" | "recommended";
+    }
+  >;
   professor_actions: Array<
     Omit<z.infer<typeof ProfessorAction>, "evidence"> & { evidence: VerifiedEvidence | null }
   >;
