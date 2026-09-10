@@ -26,6 +26,11 @@ const tests = [
   "emphasis",
   "keypoint-kind",
   "categories",
+  // دروازه‌هایی که به بافتِ پاره‌گفتار نگاه می‌کنند، لنگرِ سرفصل، و ادعاهای
+  // بی‌ریشهٔ جزوه — هر سه آفلاین‌اند و هزینه‌ای ندارند.
+  "gates-context",
+  "topic-anchor",
+  "notes-mentions",
 
   "timeline",
   "duration",
