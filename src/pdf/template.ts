@@ -271,12 +271,46 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   return defaultFence(tokens, idx, options, env, self);
 };
 
+/**
+ * خطی که با شکلکِ یکی از پنج کادر شروع می‌شود ولی `> ` ندارد را نقل‌قول می‌کند.
+ *
+ * ## چرا لازم شد
+ *
+ * پنج کادرِ رنگیِ جزوه (امتحان، تأکید، خارج از کلاس، تعریف، مثال) از روی
+ * `<blockquote>` تشخیص داده می‌شوند — یعنی مدل باید هم شکلک را درست بگذارد،
+ * هم برچسب را حرف‌به‌حرف بنویسد، **و هم** خط را با `> ` شروع کند. سومی
+ * پرتکرارترین چیزی است که از قلم می‌افتد، چون دو تای دیگر «محتوا»یند و این
+ * یکی فقط نحو است.
+ *
+ * و شکستش بی‌صداست: بدون `> `، خط یک پاراگراف عادی می‌شود، `markHighlights`
+ * اصلاً نمی‌بیندش، و نکتهٔ امتحانی وسط متن گم می‌شود — بدون هیچ خطایی، بدون
+ * هیچ ردی در لاگ.
+ *
+ * شرط شکلک عمدی است: هر خطِ پررنگی نقل‌قول نمی‌شود، فقط خطی که مدل با
+ * شکلکِ همان کادر شروع کرده. یعنی نیت روشن بوده و فقط `> ` جا افتاده.
+ */
+const BLOCK_EMOJI = ["⚑", "🎯", "📘", "🧩", "ℹ️"];
+
+function reviveQuoteBlocks(src: string): string {
+  return src
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith(">")) return line;
+      if (!BLOCK_EMOJI.some((e) => trimmed.startsWith(e))) return line;
+      const indent = line.slice(0, line.length - trimmed.length);
+      return `${indent}> ${trimmed}`;
+    })
+    .join("\n");
+}
+
+
 export function buildHtml(doc: NoteDocument): string {
   const r = doc.report;
   // ترتیب مهم است: ریاضی **پیش از** مارک‌داون کنار گذاشته می‌شود و **پس از**
   // آن برمی‌گردد. عکسش یعنی مارک‌داون فرمول‌ها را دست‌کاری کند.
   const { text: protectedMd, blocks } = extractMath(
-    normalizeListMarkers(doc.notesMarkdown || "_جزوه‌ای تولید نشد._"),
+    normalizeListMarkers(reviveQuoteBlocks(doc.notesMarkdown || "_جزوه‌ای تولید نشد._")),
   );
   const body = markHighlights(restoreMath(md.render(protectedMd), blocks));
   const fa = (n: string | number) => toFaDigits(n);
