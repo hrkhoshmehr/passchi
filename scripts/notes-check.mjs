@@ -36,7 +36,7 @@ const raw = JSON.parse(fs.readFileSync(CACHE, "utf8"));
 const t = buildTranscript(raw.transcript.tokens, { toOriginal: (ms) => ms, skippedMs: 0 });
 const durationMs = raw.transcription?.audio_duration_ms ?? 0;
 
-const { report, notesMarkdown: md, notesError } = await analyzeClass(t, {
+const { report, notesMarkdown: md, notesError, unsupportedMentions } = await analyzeClass(t, {
   courseName: null,
   professorName: null,
   sessionDate: null,
@@ -110,6 +110,18 @@ console.log(
       .join(" · "),
 );
 console.log(`واژه‌نامه: ${report.glossary.length} · نکات باز: ${report.open_questions.length}`);
+
+/**
+ * ادعاهای بی‌ریشهٔ جزوه — نام و عدد و تاریخی که در رونوشت نیست.
+ *
+ * فعلاً فقط گزارش می‌شود (دلیلش در `src/analysis/notes-check.ts`)، ولی باید
+ * **دیده** شود: جزوه تنها خروجی محصول است که دروازهٔ راستی‌آزمایی ندارد، و
+ * اگر این عدد رشد کند باید بفهمیم.
+ */
+console.log(
+  `ادعای بی‌ریشه در جزوه: ${unsupportedMentions.length}` +
+    (unsupportedMentions.length ? ` — ${unsupportedMentions.join("، ")}` : " ✅"),
+);
 console.log("\nسرفصل‌های سطح دو:");
 for (const h of md.match(/^## .+$/gm) ?? []) console.log("  " + h.replace(/^## /, ""));
 
