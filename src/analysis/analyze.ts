@@ -178,6 +178,8 @@ const IMPORTANCE_MARKERS = [
   // «هر ترم سؤال می‌دم» پیش‌بینی‌کننده‌ترین جملهٔ ممکن است و می‌افتاد، چون
   // فقط صورتِ «سوال میاد» در فهرست بود. صرف‌های فعلی هم باید بیایند.
   "سوال میدم", "سوال بدم", "سوال میارم", "میارم تو امتحان", "امتحانی",
+  // «اینو بدانید» هم‌خانوادهٔ «یاد بگیر» و «بلد باش» است و جا افتاده بود.
+  "بدان",
 ].map((m) => normalizeFa(m).split(" ").filter(Boolean));
 
 /**
@@ -501,6 +503,85 @@ export function statesImportance(quote: string): boolean {
        */
       if (words[i] === "امتحان" && words[i - 1] === "شب") continue;
       return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * «این **درس** مهمه» تأکید درسی نیست — تأکید روی خودِ درس است.
+ *
+ * ## چرا این دروازه به کد آمد
+ *
+ * `emphasis` باید بگوید **کدام مبحث** مهم است. ولی استادها اول ترم دربارهٔ
+ * اهمیتِ خودِ درس حرف می‌زنند و آن جمله‌ها همهٔ نشانه‌های اهمیت را دارند:
+ * «درس مدنی ۳ شاید مهم‌ترین درس دوره کارشناسی‌تونه»، «لذا درس، درس بسیار
+ * مهمیه»، «این درس رو باید بدانید، باید یاد بگیرید».
+ *
+ * هر سه از `statesImportance` رد می‌شوند و باید هم رد شوند — واقعاً ادعای
+ * اهمیت‌اند. ولی هیچ‌کدام به دانشجوی غایب چیزی نمی‌گویند: نه مبحثی را نام
+ * می‌برند و نه کاری از آن‌ها درمی‌آید. همان «پرکردنِ الکیِ فهرست» که پرامپت
+ * بدترین کارِ ممکن می‌داندش.
+ *
+ * یک دور پرامپت با همین نمونه‌ها صریح شد و **بی‌اثر بود** — روی سنجه، نقض
+ * در یک اجرا از سه اجرا سر جایش ماند و در اجرای سوم با نقل‌قولِ دیگری از
+ * همان جنس برگشت. پس همان مسیرِ همیشگیِ این پروژه: تصمیم به کد.
+ *
+ * ## قاعده
+ *
+ * دو شرط، و شرط دوم است که جلوی حریص‌شدن را می‌گیرد:
+ *
+ * ۱) یک کلمهٔ **سطحِ درس** (درس، کلاس، ترم، رشته، واحد) تا چهار توکن پیش از
+ *    نشانهٔ اهمیت آمده باشد — یعنی موضوعِ جمله همان است، نه یک مبحث.
+ * ۲) و در کلِ نقل‌قول **هیچ نامِ مبحثی** نباشد. «این قسمت از درس خیلی مهمه»
+ *    کلمهٔ «درس» را دارد ولی دربارهٔ یک قسمت است، پس می‌ماند.
+ */
+/**
+ * «ترم» عمداً **نیست**: رونویسی خودکار «میان‌ترم» را گاهی «میان ترم» می‌نویسد
+ * و آن‌وقت جملهٔ «اینو خوب یاد بگیرید، تو میان ترم هست» — که پیش‌بینی‌کننده‌ترین
+ * نکتهٔ ممکن است — سطحِ درس حساب می‌شد و حذف می‌گردید.
+ */
+const COURSE_WORDS = new Set(["درس", "کلاس", "رشته", "واحد", "درسها", "کلاسها"]);
+
+const TOPIC_WORDS = new Set([
+  "قسمت", "مبحث", "فصل", "ماده", "قضیه", "فرمول", "بحث", "تعریف", "قاعده",
+  "نکته", "مسئله", "مساله", "باب", "اصل", "شرط", "عنصر", "رابطه", "مثال",
+  "تقسیم", "بند", "تبصره", "قانون", "جدول", "نمودار", "اینجا",
+]);
+
+/**
+ * فقط نشانه‌های **ستایشِ عمومی**، نه کلِ `IMPORTANCE_MARKERS`.
+ *
+ * فهرست کامل کلماتی مثل «لازم»، «امتحان» و «بارم» را هم دارد و هر سه اینجا
+ * خطرناک‌اند. «لازم» روی دادهٔ واقعی گیر افتاد: در «توی این درس، **عقد لازم**
+ * و جایز خیلی مهمه» یک اصطلاح حقوقی است نه ادعای ضرورت، و چون «درس» چند
+ * توکن قبلش بود، یک تأکیدِ کاملاً مبحثی حذف می‌شد.
+ *
+ * و «امتحان» و «نمره» از جنسِ دیگری‌اند: «امتحانِ این درس سخته» ادعای
+ * ستایشِ درس نیست، خبری از امتحان است و این دروازه کارش نیست.
+ */
+const COURSE_PRAISE_MARKERS = [
+  "مهم", "اهمیت", "یاد بگیر", "یادبگیر", "بدان", "بلد باش", "جدی بگیر", "کلیدی", "اساسی",
+].map((m) => normalizeFa(m).split(" ").filter(Boolean));
+
+export function isCourseLevelImportance(quote: string): boolean {
+  const words = normalizeFa(quote).split(" ").filter(Boolean);
+  if (words.length === 0) return false;
+  // شرط ۲ اول بررسی می‌شود چون ارزان‌تر است و بیشترِ موارد را همان‌جا نگه می‌دارد
+  if (words.some((w) => TOPIC_WORDS.has(w))) return false;
+
+  for (const marker of COURSE_PRAISE_MARKERS) {
+    for (let i = 0; i + marker.length <= words.length; i++) {
+      let hit = true;
+      for (let k = 0; k < marker.length - 1; k++) {
+        if (words[i + k] !== marker[k]) { hit = false; break; }
+      }
+      if (!hit) continue;
+      if (!matchesMarkerToken(words[i + marker.length - 1]!, marker[marker.length - 1]!)) continue;
+      for (let back = 1; back <= 4; back++) {
+        const w = words[i - back];
+        if (w !== undefined && COURSE_WORDS.has(w)) return true;
+      }
     }
   }
   return false;
@@ -896,6 +977,7 @@ export async function analyzeClass(
   let droppedImportance = 0;
   let droppedHypothetical = 0;
   let droppedEmptySyllabus = 0;
+  let droppedCourseLevel = 0;
   let demotedActions = 0;
   const keyPoints: AnalysisReport["key_points"] = [];
   for (const kp of parsed.key_points) {
@@ -938,6 +1020,20 @@ export async function analyzeClass(
     if ((fixed === "exam" || fixed === "emphasis") && !statesImportance(ev.quote)) {
       droppedImportance++;
       logger.debug({ title: kp.title, quote: kp.evidence.quote }, "نقل‌قول ادعای تأکید را ثابت نمی‌کند");
+      continue;
+    }
+    /**
+     * تأکید روی **خودِ درس**، نه روی یک مبحث — توضیح کاملش بالای
+     * `isCourseLevelImportance` آمده. فقط `emphasis` را می‌گیرد: نکتهٔ `exam`
+     * ادعای دیگری دارد («در امتحان می‌آید») و جمله‌ای مثل «این درس امتحانش
+     * سخته» هرچه باشد، خبری از امتحان است.
+     */
+    if (fixed === "emphasis" && isCourseLevelImportance(ev.quote)) {
+      droppedCourseLevel++;
+      logger.info(
+        { title: kp.title, quote: ev.quote },
+        "تأکید روی خودِ درس بود نه روی مبحث — نکته حذف شد",
+      );
       continue;
     }
     /**
@@ -1152,7 +1248,12 @@ export async function analyzeClass(
     composition: computeComposition(parsed.chapters, meta.originalDurationMs, meta.silenceMs),
     silenceMs: meta.silenceMs,
     droppedCitations:
-      droppedUnverified + droppedImportance + droppedHypothetical + droppedEmptySyllabus + demotedActions,
+      droppedUnverified +
+      droppedImportance +
+      droppedHypothetical +
+      droppedEmptySyllabus +
+      droppedCourseLevel +
+      demotedActions,
     droppedUnverified,
     droppedImportance,
     demotedActions,
@@ -1390,6 +1491,7 @@ ${short.map((s) => `- ${s}`).join("\n")}
         importance: droppedImportance,
         hypothetical: droppedHypothetical,
         emptySyllabus: droppedEmptySyllabus,
+        courseLevel: droppedCourseLevel,
         actions: demotedActions,
       },
     },
