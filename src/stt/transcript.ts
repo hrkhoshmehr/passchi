@@ -38,8 +38,57 @@ export interface BuiltTranscript {
 const GAP_BREAK_MS = 1_500;
 const MAX_UTTERANCE_CHARS = 700;
 
+/**
+ * پاره‌گفتارِ کوتاه‌تر از این، پاره‌گفتار نیست — تکه‌ای است که موتور رونویسی
+ * وسط یک جمله بریده.
+ *
+ * ## چرا چسباندنشان لازم شد
+ *
+ * سونیوکس هر مکثِ کوتاه را مرز می‌گیرد، پس یک جملهٔ پیوستهٔ استاد به دو سه
+ * تکه خرد می‌شود. روی کلاس ۹۴ دقیقه‌ای حقوق مدنی، ۸۲ پاره‌گفتار از ۳۱۲ زیر
+ * چهل نویسه بودند. بهایش مستقیم روی راستی‌آزمایی افتاد: نقل‌قولِ «مباحث
+ * مربوط به این ترم، از ماده ۱۸۳ شروع می‌شه. از ماده ۱۸۳ لغایت ماده ۳۰۰»
+ * روی مرز دو تکه افتاده بود و نمرهٔ ۰٫۸۰ می‌گرفت — نه رد می‌شد و نه واقعاً
+ * تطبیق کامل بود، و کافی بود مدل یک کلمه دیگر هم نقل کند تا کل نکته بیفتد.
+ *
+ * قید «همان گوینده» جدی است: تکهٔ کوتاهی که گویندهٔ دیگری گفته، حرفِ خودش
+ * است و چسباندنش یعنی نسبت‌دادنِ حرفِ دانشجو به استاد.
+ */
+const MIN_UTTERANCE_CHARS = 30;
+
+interface RawUtterance {
+  startMs: number;
+  endMs: number;
+  speakerId: string;
+  text: string;
+  confSum: number;
+  confN: number;
+}
+
+/**
+ * تکه‌های ریز را به پاره‌گفتار قبلیِ **همان گوینده** می‌چسباند.
+ *
+ * اطمینان وزنی به‌روز می‌شود (نه میانگینِ میانگین‌ها): تکهٔ سه‌کلمه‌ای نباید
+ * اطمینانِ یک پاره‌گفتار پنجاه‌کلمه‌ای را نصف کند.
+ */
+function glueTiny(rows: RawUtterance[]): RawUtterance[] {
+  const out: RawUtterance[] = [];
+  for (const r of rows) {
+    const prev = out[out.length - 1];
+    if (prev && prev.speakerId === r.speakerId && r.text.length < MIN_UTTERANCE_CHARS) {
+      prev.text = `${prev.text} ${r.text}`.replace(/\s+/g, " ").trim();
+      prev.endMs = Math.max(prev.endMs, r.endMs);
+      prev.confSum += r.confSum;
+      prev.confN += r.confN;
+      continue;
+    }
+    out.push({ ...r });
+  }
+  return out;
+}
+
 export function buildTranscript(tokens: TranscriptToken[], timeMap: TimeMap): BuiltTranscript {
-  const utterances: Utterance[] = [];
+  const rows: RawUtterance[] = [];
 
   let cur: {
     startMs: number;
@@ -54,15 +103,13 @@ export function buildTranscript(tokens: TranscriptToken[], timeMap: TimeMap): Bu
     if (!cur) return;
     const text = cur.parts.join("").replace(/\s+/g, " ").trim();
     if (text) {
-      utterances.push({
-        index: utterances.length,
+      rows.push({
         startMs: cur.startMs,
         endMs: cur.endMs,
         speakerId: cur.speakerId,
-        role: "نامشخص",
         text,
-        confidence: cur.confN > 0 ? cur.confSum / cur.confN : 1,
-        normalized: normalizeFa(text),
+        confSum: cur.confSum,
+        confN: cur.confN,
       });
     }
     cur = null;
@@ -89,6 +136,17 @@ export function buildTranscript(tokens: TranscriptToken[], timeMap: TimeMap): Bu
     cur!.confN += 1;
   }
   flush();
+
+  const utterances: Utterance[] = glueTiny(rows).map((r, i) => ({
+    index: i,
+    startMs: r.startMs,
+    endMs: r.endMs,
+    speakerId: r.speakerId,
+    role: "نامشخص" as SpeakerRole,
+    text: r.text,
+    confidence: r.confN > 0 ? r.confSum / r.confN : 1,
+    normalized: normalizeFa(r.text),
+  }));
 
   // ── نقش گوینده‌ها ────────────────────────────────────────────────────────
   // فرض: در یک کلاس درس، پرحرف‌ترین گوینده استاد است. برای سخنرانی معمول
@@ -206,61 +264,156 @@ export function renderPlain(t: BuiltTranscript): string {
  * گذاشت. نقل‌قول‌ها این مشکل را ندارند چون `verifyQuote` زمانشان را از
  * رونوشت می‌گیرد؛ سرفصل‌ها هم باید همان مسیر را بروند.
  *
- * روش: واژه‌های عنوان و اصطلاحات سرفصل را در پاره‌گفتارها می‌شماریم و اولین
- * جایی را که چگالی‌شان بالاست برمی‌داریم — با این قید که از سرفصل قبلی
- * جلوتر باشد، تا ترتیب زمانی حفظ شود.
+ * ## چرا «بیشینهٔ سراسری» جواب نداد
+ *
+ * نسخهٔ قبلی روی تک‌تک پاره‌گفتارها بیشینه می‌گرفت و تا رسیدن به نمرهٔ ۰٫۶
+ * جلو می‌رفت. ولی پاره‌گفتارها کوتاه‌اند: هیچ‌کدام هر پنج اصطلاحِ یک سرفصل
+ * را ندارند، پس آن آستانه عملاً هرگز نمی‌خورد و حلقه تا آخر رونوشت می‌رفت —
+ * و آنجا یک پاره‌گفتارِ بلندِ جمع‌بندیِ آخرِ کلاس که تصادفاً چند اصطلاح را
+ * کنار هم دارد برنده می‌شد.
+ *
+ * روی کلاس ۹۴ دقیقه‌ای حقوق مدنی نتیجه‌اش این بود: «محدوده درس و تعریف
+ * عقد» که واقعاً دقیقهٔ ۱۴ گفته شده بود به دقیقهٔ ۸۲ رفت، و چون هر سرفصل
+ * باید از قبلی جلوتر باشد، سه سرفصل بعدی هم با آبشارِ «قبلی + ۴۵ ثانیه»
+ * پشتش چیده شدند: ۸۴، ۸۶، ۸۷. یعنی کلِ نیمهٔ دوم فهرست عددهای ساختگی
+ * بودند که هیچ‌کدام روی صوت نمی‌افتادند — و کاربر رویشان می‌زند.
+ *
+ * ## قاعدهٔ تازه: چگالیِ **وزنی** روی پنجرهٔ لغزان
+ *
+ * پنجره سه پاره‌گفتار است، چون یک اصطلاح ممکن است در یک پاره‌گفتار گفته
+ * شود و اصطلاح بعدی در پاره‌گفتار بعدی. زمانِ خروجی همیشه شروعِ **اولین**
+ * پاره‌گفتارِ پنجره است، یعنی جایی که موضوع باز می‌شود.
+ *
+ * و وزن، چون شمارشِ خام روی درسی که تمام‌وقت دربارهٔ «عقد» است کار نمی‌کند:
+ * اصطلاح‌های عمومیِ سرفصل («درس»، «عقد»، «توافق») در سراسر همان کلاس صدها
+ * بار می‌آیند و هر پنجره‌ای را به آستانه می‌رسانند، در حالی که «ماده ۱۸۳» و
+ * «ماده ۳۰۰» — که واقعاً می‌گویند این سرفصل کجاست — شش بار و یک بار. پس هر
+ * اصطلاح به نسبتِ **نادر بودنش** ارزش دارد.
+ *
+ * اصطلاحی که در کل رونوشت اصلاً نیامده از سنجه **بیرون** می‌رود، نه اینکه
+ * وزنِ سنگین بگیرد: چنین اصطلاحی بازنویسیِ خودِ مدل است نه حرفِ استاد
+ * («محدوده» در همان سرفصل)، و نگه‌داشتنش مخرج را چنان بالا می‌برد که هیچ
+ * پنجره‌ای هرگز به آستانه نمی‌رسد.
+ *
+ * سه پله، به ترتیب:
+ *
+ *   ۱) **نزدیکِ حدسِ مدل.** ±۱۰ دقیقه حول `start_ms`، اولین پنجره‌ای که به
+ *      آستانه می‌رسد. حدسِ مدل دور انداختنی نیست — خطایش معمولاً چند دقیقه
+ *      است نه یک ساعت — و همین محدودکردن، اصطلاحِ تکرارشونده را از جایی که
+ *      دوباره گفته شده جدا می‌کند.
+ *   ۲) **کلِ رونوشت از سرفصل قبلی به بعد.** «اولین» پنجره، چون سرفصل جایی
+ *      شروع می‌شود که اولین بار مطرح شده، نه جایی که بیشترین تکرار را دارد.
+ *      اگر این پنجره از پنجرهٔ نزدیک **قوی‌تر** باشد، همین برنده است — یعنی
+ *      حدسِ مدل فقط تا وقتی مقدم است که چیزی بهتر جای دیگری نباشد. بی این
+ *      قید، حدسِ پرتِ مدل یک تطبیقِ ضعیفِ محلی را به تطبیقِ قویِ واقعی
+ *      ترجیح می‌داد.
+ *   ۳) **همان حدسِ مدل**، بریده به بازهٔ معتبر و نه عقب‌تر از سرفصل قبلی.
+ *      این پله عمداً «قبلی + ۴۵ ثانیه» **نیست**: عددِ ساختگی‌ای که وانمود
+ *      می‌کند سرفصل‌ها پشت هم آمده‌اند، از یک حدسِ صادقانه بدتر است.
  */
+
+/** پهنای پنجرهٔ لغزان — سه پاره‌گفتار، حدود بیست تا سی ثانیه گفتار. */
+const TOPIC_WINDOW = 3;
+/** سهمِ لازم از وزنِ کلِ اصطلاح‌ها تا پنجره «همان سرفصل» حساب شود. */
+const TOPIC_HIT_SCORE = 0.5;
+/** شعاعِ گشتن حول حدسِ مدل، پیش از اینکه کل رونوشت را بگردیم. */
+const TOPIC_NEAR_MS = 10 * 60_000;
+
 export function anchorTopics(
   t: BuiltTranscript,
   topics: Array<{ title: string; terms: string[]; start_ms: number }>,
   durationMs: number,
 ): number[] {
+  const us = t.utterances;
+
   const anchors: number[] = [];
   let floorIdx = 0;
 
   for (const topic of topics) {
-    const needles = [...tokens(topic.title), ...topic.terms.flatMap((x) => tokens(x))].filter(
-      (w) => w.length > 2,
-    );
+    /**
+     * اصطلاح‌های سرفصل **عبارت‌اند، نه کلمه**.
+     *
+     * شکستنِ term به توکن، سنجه را رقیق می‌کرد: «ماده ۱۸۳» و «ماده ۳۰۰»
+     * می‌شدند سه نشانهٔ «ماده»، «۱۸۳»، «۳۰۰» که «ماده» را در هر جای رونوشت
+     * پیدا می‌کردند. با عبارت، نشانه همان چیزی است که استاد گفته. عنوانِ
+     * سرفصل هنوز توکن می‌شود، چون عنوان جمله است نه اصطلاح.
+     */
+    const candidates = [
+      ...new Set([...tokens(topic.title), ...topic.terms.map((x) => normalizeFa(x))]),
+    ].filter((w) => w.length > 2);
 
-    let bestIdx = -1;
-    let bestScore = 0;
-    for (let i = floorIdx; i < t.utterances.length; i++) {
-      const hay = t.utterances[i]!.normalized;
-      let hits = 0;
-      for (const n of needles) if (hay.includes(n)) hits++;
-      const score = needles.length ? hits / needles.length : 0;
-      if (score > bestScore) {
-        bestScore = score;
-        bestIdx = i;
-      }
-      // به‌محض رسیدن به تطبیق قوی متوقف شو — اولین جایی که موضوع مطرح
-      // می‌شود مهم است، نه جایی که بیشترین تکرار را دارد
-      if (score >= 0.6) break;
+    // اصطلاحی که هرگز گفته نشده، بازنویسیِ مدل است نه حرفِ استاد — بیرون
+    const needles: { text: string; weight: number }[] = [];
+    for (const n of candidates) {
+      const df = us.reduce((a, u) => a + (u.normalized.includes(n) ? 1 : 0), 0);
+      if (df === 0) continue;
+      // وزنِ معکوسِ بسامد: اصطلاحِ نادر می‌گوید سرفصل کجاست، اصطلاح عمومی نه
+      needles.push({ text: n, weight: Math.log(us.length / (1 + df)) });
     }
+    const totalWeight = needles.reduce((a, n) => a + n.weight, 0);
+
+    const windowScore = (i: number): number => {
+      if (totalWeight <= 0) return 0;
+      let hay = "";
+      for (let k = i; k < Math.min(us.length, i + TOPIC_WINDOW); k++) hay += ` ${us[k]!.normalized}`;
+      let hit = 0;
+      for (const n of needles) if (hay.includes(n.text)) hit += n.weight;
+      return hit / totalWeight;
+    };
+
+    /** اولین پنجره در [from, to) که به آستانه می‌رسد، با نمره‌اش. */
+    const firstHit = (from: number, to: number): { idx: number; score: number } => {
+      for (let i = Math.max(0, from); i < Math.min(us.length, to); i++) {
+        const s = windowScore(i);
+        if (s >= TOPIC_HIT_SCORE) return { idx: i, score: s };
+      }
+      return { idx: -1, score: 0 };
+    };
+
+    // پلهٔ ۱ — نزدیکِ حدسِ مدل. مرزها روی **اندیس** حساب می‌شوند چون پنجره
+    // اندیسی است؛ زمانِ هر پاره‌گفتار معیارِ «داخل بازه بودن» است.
+    let nearFrom = us.length;
+    let nearTo = 0;
+    for (let i = 0; i < us.length; i++) {
+      if (Math.abs(us[i]!.startMs - topic.start_ms) > TOPIC_NEAR_MS) continue;
+      nearFrom = Math.min(nearFrom, i);
+      nearTo = Math.max(nearTo, i + 1);
+    }
+    const near = nearTo > nearFrom ? firstHit(Math.max(nearFrom, floorIdx), nearTo) : { idx: -1, score: 0 };
+
+    // پلهٔ ۲ — از سرفصل قبلی تا آخر رونوشت. قوی‌تر بودن، بر نزدیک بودن مقدم است.
+    const global = near.idx >= 0 && near.score >= 1 ? near : firstHit(floorIdx, us.length);
+    const hit = near.idx >= 0 && near.score >= global.score ? near.idx : global.idx;
 
     // سرفصل اول همیشه از ابتدای جلسه است. واژه‌های عنوانی مثل «مرور مباحث
     // گذشته» در سراسر رونوشت تکرار می‌شوند و تطبیق را به وسط فایل می‌برند.
     if (anchors.length === 0) {
       anchors.push(0);
-      if (bestIdx >= 0 && bestScore >= 0.25) floorIdx = bestIdx;
+      if (hit >= 0) floorIdx = hit;
       continue;
     }
 
     const prev = anchors[anchors.length - 1]!;
-    let at =
-      bestIdx >= 0 && bestScore >= 0.25 ? t.utterances[bestIdx]!.startMs : Math.max(prev, topic.start_ms);
+    // پلهٔ ۳ — حدسِ خودِ مدل، فقط بریده به بازهٔ معتبر
+    let at = hit >= 0 ? us[hit]!.startMs : Math.max(prev, Math.min(topic.start_ms, durationMs));
 
-    // دو سرفصل نمی‌توانند یک زمان بگیرند؛ فهرستی که همه‌اش یک عدد است بی‌فایده است
-    if (at <= prev + MIN_TOPIC_GAP_MS) at = Math.min(durationMs, prev + MIN_TOPIC_GAP_MS);
+    // یکتایی و ترتیب: دو سرفصل نمی‌توانند یک زمان بگیرند. این فقط یک تکانِ
+    // یک‌ثانیه‌ای است، نه آبشارِ ۴۵ ثانیه‌ایِ قبلی که فهرست را می‌ساخت.
+    if (at <= prev) at = Math.min(durationMs, prev + MIN_TOPIC_GAP_MS);
     anchors.push(Math.min(durationMs, at));
-    if (bestIdx >= 0 && bestScore >= 0.25) floorIdx = bestIdx;
+    if (hit >= 0) floorIdx = hit;
   }
   return anchors;
 }
 
-/** کمینه فاصلهٔ دو سرفصل پیاپی. */
-const MIN_TOPIC_GAP_MS = 45_000;
+/**
+ * کمینه فاصلهٔ دو سرفصل پیاپی — فقط برای **یکتایی**، نه برای چیدنِ فهرست.
+ *
+ * پیش‌تر ۴۵ ثانیه بود و همان عدد بود که وقتی لنگر پیدا نمی‌شد، فهرست را به
+ * یک آبشارِ ساختگی تبدیل می‌کرد («۸۲، ۸۴، ۸۶، ۸۷»). حالا لنگرِ پیدانشده
+ * همان حدسِ مدل را نگه می‌دارد و این عدد فقط جلوی دو زمانِ یکسان را می‌گیرد.
+ */
+const MIN_TOPIC_GAP_MS = 1_000;
 
 export interface QuoteMatch {
   ok: boolean;
@@ -283,6 +436,16 @@ export interface QuoteMatch {
 
 /** نقل‌قولی که مدل از چند خط رونوشت به هم دوخته: «…» یا «...» وسطش هست. */
 const STITCH = /\s*(?:…|\.\.\.)\s*/;
+
+/**
+ * بیشترین سکوتی که هنوز «همان جمله» است.
+ *
+ * پنجره‌های دو و سه‌تایی فقط روی پاره‌گفتارهایی بسته می‌شوند که با فاصله‌ای
+ * کمتر از این پشت هم آمده‌اند. `GAP_BREAK_MS` (۱٫۵ ثانیه) مرزِ ساختنِ
+ * پاره‌گفتار است؛ اینجا سخاوتمندانه‌تر است چون مکثِ وسط جمله را هم باید
+ * بپوشاند، ولی نه آن‌قدر که دو حرفِ جدا را یکی کند.
+ */
+const WINDOW_GAP_MS = 5_000;
 
 /**
  * تأیید نقل‌قول: بررسی می‌کند جمله‌ای که مدل به‌عنوان «حرف استاد» برگردانده
@@ -313,20 +476,59 @@ export function verifyQuote(t: BuiltTranscript, quote: string, hintMs?: number):
     if (score > best.score) best = take(score, u);
     if (best.score === 1) return best;
   }
-  if (best.ok) return best;
+  /**
+   * نمرهٔ کامل نگرفت؟ پنجره‌ها **همیشه** اجرا می‌شوند، نه فقط وقتی گذر اول
+   * رد شده باشد.
+   *
+   * پیش‌تر شرطی بودند و نتیجه‌اش این بود که نقل‌قولی که روی مرز افتاده با
+   * نمرهٔ ۰٫۸۰ «تأییدشده» می‌ماند و همان‌جا برمی‌گشت، در حالی که پنجرهٔ
+   * دوتایی همان جمله را کامل پیدا می‌کرد. چون چسباندن پاره‌گفتارها فقط
+   * می‌تواند نمره را بالا ببرد، اجرای همیشگی هزینه‌ای جز چند میلی‌ثانیه ندارد.
+   */
 
-  // گذر دوم: پنجرهٔ دوتایی، برای نقل‌قولی که روی مرز دو پاره‌گفتار افتاده.
-  // مالکِ زمان، آن پاره‌گفتاری است که سهم بیشتری از نقل‌قول را دارد —
-  // نه لزوماً اولی، وگرنه زمانِ گزارش‌شده به پاره‌گفتار قبلی می‌چسبد.
-  for (let i = 0; i < t.utterances.length - 1; i++) {
-    const a = t.utterances[i]!;
-    const b = t.utterances[i + 1]!;
-    const score = containmentScore(q, `${a.normalized} ${b.normalized}`);
-    if (score > best.score) {
-      const owner = containmentScore(q, a.normalized) >= containmentScore(q, b.normalized) ? a : b;
-      best = take(score, owner);
+  /**
+   * گذر دوم و سوم: پنجرهٔ دوتایی و سه‌تایی، برای نقل‌قولی که روی مرزِ
+   * پاره‌گفتارها افتاده.
+   *
+   * مالکِ زمان، آن پاره‌گفتاری است که **بیشترین سهم** را از نقل‌قول دارد —
+   * نه لزوماً اولی، وگرنه زمانِ گزارش‌شده به پاره‌گفتارِ قبلی می‌چسبد.
+   *
+   * پنجرهٔ سه‌تایی بعداً اضافه شد چون دوتایی کافی نبود: روی کلاس حقوق مدنی،
+   * جملهٔ «مباحث مربوط به این ترم، از ماده ۱۸۳ شروع می‌شه. از ماده ۱۸۳ لغایت
+   * ماده ۳۰۰» روی سه تکه پخش شده بود و بهترین نمره‌اش ۰٫۸۰ می‌ماند.
+   */
+  const windowPass = (width: number) => {
+    for (let i = 0; i + width <= t.utterances.length; i++) {
+      const win = t.utterances.slice(i, i + width);
+      /**
+       * پنجره فقط روی گفتارِ **پیوسته** بسته می‌شود.
+       *
+       * بی این قید، دو پاره‌گفتارِ ده دقیقه دور از هم به هم چسبانده می‌شدند و
+       * جمله‌ای که مدل از دو جای کلاس سرِ هم کرده بود «تأیید» می‌شد — دقیقاً
+       * همان چیزی که این دروازه برای جلوگیری از آن هست. جمله‌ای که روی مرزِ
+       * یک مکثِ کوتاه افتاده باشد از این قید رد می‌شود؛ جمله‌ای که روی مرزِ
+       * یک سکوتِ ده‌ثانیه‌ای افتاده باشد، اصلاً یک جمله نبوده.
+       */
+      let contiguous = true;
+      for (let k = 1; k < win.length; k++) {
+        if (win[k]!.startMs - win[k - 1]!.endMs > WINDOW_GAP_MS) { contiguous = false; break; }
+      }
+      if (!contiguous) continue;
+      const score = containmentScore(q, win.map((u) => u.normalized).join(" "));
+      if (score > best.score) {
+        let owner = win[0]!;
+        let ownerScore = -1;
+        for (const u of win) {
+          const s = containmentScore(q, u.normalized);
+          if (s > ownerScore) { ownerScore = s; owner = u; }
+        }
+        best = take(score, owner);
+      }
     }
-  }
+  };
+
+  windowPass(2);
+  if (best.score < 1) windowPass(3);
 
   /**
    * ⚠️ اینجا یک «نجاتِ مرزی» بود و برداشته شد.

@@ -15,6 +15,7 @@
  *
  * برای همین دستهٔ «باید رد شود» اینجا مهم‌تر از دستهٔ دیگر است.
  */
+import fs from "node:fs";
 import { containmentScore, normalizeFa } from "../src/util/text.ts";
 import { buildTranscript, verifyQuote } from "../src/stt/transcript.ts";
 
@@ -113,10 +114,76 @@ if (fakeStitch.ok) {
   console.log("❌ دوختنِ دو جملهٔ ناگفته نباید از دروازه رد شود");
   bad++;
 }
+// ── چسباندنِ تکه‌های ریز ─────────────────────────────────────────────────
+//
+// موتور رونویسی هر مکث را مرز می‌گیرد، پس یک جملهٔ پیوسته به دو سه تکه خرد
+// می‌شود و نقل‌قولی که رویشان افتاده نمرهٔ کامل نمی‌گیرد. تکهٔ زیر سی نویسه
+// به پاره‌گفتار قبلیِ **همان گوینده** می‌چسبد.
+{
+  const glued = buildTranscript(
+    [
+      tok("مباحث مربوط به این ترم، از ماده ۱۸۳ شروع می‌شه. از ماده ۱۸۳ ", 100_000),
+      tok("لغایت ", 104_000),
+      tok("ماده ۳۰۰. این ترم ما از ماده ۱۸۳ می‌خونیم تا ماده ۳۰۰.", 106_000),
+    ],
+    { toOriginal: (ms) => ms, skippedMs: 0 },
+  );
+  if (glued.utterances.length !== 1) {
+    console.log(`❌ سه تکهٔ یک گوینده باید یک پاره‌گفتار شوند — شد ${glued.utterances.length}`);
+    bad++;
+  }
+  // اطمینان وزنی است، نه میانگینِ میانگین‌ها
+  if (Math.abs(glued.utterances[0].confidence - 0.99) > 0.001) {
+    console.log(`❌ اطمینانِ وزنی درست به‌روز نشد: ${glued.utterances[0].confidence}`);
+    bad++;
+  }
+
+  // تکهٔ ریزِ گویندهٔ دیگر نباید بچسبد — وگرنه حرفِ دانشجو به استاد نسبت داده می‌شود
+  const twoSpeakers = buildTranscript(
+    [tok("این مبحث رو با هم مرور کنیم و بعد بریم سراغ فصل بعدی.", 0, "1"), tok("بله استاد.", 4_000, "2")],
+    { toOriginal: (ms) => ms, skippedMs: 0 },
+  );
+  if (twoSpeakers.utterances.length !== 2) {
+    console.log("❌ تکهٔ ریزِ گویندهٔ دیگر نباید به پاره‌گفتار قبلی بچسبد");
+    bad++;
+  }
+}
+
+// ── روی رونوشتِ واقعیِ کش‌شده ────────────────────────────────────────────
+//
+// همان جمله‌ای که این تغییر برایش انجام شد: روی سه تکه پخش شده بود و نمرهٔ
+// ۰٫۸۰ می‌گرفت. بعد از چسباندن و پنجرهٔ سه‌تایی باید عملاً تطبیقِ کامل باشد.
+{
+  const CACHE = "data/cache/class example.7c6a57d28c894bfb.soniox.json";
+  if (!fs.existsSync(CACHE)) {
+    console.log(`⏭️ کشِ ${CACHE} نیست — بررسی روی دادهٔ واقعی رد شد`);
+  } else {
+    const raw = JSON.parse(fs.readFileSync(CACHE, "utf8"));
+    const real = buildTranscript(raw.transcript.tokens, { toOriginal: (ms) => ms, skippedMs: 0 });
+
+    const tiny = real.utterances.filter((u) => u.text.length < 40).length;
+    const ratio = tiny / real.utterances.length;
+    if (ratio >= 0.1) {
+      console.log(`❌ سهم پاره‌گفتارهای ریز هنوز بالاست: ${tiny} از ${real.utterances.length}`);
+      bad++;
+    }
+
+    const m2 = verifyQuote(
+      real,
+      "مباحث مربوط به این ترم، از ماده ۱۸۳ شروع می‌شه. از ماده ۱۸۳ لغایت ماده ۳۰۰",
+      840_000,
+    );
+    if (m2.score < 0.95) {
+      console.log(`❌ نقل‌قولِ مرزی باید نمرهٔ ≥۰٫۹۵ بگیرد — گرفت ${m2.score.toFixed(2)}`);
+      bad++;
+    }
+  }
+}
+
 
 console.log(
   bad === 0
-    ? `✅ هر ${shouldPass.length + shouldFail.length + 3} نمونه درست تشخیص داده شد.`
+    ? "✅ همه سبز"
     : `${bad} نمونه اشتباه.`,
 );
 process.exit(bad === 0 ? 0 : 1);
