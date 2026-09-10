@@ -997,8 +997,51 @@ export async function analyzeClass(
    * فهرست می‌دادند. حالا انتخاب با همان ترتیبی است که در پیام چاپ می‌شود،
    * یعنی فوری‌ترین‌ها می‌مانند و انتخاب تکرارپذیر است.
    */
+  /**
+   * چند نکتهٔ `resource` به **یک** نکته تبدیل می‌شوند.
+   *
+   * ## چرا این هم به کد آمد
+   *
+   * پرامپت صریح می‌گوید «اگر چند کتاب را پشت هم نام برد، همه را در detail
+   * همان یک نکته بیاور، نه یک نکته برای هر کتاب». روی سنجهٔ واقعی، یک اجرا
+   * از سه اجرا **پنج** نکتهٔ منبع داد — یکی برای هر کتابی که استاد نام برده
+   * بود.
+   *
+   * بهایش دوتاست و هر دو دیده شد:
+   *
+   * • **سقف هشت را می‌بلعد.** پنج ردیفِ منبع یعنی سه جای باقی‌مانده برای
+   *   تکلیف و محدوده و کتاب قانون — و همان‌جا چیزی که دانشجو واقعاً لازم
+   *   دارد بیرون می‌افتد.
+   * • **پایداری را می‌کُشد.** بین سه اجرا، فهرست نکته‌ها جاکاردِ ۰٫۱۵ گرفت و
+   *   بیشترِ این نوسان از همین بود: اجرایی پنج ردیفِ منبع، اجرایی دو.
+   *
+   * ادغام چیزی از دست نمی‌دهد: عنوانِ ردیف‌های بعدی به `detail` همان نکتهٔ
+   * اول می‌چسبد، و نقل‌قولِ تأییدشده همان اولی می‌ماند — یعنی چیزی که به‌عنوان
+   * «عین حرف استاد» چاپ می‌شود همچنان راستی‌آزمایی شده است.
+   *
+   * فقط `resource`: بقیهٔ نوع‌ها می‌توانند چند موردِ واقعاً متمایز باشند
+   * («کتاب قانون بیارید» و «جلسهٔ بعد کلاس نداریم» هر دو logistics‌اند و
+   * ادغامشان یعنی گم‌کردنِ یکی).
+   */
+  const resources = keyPoints.filter((k) => k.kind === "resource");
+  let merged = keyPoints;
+  if (resources.length > 1) {
+    const head = resources[0]!;
+    const extras = resources
+      .slice(1)
+      .map((k) => (k.detail.trim() ? `${k.title.trim()}: ${k.detail.trim()}` : k.title.trim()))
+      .filter(Boolean);
+    head.detail = [head.detail.trim(), ...extras].filter(Boolean).join(" ");
+    const drop = new Set(resources.slice(1));
+    merged = keyPoints.filter((k) => !drop.has(k));
+    logger.info(
+      { from: resources.length, titles: resources.map((r) => r.title) },
+      "چند نکتهٔ منبع به یک نکته ادغام شد",
+    );
+  }
+
   const seen = new Set<string>();
-  const deduped = keyPoints.filter((k) => {
+  const deduped = merged.filter((k) => {
     const key = `${k.kind}|${k.evidence.at_ms}|${normalizeFa(k.evidence.quote)}`;
     if (seen.has(key)) return false;
     seen.add(key);

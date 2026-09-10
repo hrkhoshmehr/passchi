@@ -74,6 +74,13 @@ const check = (label, ok, extra = "") => {
   const got = unsupportedMentions("ماده ۱۸۳ مهم است.", transcript);
   check("زیررشتهٔ عددی ادعا را توجیه نمی‌کند", got.includes("183"), JSON.stringify(got));
 }
+{
+  // ولی **نام** با فاصلهٔ جابه‌جا همان نام است: رونویسی خودکار دقیقاً همین‌جا
+  // بی‌ثبات است و هفت هشدارِ کاذب از یک جلسه از همین درآمد.
+  const transcript = transcriptText([{ text: "مرحوم ملا حسین قلی همدانی این را می‌فرماید." }]);
+  const got = unsupportedMentions("مرحوم ملا حسینقلی همدانی این را می‌فرماید.", transcript);
+  check("نامِ سرِهم‌نوشته ادعای تازه حساب نمی‌شود", got.length === 0, JSON.stringify(got));
+}
 
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
 process.exit(bad === 0 ? 0 : 1);

@@ -78,36 +78,52 @@ function findCache(goldenPath) {
   return hit ? path.join(CACHE_DIR, hit) : null;
 }
 
+/** آیا نقل‌قولِ نکته این بریده را در بر می‌گیرد؟ */
+function quoteCovers(quote, fragment) {
+  const q = normalizeFa(quote);
+  const f = normalizeFa(fragment);
+  if (!q || !f) return false;
+  if (` ${q} `.includes(` ${f} `)) return true;
+  return containmentScore(fragment, q) >= 0.75;
+}
+
 /**
- * آیا این نکتهٔ تأییدشده، همان موردِ طلایی است؟
+ * آیا این نکتهٔ تأییدشده، همان **واقعیتِ** طلایی است؟
  *
- * دو شرط: نوع بخورد، و نقل‌قول بریدهٔ طلایی را در بر بگیرد. شرط دوم
- * سخاوتمندانه است (`containmentScore ≥ ۰٫۷۵`) چون مدل هر بار از همان جمله
- * بریدهٔ کمی متفاوتی برمی‌دارد و ما داریم **واقعیت** را می‌سنجیم نه انتخابِ
- * دقیقِ کلمات.
+ * ## چرا واقعیت، و نه انتخابِ کلمه
  *
- * `obligation` فقط وقتی سنجیده می‌شود که فایل طلایی گفته باشد — چون برای
- * نوع‌های دیگر معنا ندارد و همیشه `required` است.
+ * نسخهٔ اول یک بریدهٔ ثابت می‌خواست و روی اجرای واقعی ۵۶٪ فراخوانی داد — در
+ * حالی که هر سه اجرا آن واقعیت را **داشتند**. استاد یک تکلیف را در یک
+ * پاره‌گفتار سه بار و با سه صورت می‌گوید («این دو تا کتاب رو حتماً نگاه
+ * بکنید»، «حداقل یکی دو تا از این کتاب‌ها رو بخونید»، «مطالعه بفرمایید») و
+ * مدل هر بار یکی را برمی‌دارد. هر سه درست‌اند و هر سه دانشجو را به همان کار
+ * می‌رسانند.
+ *
+ * پس سنجه داشت **پایداریِ انتخابِ کلمه** را اندازه می‌گرفت و اسمش را
+ * «فراخوانی» گذاشته بود — یعنی همان قرمزِ دروغینی که وقت می‌گیرد تا معلوم
+ * شود کاذب است، و بدتر: وسوسه می‌کند پرامپت را برای رفعِ چیزی عوض کنیم که
+ * خراب نیست.
+ *
+ * حالا هر ردیف یک واقعیت است با چند بریدهٔ پذیرفتنی (`quote_any`) و در صورت
+ * لزوم چند برچسبِ پذیرفتنی (`kind_any`) — چون گاهی دو برچسب هر دو درست‌اند
+ * و هر دو دانشجو را به همان جا می‌رسانند.
+ *
+ * `obligation` فقط وقتی سنجیده می‌شود که فایل طلایی گفته باشد.
  */
 function matches(kp, want) {
-  if (kp.kind !== want.kind) return false;
+  const kinds = want.kind_any ?? [want.kind];
+  if (!kinds.includes(kp.kind)) return false;
   if (want.obligation && (kp.obligation ?? "required") !== want.obligation) return false;
-  const quote = normalizeFa(kp.evidence?.quote ?? "");
-  const frag = normalizeFa(want.quote_fragment);
-  if (!quote || !frag) return false;
-  if (` ${quote} `.includes(` ${frag} `)) return true;
-  return containmentScore(want.quote_fragment, quote) >= 0.75;
+  const frags = want.quote_any ?? [want.quote_fragment];
+  return frags.some((f) => quoteCovers(kp.evidence?.quote ?? "", f));
 }
+
+/** نامِ خواناى یک ردیفِ طلایی، برای گزارشِ «از قلم افتاد». */
+const labelOf = (w) => w.fact ?? `[${w.kind ?? (w.kind_any ?? []).join("|")}] ${w.quote_fragment ?? (w.quote_any ?? [])[0]}`;
 
 /** آیا این بریدهٔ ممنوع در نکته‌ها ظاهر شده؟ */
 function appears(keyPoints, forbidden) {
-  const frag = normalizeFa(forbidden.quote_fragment);
-  return keyPoints.some((kp) => {
-    const quote = normalizeFa(kp.evidence?.quote ?? "");
-    if (!quote) return false;
-    if (` ${quote} `.includes(` ${frag} `)) return true;
-    return containmentScore(forbidden.quote_fragment, quote) >= 0.75;
-  });
+  return keyPoints.some((kp) => quoteCovers(kp.evidence?.quote ?? "", forbidden.quote_fragment));
 }
 
 /** جاکارد دو مجموعه — سنجهٔ پایداری بین دو اجرا. */
@@ -193,7 +209,7 @@ for (const goldenPath of goldenFiles) {
       signatures: kp.map(signature),
       recall: found.filter((f) => f.hit).length,
       recallTotal: golden.expected.length,
-      missed: found.filter((f) => !f.hit).map((f) => `[${f.kind}] ${f.quote_fragment}`),
+      missed: found.filter((f) => !f.hit).map(labelOf),
       violations: violated.map((f) => f.quote_fragment),
       chapters: out.report.chapters.length,
       topics: out.report.topics.map((t) => ({ title: t.title, at: fmtClock(t.start_ms, true) })),
@@ -217,7 +233,10 @@ for (const goldenPath of goldenFiles) {
     );
     for (const k of kp) {
       const mark = golden.forbidden.some((f) => appears([k], f)) ? "⛔" : "•";
-      console.log(`   ${mark} [${k.kind}] ${k.title} ← «${(k.evidence?.quote ?? "").slice(0, 60)}»`);
+      // شدتِ تکلیف کنار برچسب می‌آید: تکلیفِ واجبی که «توصیه» چاپ شود،
+      // دانشجو را از کارِ واقعی دور می‌کند و در عددِ فراخوانی دیده نمی‌شود.
+      const ob = k.kind === "homework" ? ` (${k.obligation ?? "required"})` : "";
+      console.log(`   ${mark} [${k.kind}${ob}] ${k.title} ← «${(k.evidence?.quote ?? "").slice(0, 60)}»`);
     }
     for (const m of r.missed) console.log(`   ❌ از قلم افتاد: ${m}`);
     if (r.lateTopics.length) console.log(`   ⚠️ سرفصل در ۱۰٪ آخر: ${r.lateTopics.join("، ")}`);
