@@ -19,6 +19,7 @@ import {
 import { SYSTEM_COMMON, TASK_ANALYSIS, TASK_NOTES, transcriptBlock } from "./prompts.js";
 import { cached, chat as orChat, extractJson } from "./openrouter.js";
 import { isDegenerate, repairAnalysis } from "./repair.js";
+import { transcriptText as transcriptNormalized, unsupportedMentions } from "./notes-check.js";
 
 const client = new Anthropic({
   ...(config.ANTHROPIC_API_KEY ? { apiKey: config.ANTHROPIC_API_KEY } : {}),
@@ -45,6 +46,13 @@ export interface AnalyzeOutput {
    * نباید به‌خاطر در دسترس نبودن مدلِ پاس دوم دور ریخته شود.
    */
   notesError: string | null;
+  /**
+   * نام‌ها، عددها و تاریخ‌هایی که در جزوه آمده‌اند ولی در رونوشت نیستند.
+   *
+   * فعلاً فقط گزارش می‌شود و چیزی حذف نمی‌شود — دلیلش در `notes-check.ts`
+   * آمده. فهرست خالی حالت عادی و مطلوب است.
+   */
+  unsupportedMentions: string[];
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -103,7 +111,53 @@ function verifyEvidence(t: BuiltTranscript, e: Evidence | null): VerifiedEvidenc
     speaker: m.ok && m.role !== "نامشخص" ? m.role : e.speaker,
     verified: m.ok,
     score: Math.round(m.score * 100) / 100,
+    // بافت فقط برای دروازه‌هاست و هیچ‌جا چاپ نمی‌شود — توضیحش در schema.ts
+    context: m.ok ? m.utteranceText : "",
   };
+}
+
+/**
+ * نشانه‌های «این یک فرضِ خیالی است»، و «و من این کار را نمی‌کنم».
+ *
+ * ## چرا این دروازه لازم شد
+ *
+ * روی همان کلاس حقوق مدنی، استاد دقیقهٔ ۱۳:۰۷ می‌گوید: «مثلاً فرض کن بگیم
+ * آقا هر کی قانون همراهش نباشه، دو نمره کم می‌کنم مثلاً. **خب این زشته
+ * دیگه.** … من دارم توصیه می‌کنم.» یعنی یک قاعدهٔ نمره‌دهی را مطرح می‌کند تا
+ * ردش کند.
+ *
+ * تکهٔ وسطش — «هر کی قانون همراهش نباشه، دو نمره کم می‌کنم» — یک نقل‌قولِ
+ * کاملاً واقعی است: در رونوشت هست، عیناً همان کلمات، و کلمهٔ «نمره» هم دارد.
+ * پس هر دو دروازهٔ قبلی را بی‌خطر رد می‌کند و به‌عنوان قاعدهٔ نمره‌دهی به
+ * دانشجو می‌رسد — با ذکر دقیقه، که ظاهرِ مستند هم به آن می‌دهد.
+ *
+ * پرامپت این نمونه را **عیناً** به‌عنوان مثالِ «جهت جمله را وارونه نکن»
+ * دارد و باز هم برگشت. علتش روشن است: مدل باید جمله‌ای را نیاورد که خودش
+ * راست است؛ چیزی که وارونه‌اش می‌کند در جملهٔ بعدی است، نه در نقل‌قول. پس
+ * تصمیم به کد آمد، جایی که بافت در دسترس است.
+ *
+ * دامنه عمداً به `grading` و `logistics` و `homework` محدود است: فقط
+ * نوع‌هایی که یک **قاعده** اعلام می‌کنند. تأکیدِ درسی یا معرفیِ منبع، حتی
+ * اگر وسط یک مثالِ فرضی گفته شده باشد، همچنان واقعیت است.
+ */
+const HYPOTHETICAL_MARKERS = ["فرض کن", "فرض کنید", "فرض بفرمایید", "مثلا بگیم", "مثلا بگم"].map(
+  (m) => normalizeFa(m),
+);
+
+const HYPOTHETICAL_REJECTIONS = [
+  "این کار رو نمیکنم", "این کارو نمیکنم", "نمیکنم", "زشته", "زشت است", "نمیگم",
+].map((m) => normalizeFa(m));
+
+export function isRejectedHypothetical(context: string): boolean {
+  const c = normalizeFa(context);
+  if (!c) return false;
+  const at = HYPOTHETICAL_MARKERS.map((m) => c.indexOf(m)).filter((i) => i >= 0);
+  if (at.length === 0) return false;
+  const from = Math.min(...at);
+  // نفی باید **بعد از** فرض بیاید؛ «نمی‌کنم»ی که قبلش گفته شده ربطی به این
+  // فرض ندارد و با ندیدنِ ترتیب، هر پاره‌گفتارِ بلندی از دروازه می‌افتاد.
+  const after = c.slice(from);
+  return HYPOTHETICAL_REJECTIONS.some((r) => after.includes(r));
 }
 
 /**
@@ -186,6 +240,15 @@ const HOMEWORK_HINTS = [
   "تهیه کنید", "تهیه بکنید", "تهیه بفرمایید", "بخرید", "بخونید", "بخوانید", "مطالعه کنید",
   "مطالعه بفرمایید", "نگاه بکنید", "نگاه کنید", "نگاهی بندازید", "نگاه بندازید", "حل کنید", "حل بکنید", "تمرین",
   "ترجمه کنید", "تحقیق کنید", "آماده کنید", "بنویسید", "جواب بدید", "جواب بدهید",
+  /**
+   * صورت‌های **مضارع اخباری** — «تهیه می‌کنید»، نه «تهیه کنید».
+   *
+   * فارسیِ کلاس، درخواست را با فعل امری نمی‌گوید؛ با خبر می‌گوید: «فرض بر
+   * اینه که شما این دو تا کتاب رو تهیه می‌کنید و مطالعه می‌کنید». روی دادهٔ
+   * واقعی همین جمله تکلیفِ اصلیِ آن جلسه بود و چون فهرست فقط صورتِ امری را
+   * داشت، برچسبِ تکلیف نمی‌گرفت و چک‌لیست می‌گفت «تکلیفی نداد».
+   */
+  "تهیه میکنید", "مطالعه میکنید", "میخونید", "میخوانید", "حل میکنید",
 ].map((m) => normalizeFa(m).split(" ").filter(Boolean));
 
 /**
@@ -210,6 +273,18 @@ const ADVISORY_MARKERS = [
   "بهتره", "بهتر است", "خوبه", "خوب است", "بد نیست", "ضرری نداره",
   "میتونید", "میتوانید", "اختیاری", "اگه دوست داشتید", "اگر دوست داشتید",
   "اگه خواستید", "اگر خواستید",
+  /**
+   * «سعی بفرمایید» و «هر کی خواست» — نرم‌کننده‌هایی که فهرست نداشت.
+   *
+   * «سعی کنید یکی دو تا از این کتاب‌ها رو بخونید» یک پیشنهاد است، ولی چون
+   * فعل امری دارد و هیچ نرم‌کننده‌ای در فهرست نبود، پیش‌فرضِ «اجباری» رویش
+   * می‌نشست و در چک‌لیست تیکِ **قطعیِ** «تکلیف داد» می‌گرفت.
+   *
+   * ولی `DUTY_MARKERS` همچنان مقدم است و این عمدی است: «سعی کنید **حتماً**
+   * تا جلسهٔ بعد بخونید» یک درخواست است، نه پیشنهاد. سکوت یک تکلیف را به
+   * توصیه تبدیل نمی‌کند، ولی یک کلمهٔ الزامی توصیه را به تکلیف برمی‌گرداند.
+   */
+  "سعی بفرمایید", "سعی کنید", "علاقه مند", "هر کی خواست", "هر کس خواست",
 ].map((m) => normalizeFa(m).split(" ").filter(Boolean));
 
 /**
@@ -256,6 +331,18 @@ const SYLLABUS_HINTS = [
   "سرفصل", "محدوده", "لغایت", "تا اخر فصل", "این ترم میخونیم",
 ].map((m) => normalizeFa(m).split(" ").filter(Boolean));
 
+/**
+ * نشانه‌های **مرز** — چیزی که یک «محدوده» را از یک معرفیِ کلی جدا می‌کند.
+ *
+ * عمداً از خودِ حرف‌اضافه‌ها ساخته شده و نه از موضوع: هر محدوده‌ای که استاد
+ * واقعاً اعلام کند یکی از این‌ها را دارد («از ۱۸۳ تا ۳۰۰»، «تا آخر فصل
+ * چهار»، «باب دوم»). جملهٔ «درس‌مون حقوق مدنی ۳ هست» هیچ‌کدام را ندارد و
+ * دقیقاً همان چیزی است که این فهرست باید بیندازد.
+ */
+const RANGE_HINTS = [
+  "از", "تا", "لغایت", "فصل", "ماده", "باب", "بخش",
+].map((m) => normalizeFa(m).split(" ").filter(Boolean));
+
 const RESOURCE_HINTS = [
   "منبع", "منابع", "مرجع", "رفرنس", "انتشارات", "جزوه",
 ].map((m) => normalizeFa(m).split(" ").filter(Boolean));
@@ -295,6 +382,45 @@ function hasHint(words: string[], hints: string[][]): boolean {
   }
   return false;
 }
+
+/**
+ * **یک نکته می‌تواند بیش از یک ردیفِ چک‌لیست را روشن کند.**
+ *
+ * نگاشتِ بالا یک‌به‌یک است و همان‌جا می‌ماند، ولی سه ردیف از چک‌لیست هیچ
+ * نوعِ متناظری در نکته‌ها ندارند و به همین دلیل تقریباً همیشه «انجام نشد»
+ * می‌مانند:
+ *
+ * • `exam_info` — نکتهٔ «میان‌ترم ۸ نمره داره و از چهار فصل اول میاد»
+ *   برچسبِ `grading` می‌گیرد (چون دربارهٔ نمره است و نمره در فهرست انتخاب
+ *   نوع بالاتر از امتحان است)، پس فقط `grading` را روشن می‌کند و چک‌لیست
+ *   به دانشجو می‌گوید «دربارهٔ امتحان چیزی نگفت» — در حالی که همان‌جا
+ *   تاریخ و بارم و محدودهٔ امتحان نوشته شده.
+ * • `class_cancelled` و `makeup_class` — هر دو زیر `logistics` می‌نشینند
+ *   و `logistics` اصلاً در نگاشت نیست.
+ *
+ * پس ردیف‌های دوم از روی **خودِ نقل‌قولِ تأییدشده** روشن می‌شوند، نه از روی
+ * برچسب. هیچ ادعای تازه‌ای ساخته نمی‌شود: جمله‌ای که «کلاس نداریم» دارد،
+ * همین حالا در فهرستِ نکته‌ها با ذکر دقیقه به دانشجو نشان داده می‌شود.
+ */
+const EXAM_WORDS = ["امتحان", "میان ترم", "پایان ترم", "کوییز"].map((m) =>
+  normalizeFa(m).split(" ").filter(Boolean),
+);
+const CANCEL_WORDS = ["کلاس نداریم", "تشکیل نمیشود", "تشکیل نمی شود", "لغو", "تعطیل"].map((m) =>
+  normalizeFa(m).split(" ").filter(Boolean),
+);
+const MAKEUP_WORDS = ["جبرانی"].map((m) => normalizeFa(m).split(" ").filter(Boolean));
+
+export function checklistExtras(kind: string, quote: string): string[] {
+  const words = normalizeFa(quote).split(" ").filter(Boolean);
+  const out: string[] = [];
+  if (kind === "grading" && hasHint(words, EXAM_WORDS)) out.push("exam_info");
+  if (kind === "logistics") {
+    if (hasHint(words, CANCEL_WORDS)) out.push("class_cancelled");
+    if (hasHint(words, MAKEUP_WORDS)) out.push("makeup_class");
+  }
+  return out;
+};
+
 
 export function classifyKeyPointKind(
   quote: string,
@@ -355,8 +481,15 @@ export function statesImportance(quote: string): boolean {
       if (!hit) continue;
       const last = i + marker.length - 1;
       if (!matchesMarkerToken(words[last]!, marker[marker.length - 1]!)) continue;
-      // «مهم نیست» ادعای اهمیت نیست — دو توکن بعدی را نگاه کن.
-      if (isNegation(words[last + 1]) || isNegation(words[last + 2])) continue;
+      /**
+       * «مهم نیست» ادعای اهمیت نیست — **چهار** توکن بعدی را نگاه کن.
+       *
+       * دو توکن کافی نبود، چون فارسیِ گفتاری بین نشانه و نفی چیز می‌گذارد:
+       * «این قسمت اصلاً برای شما مهم **نیست**»، «این تو امتحانِ ما اصلاً
+       * **نمیاد**». هر دو از دروازه رد می‌شدند و وارونهٔ حرف استاد به دانشجو
+       * می‌رسید. چهار توکن، جایی است که دیگر نفی به همان نشانه برنمی‌گردد.
+       */
+      if ([1, 2, 3, 4].some((k) => isNegation(words[last + k]))) continue;
       /**
        * «شب امتحان» نشانهٔ امتحان نیست.
        *
@@ -407,16 +540,40 @@ const NOTES_WORDS_PER_MIN = 40;
  */
 export function notesBudget(
   chapters: ClassAnalysis["chapters"],
-): { title: string; kind: string; minutes: number; floor: number }[] {
+): { title: string; kind: string; minutes: number; floor: number; startMs: number; endMs: number }[] {
   return chapters
     .filter((c) => c.kind === "teaching" || c.kind === "qa")
     .map((c) => ({
       title: c.title,
       kind: c.kind,
+      // بازه هم برمی‌گردد چون دستورِ گسترش باید بگوید کجای رونوشت را دوباره بخواند
+      startMs: c.start_ms,
+      endMs: c.end_ms,
       minutes: Math.max(0, c.end_ms - c.start_ms) / 60_000,
     }))
     .filter((c) => c.minutes >= 1)
     .map((c) => ({ ...c, floor: Math.round(c.minutes * NOTES_WORDS_PER_MIN) }));
+}
+
+/**
+ * آیا جزوه آن‌قدر از کف عقب است که ارزش یک فراخوان دوم را داشته باشد؟
+ *
+ * ## چرا این تصمیم تابعِ جدا شد
+ *
+ * چون یک **قضاوتِ اقتصادی** است، نه یک آستانهٔ سلیقه‌ای: هر فراخوان دوم چند
+ * سنت هزینه دارد و چند ده ثانیه به انتظارِ کاربر اضافه می‌کند. با تابعِ
+ * جدا و صادرشده، آزمون می‌تواند مرزها را بسنجد بی‌آنکه به مدل زنگ بزند.
+ *
+ * ۸۰٪ انتخاب شد نه ۱۰۰٪: شمارشِ کلمهٔ ما با تخمینِ مدل یکی نیست و جزوه‌ای
+ * که ۹۵٪ کف را نوشته واقعاً کامل است. زیر ۸۰٪ دیگر «تخمین» نیست — یعنی
+ * بخش‌هایی خلاصه شده‌اند.
+ *
+ * کفِ صفر (کلاسی که هیچ بخش درسی نداشته) هرگز گسترش نمی‌خواهد، وگرنه یک
+ * جلسهٔ تماماً اداری هم یک فراخوان اضافه می‌گرفت.
+ */
+export function needsExpansion(words: number, floor: number): boolean {
+  if (floor <= 0) return false;
+  return words < floor * 0.8;
 }
 
 function budgetBlock(chapters: ClassAnalysis["chapters"]): string {
@@ -428,14 +585,46 @@ function budgetBlock(chapters: ClassAnalysis["chapters"]): string {
     (c) => `- ${c.title} (${c.kind}) — ${Math.round(c.minutes)} دقیقه — کف ${c.floor} کلمه`,
   );
 
+  /**
+   * بازه‌های غیردرسی **صریح** گفته می‌شوند، نه اینکه فقط از جدول غایب باشند.
+   *
+   * غیبت از جدول یک اطلاعِ منفی است و مدل آن را نمی‌بیند: نتیجه‌اش این بود
+   * که چهارده دقیقهٔ اولِ کلاس — که معرفی درس و منابع بود، نه تدریس — در
+   * جزوه به‌صورت یک سرفصلِ کامل بازسازی می‌شد، و همان مطالبی که در پیام
+   * ربات با ذکر دقیقه آمده‌اند دوباره در جزوه تکرار می‌شدند.
+   *
+   * با آمدنِ بازه و عنوان و دلیل، دستور از «اینجا چیزی ننویس» به یک واقعیتِ
+   * قابلِ بررسی تبدیل می‌شود.
+   */
+  const skipped = chapters
+    .filter((c) => c.kind !== "teaching" && c.kind !== "qa")
+    .filter((c) => c.end_ms > c.start_ms)
+    .sort((a, b) => a.start_ms - b.start_ms)
+    .map(
+      (c) =>
+        `${fmtClock(c.start_ms, true)} تا ${fmtClock(c.end_ms, true)} (${KIND_FA[c.kind] ?? c.kind}: ${c.title.trim() || "بی‌عنوان"})`,
+    );
+
+  const skippedLine = skipped.length
+    ? `\n\nاین بازه‌ها درس نبوده‌اند و در جزوه نمی‌آیند: ${skipped.join("، ")}.`
+    : "";
+
   return `### بودجهٔ کلمهٔ هر بخش
 
 این جدول از روی مدت واقعی بخش‌های همین کلاس حساب شده است. عددها **کف**‌اند نه سقف:
 
 ${lines.join("\n")}
 
-جمع: دست‌کم ${total} کلمه. بخش‌هایی که درس نبوده‌اند (اطلاعیه، حاشیه، مشکل فنی، وقفه) اینجا نیامده‌اند و در جزوه هم نمی‌آیند.`;
+جمع: دست‌کم ${total} کلمه. بخش‌هایی که درس نبوده‌اند (اطلاعیه، حاشیه، مشکل فنی، وقفه) اینجا نیامده‌اند و در جزوه هم نمی‌آیند.${skippedLine}`;
 }
+
+/** نام فارسیِ نوع بخش — برای همان جملهٔ «این بازه‌ها درس نبوده‌اند». */
+const KIND_FA: Record<string, string> = {
+  admin: "اطلاعیه",
+  offtopic: "حاشیه",
+  technical: "مشکل فنی",
+  break: "وقفه",
+};
 
 function computeComposition(
   chapters: ClassAnalysis["chapters"],
@@ -705,6 +894,8 @@ export async function analyzeClass(
    */
   let droppedUnverified = 0;
   let droppedImportance = 0;
+  let droppedHypothetical = 0;
+  let droppedEmptySyllabus = 0;
   let demotedActions = 0;
   const keyPoints: AnalysisReport["key_points"] = [];
   for (const kp of parsed.key_points) {
@@ -747,6 +938,40 @@ export async function analyzeClass(
     if ((fixed === "exam" || fixed === "emphasis") && !statesImportance(ev.quote)) {
       droppedImportance++;
       logger.debug({ title: kp.title, quote: kp.evidence.quote }, "نقل‌قول ادعای تأکید را ثابت نمی‌کند");
+      continue;
+    }
+    /**
+     * فرضی که استاد **همان‌جا ردش کرد**، قاعده نیست.
+     *
+     * فقط روی نوع‌هایی که یک قاعده اعلام می‌کنند اعمال می‌شود؛ تأکید درسی یا
+     * معرفی منبع حتی وسط یک مثالِ فرضی هم واقعیت است. قرینه در **بافت**
+     * است نه در نقل‌قول، و به همین دلیل هیچ دروازهٔ قبلی نمی‌توانست بگیردش.
+     */
+    if (
+      (fixed === "grading" || fixed === "logistics" || fixed === "homework") &&
+      isRejectedHypothetical(ev.context ?? "")
+    ) {
+      droppedHypothetical++;
+      logger.info(
+        { title: kp.title, kind: fixed, quote: ev.quote },
+        "فرضِ ردشده — استاد همان‌جا این قاعده را رد کرد، نکته حذف شد",
+      );
+      continue;
+    }
+    /**
+     * نکتهٔ «محدودهٔ درس» که نقل‌قولش هیچ مرزی ندارد، محدوده‌ای اعلام نکرده.
+     *
+     * روی دادهٔ واقعی، `syllabus` جایی شد که مدل جمله‌های معرفیِ کلی را در آن
+     * می‌ریخت — «درس‌مون حقوق مدنی ۳ هست»، «الزامات خارج از قرارداد موضوع
+     * مدنی ۴ است». هیچ‌کدام نمی‌گویند این ترم از کجا تا کجاست، و هر دو در
+     * عنوان و سرخطِ جلسه هم هستند؛ اینجا فقط فهرست را رقیق می‌کنند.
+     *
+     * محدودهٔ واقعی همیشه یک مرز دارد: «از … تا …»، «لغایت»، شمارهٔ فصل یا
+     * ماده یا باب. اگر هیچ‌کدام در نقل‌قول نیست، ادعای محدوده در کار نیست.
+     */
+    if (fixed === "syllabus" && !hasHint(normalizeFa(ev.quote).split(" ").filter(Boolean), RANGE_HINTS)) {
+      droppedEmptySyllabus++;
+      logger.info({ title: kp.title, quote: ev.quote }, "نکتهٔ محدودهٔ درس بدون مرز — حذف شد");
       continue;
     }
     // شدت فقط برای تکلیف معنا دارد؛ بقیهٔ نوع‌ها گزارشِ واقعیت‌اند نه درخواست.
@@ -816,36 +1041,75 @@ export async function analyzeClass(
     grading: "grading",
     exam: "exam_info",
   };
+
   for (const kp of capped) {
     // توصیه تیکِ «تکلیف داد» نمی‌گیرد: آن تیک قطعی است و دانشجو آن را کارِ
     // واجب می‌خواند. خودِ نکته سر جایش می‌ماند و با برچسبِ توصیه دیده می‌شود.
     if (kp.kind === "homework" && kp.obligation === "recommended") continue;
-    const action = KIND_TO_ACTION[kp.kind];
-    if (!action) continue;
-    const existing = professorActions.find((a) => a.action === action);
-    if (existing?.happened) continue;
-    if (existing) {
-      logger.info({ action, title: kp.title }, "چک‌لیست با نکتهٔ تأییدشده آشتی داده شد");
-      existing.happened = true;
-      existing.detail = kp.title;
-      existing.evidence = kp.evidence;
-    } else {
-      professorActions.push({
-        action: action as (typeof parsed.professor_actions)[number]["action"],
-        happened: true,
-        detail: kp.title,
-        evidence: kp.evidence,
-      });
+    const primary = KIND_TO_ACTION[kp.kind];
+    const actions = [...(primary ? [primary] : []), ...checklistExtras(kp.kind, kp.evidence.quote)];
+    for (const action of actions) {
+      const existing = professorActions.find((a) => a.action === action);
+      if (existing?.happened) continue;
+      if (existing) {
+        logger.info({ action, title: kp.title }, "چک‌لیست با نکتهٔ تأییدشده آشتی داده شد");
+        existing.happened = true;
+        existing.detail = kp.title;
+        existing.evidence = kp.evidence;
+      } else {
+        professorActions.push({
+          action: action as (typeof parsed.professor_actions)[number]["action"],
+          happened: true,
+          detail: kp.title,
+          evidence: kp.evidence,
+        });
+      }
     }
+  }
+
+  /**
+   * واژه‌نامه: ورودی‌های هم‌معنا با هم ادغام می‌شوند.
+   *
+   * مدل یک اصطلاح را دو بار می‌آورد وقتی استاد دو بار تعریفش کرده — یک بار
+   * «عقد» و یک بار «عقد (contract)» — و جدولِ واژه‌نامه در PDF دو ردیف با
+   * یک عنوان می‌گیرد. کلید، صورتِ نرمال‌شدهٔ اصطلاح **یا** معادل انگلیسی
+   * است، چون گاهی همان اصطلاح با دو املای فارسی می‌آید ولی معادلش یکی است.
+   *
+   * ردیفِ اول می‌ماند و از ردیف‌های بعدی فقط چیزی برداشته می‌شود که ردیف
+   * اول نداشته (معادل انگلیسیِ غایب، تعریفِ خالی) — یعنی ادغام چیزی را از
+   * دست نمی‌دهد.
+   */
+  const glossary: ClassAnalysis["glossary"] = [];
+  const glossaryAt = new Map<string, number>();
+  for (const g of parsed.glossary) {
+    const keys = [normalizeFa(g.term), g.english ? `en:${normalizeFa(g.english)}` : ""].filter(Boolean);
+    const hitKey = keys.find((k) => glossaryAt.has(k));
+    if (hitKey !== undefined) {
+      const row = glossary[glossaryAt.get(hitKey)!]!;
+      if (!row.english && g.english) row.english = g.english;
+      if (!row.definition.trim() && g.definition.trim()) row.definition = g.definition;
+      for (const k of keys) if (!glossaryAt.has(k)) glossaryAt.set(k, glossaryAt.get(hitKey)!);
+      continue;
+    }
+    for (const k of keys) glossaryAt.set(k, glossary.length);
+    glossary.push({ ...g });
+  }
+  if (glossary.length < parsed.glossary.length) {
+    logger.debug(
+      { from: parsed.glossary.length, to: glossary.length },
+      "ورودی‌های تکراری واژه‌نامه ادغام شدند",
+    );
   }
 
   const report: AnalysisReport = {
     ...parsed,
+    glossary,
     key_points: capped,
     professor_actions: professorActions,
     composition: computeComposition(parsed.chapters, meta.originalDurationMs, meta.silenceMs),
     silenceMs: meta.silenceMs,
-    droppedCitations: droppedUnverified + droppedImportance + demotedActions,
+    droppedCitations:
+      droppedUnverified + droppedImportance + droppedHypothetical + droppedEmptySyllabus + demotedActions,
     droppedUnverified,
     droppedImportance,
     demotedActions,
@@ -853,7 +1117,19 @@ export async function analyzeClass(
 
   let notesMarkdown = "";
   let notesError: string | null = null;
-  let usage2: Anthropic.Usage | null = null;
+  let unsupportedList: string[] = [];
+  /**
+   * مصرفِ پاس دوم به‌صورت **فهرست** نگه داشته می‌شود، نه یک متغیرِ جمع‌شونده.
+   *
+   * چون ممکن است دو فراخوان باشد (جزوه، و فراخوانِ گسترشش) و جمع‌زدن داخل
+   * یک closure باعث می‌شود TypeScript متغیر را همچنان `null` بداند — یعنی
+   * هزینه بی‌صدا صفر گزارش شود. با فهرست، جمع در همان جایی انجام می‌شود که
+   * خوانده می‌شود.
+   */
+  const notesUsages: Anthropic.Usage[] = [];
+  const addUsage = (u: Anthropic.Usage) => { notesUsages.push(u); };
+  const sumUsage = (pick: (u: Anthropic.Usage) => number | null | undefined): number =>
+    notesUsages.reduce((a, u) => a + (pick(u) ?? 0), 0);
 
   if (!opts.skipNotes) {
    try {
@@ -865,21 +1141,48 @@ export async function analyzeClass(
      * همان چیزی است که کاربر نگه می‌دارد و برای گروه درس فوروارد می‌کند.
      * یعنی پیام تلگرام به دروازه‌ها احترام می‌گذاشت و بزرگ‌ترین خروجیِ محصول
      * نه.
+     *
+     * ## چرا نکته‌ها به دو فهرست تقسیم شدند
+     *
+     * دستورِ جزوه می‌گوید «منبعِ دو کادرِ 🎯 و ⚑ فقط اسکلت است». ولی اسکلت
+     * **همهٔ** نکته‌ها را می‌داد — تکلیف، مهلت، منبع، ترتیب کلاس — و مدل
+     * وقتی فهرستی از ده نکته می‌بیند که بالایش نوشته «کادرها را از اینجا
+     * بردار»، برای آن‌ها هم کادر می‌سازد. نتیجه‌اش دقیقاً همان چیزی بود که
+     * جزوه نباید باشد: «⚑ تأکید استاد — کتاب قانون رو سر جلسه بیارید»، در
+     * حالی که همان جمله چند پیام بالاتر با ذکر دقیقه به دانشجو رسیده و
+     * دستورِ جزوه صریح گفته امور کلاس اینجا تکرار نشوند.
+     *
+     * پس `boxable` فقط `exam` و `emphasis` است — همان دو نوعی که کادر
+     * دارند — و بقیه در `other_points` می‌آیند با **فقط** نوع و عنوان: مدل
+     * باید بداند این‌ها گفته شده‌اند تا در متن دوباره کشفشان نکند، ولی
+     * نقل‌قولی در دست نداشته باشد که داخل کادر بگذارد.
      */
-    const skeleton = `### تحلیل ساختاریافتهٔ همین جلسه\n\n\`\`\`json\n${JSON.stringify(
-      {
-        topics: parsed.topics,
+    const boxable = keyPoints
+      .filter((k) => k.kind === "exam" || k.kind === "emphasis")
+      .map((k) => ({
+        kind: k.kind,
+        title: k.title,
+        detail: k.detail,
+        quote: k.evidence.quote,
         /**
          * `at_clock` فیلدِ خام نیست — اینجا ساخته می‌شود چون جزوه ساعت
          * می‌خواهد (`⟨HH:MM:SS⟩`) و اسکلت فقط میلی‌ثانیه دارد. بدون آن،
          * دستورِ «زمان را از اسکلت بردار» به `⟨102300⟩` در PDF می‌رسید،
          * و قاعدهٔ ۸ سیستم هم صریح تبدیل‌کردن را ممنوع کرده است.
          */
-        key_points: keyPoints.map((k) => ({
-          ...k,
-          evidence: { ...k.evidence, at_clock: fmtClock(k.evidence.at_ms, true) },
-        })),
-        glossary: parsed.glossary,
+        at_clock: fmtClock(k.evidence.at_ms, true),
+      }));
+
+    const otherPoints = keyPoints
+      .filter((k) => k.kind !== "exam" && k.kind !== "emphasis")
+      .map((k) => ({ kind: k.kind, title: k.title }));
+
+    const skeleton = `### تحلیل ساختاریافتهٔ همین جلسه\n\n\`\`\`json\n${JSON.stringify(
+      {
+        topics: parsed.topics,
+        boxable,
+        other_points: otherPoints,
+        glossary: report.glossary,
         open_questions: parsed.open_questions,
       },
       null,
@@ -888,24 +1191,33 @@ export async function analyzeClass(
 
     logger.info({ provider: config.NOTES_PROVIDER }, "analysis pass 2 (جزوه)");
 
-    if (config.NOTES_PROVIDER === "openrouter") {
-      // کش روشن است: رونوشت دوباره فرستاده می‌شود ولی به نرخ خواندنِ کش.
-      const res = await orChat(
-        [
-          { role: "system", content: SYSTEM_COMMON },
-          // همان بلوکِ بایت‌به‌بایتِ پاس اول ⇒ اینجا به نرخ خواندنِ کش حساب
-          // می‌شود، نه نرخ ورودی کامل.
-          {
-            role: "user",
-            content: [cached(transcriptText), { type: "text", text: `${TASK_NOTES}\n\n${skeleton}` }],
-          },
-        ],
-        { model: config.OPENROUTER_NOTES_MODEL || config.OPENROUTER_MODEL, maxTokens: 32_000 },
-      );
-      notesMarkdown = stripFence(res.text);
-      usage2 = fakeUsage(res.inputTokens, res.outputTokens);
-      openRouterUsd += res.costUsd;
-    } else {
+    /**
+     * یک فراخوانِ جزوه — با یا بدون دستورِ گسترش.
+     *
+     * `system` و بلوکِ رونوشت در هر دو فراخوان **بایت‌به‌بایت** یکسان‌اند، پس
+     * فراخوان دوم فقط به نرخِ خواندنِ کش حساب می‌شود؛ دستورِ گسترش که چند صد
+     * توکن است بعد از مرزِ کش می‌آید و آن مرز را نمی‌شکند.
+     */
+    const runNotes = async (extra: string | null): Promise<string> => {
+      const task = extra ? `${TASK_NOTES}\n\n${extra}` : TASK_NOTES;
+      if (config.NOTES_PROVIDER === "openrouter") {
+        // کش روشن است: رونوشت دوباره فرستاده می‌شود ولی به نرخ خواندنِ کش.
+        const res = await orChat(
+          [
+            { role: "system", content: SYSTEM_COMMON },
+            // همان بلوکِ بایت‌به‌بایتِ پاس اول ⇒ اینجا به نرخ خواندنِ کش حساب
+            // می‌شود، نه نرخ ورودی کامل.
+            {
+              role: "user",
+              content: [cached(transcriptText), { type: "text", text: `${task}\n\n${skeleton}` }],
+            },
+          ],
+          { model: config.OPENROUTER_NOTES_MODEL || config.OPENROUTER_MODEL, maxTokens: 32_000 },
+        );
+        addUsage(fakeUsage(res.inputTokens, res.outputTokens));
+        openRouterUsd += res.costUsd;
+        return stripFence(res.text);
+      }
       // بلوک کش‌شده و system عیناً تکرار می‌شوند → رونوشت دوباره هزینه نمی‌شود
       const stream = client.messages.stream({
         model: config.NOTES_MODEL,
@@ -918,19 +1230,98 @@ export async function analyzeClass(
             role: "user",
             content: [
               cachedBlock,
-              { type: "text", text: TASK_NOTES },
+              { type: "text", text: task },
               { type: "text", text: skeleton },
             ],
           },
         ],
       });
       const final = await stream.finalMessage();
-      usage2 = final.usage;
-      notesMarkdown = final.content
+      addUsage(final.usage);
+      return final.content
         .filter((b): b is Anthropic.TextBlock => b.type === "text")
         .map((b) => b.text)
         .join("")
         .trim();
+    };
+
+    notesMarkdown = await runNotes(null);
+
+    /**
+     * **یک** فراخوانِ دومِ گسترش، اگر جزوه از کف عقب مانده باشد.
+     *
+     * ## چرا در کد و نه در پرامپت
+     *
+     * جدولِ بودجه ماه‌هاست به مدل می‌رسد و بندِ «پیش از تحویل طولت را بسنج»
+     * هم در دستورِ جزوه هست. باز هم جزوه‌ها زیر کف درمی‌آیند، و دلیلش
+     * ساختاری است نه بی‌دقتی: مدل وقتی متن را نوشت دیگر برنمی‌گردد بازنویسی
+     * کند — «بررسی پیش از تحویل» برای او یعنی یک نگاهِ سطحی، نه بازنویسیِ
+     * کامل. تنها چیزی که واقعاً بازش می‌گرداند این است که جزوهٔ نوشته‌شده را
+     * جلویش بگذاریم و بگوییم کدام بخش‌ها کم آمده‌اند.
+     *
+     * سه قید که هزینه را مهار می‌کنند:
+     *
+     * • **فقط یک بار.** حلقهٔ باز یعنی هزینهٔ بی‌سقف روی کلاسی که واقعاً
+     *   حرفی برای گفتن ندارد.
+     * • **فقط اگر بلندتر شد.** فراخوان دوم می‌تواند جزوه را *کوتاه‌تر* کند
+     *   (مدل خلاصه‌اش می‌کند تا «تمیزتر» شود) و آن‌وقت خرج کرده‌ایم که خروجی
+     *   بدتر شود. نتیجهٔ بدتر دور ریخته می‌شود.
+     * • **بخش‌های عقب‌مانده با بازهٔ زمانی** نام برده می‌شوند، تا مدل بداند
+     *   کجای رونوشت را دوباره باید بخواند.
+     */
+    const budget = notesBudget(parsed.chapters);
+    const floor = budget.reduce((s, c) => s + c.floor, 0);
+    const wordsOf = (md: string) => md.split(/\s+/).filter(Boolean).length;
+    const before = wordsOf(notesMarkdown);
+
+    if (needsExpansion(before, floor)) {
+      /**
+       * کدام بخش‌ها عقب‌اند؟ سرفصل‌های جزوه روی بخش‌های جدول نمی‌افتند، پس
+       * نمی‌شود بخش‌به‌بخش شمرد. به‌جایش بخش‌هایی که بزرگ‌ترین کف را دارند
+       * اول نام برده می‌شوند — همان‌جا که بیشترین جای خالی هست.
+       */
+      const short = [...budget]
+        .sort((a, b) => b.floor - a.floor)
+        .map(
+          (c) =>
+            `«${c.title}» — کف ${c.floor} کلمه — بازهٔ ${fmtClock(c.startMs, true)} تا ${fmtClock(c.endMs, true)}`,
+        );
+
+      const expandTask = `جزوهٔ فعلی این است:
+
+${notesMarkdown}
+
+این جزوه ${before} کلمه شد، در حالی که کفِ مجموعِ بخش‌های درسی ${floor} کلمه است. این بخش‌ها از کفشان عقب‌اند:
+
+${short.map((s) => `- ${s}`).join("\n")}
+
+فقط همین بخش‌ها را با جزئیات رونوشت گسترش بده و **کل جزوه را کامل برگردان** — از تیتر اول تا آخرین سرفصل، نه فقط بخش‌های اضافه‌شده. چیزی از جزوهٔ فعلی حذف نکن.
+
+و راهِ رسیدن به این عدد فقط برداشتنِ چیزی است که در رونوشت هست و در جزوه نیست: کدام مثال، کدام عدد، کدام استدلال، کدام جزئیاتی که استاد برشمرد. جملهٔ توضیحیِ خودت اضافه نکن، مطلبی را با عبارت دیگر تکرار نکن، و مقدمه‌چینی نکن — هر سه از جزوهٔ کوتاه بدتراند.`;
+
+      const expanded = await runNotes(expandTask);
+      const after = wordsOf(expanded);
+      logger.info(
+        { before, after, floor, replaced: after > before },
+        "جزوه از کف عقب بود — فراخوان گسترش",
+      );
+      if (after > before) notesMarkdown = expanded;
+    }
+
+    /**
+     * نام‌ها و عددهایی که در جزوه هستند ولی در رونوشت نیستند — فقط **هشدار**.
+     *
+     * چیزی حذف نمی‌شود و این عمدی است: سنجه هنوز روی دادهٔ واقعی کالیبره
+     * نشده و حذفِ خودکار می‌تواند نامی را ببرد که استاد واقعاً گفته و
+     * رونویسیِ خودکار غلط نوشته. اول باید در لاگ دیده شود چه چیزی و چقدر
+     * گیر می‌افتد.
+     */
+    unsupportedList = unsupportedMentions(notesMarkdown, transcriptNormalized(transcript.utterances));
+    if (unsupportedList.length) {
+      logger.warn(
+        { mentions: unsupportedList },
+        "نام یا عددی در جزوه هست که در رونوشت نیست — احتمالاً از دانشِ خودِ مدل آمده",
+      );
     }
    } catch (e) {
       // پاس اول تمام شده و گزارش آماده است. اگر مدلِ جزوه در دسترس نبود،
@@ -943,28 +1334,43 @@ export async function analyzeClass(
   logger.info(
     {
       pass1Cache: { write: usage1.cache_creation_input_tokens, read: usage1.cache_read_input_tokens },
-      pass2Cache: usage2
-        ? { write: usage2.cache_creation_input_tokens, read: usage2.cache_read_input_tokens }
+      // دو فراخوان هم که باشد (جزوه و گسترشش)، جمعِ هر دو گزارش می‌شود
+      pass2Calls: notesUsages.length,
+      pass2Cache: notesUsages.length
+        ? {
+            write: sumUsage((u) => u.cache_creation_input_tokens),
+            read: sumUsage((u) => u.cache_read_input_tokens),
+          }
         : null,
-      dropped: { unverified: droppedUnverified, importance: droppedImportance, actions: demotedActions },
+      dropped: {
+        unverified: droppedUnverified,
+        importance: droppedImportance,
+        hypothetical: droppedHypothetical,
+        emptySyllabus: droppedEmptySyllabus,
+        actions: demotedActions,
+      },
     },
     "analysis done",
   );
 
   const analysisCost = config.ANALYSIS_PROVIDER === "openrouter" ? 0 : costOf(config.ANALYSIS_MODEL, usage1);
   const notesCost =
-    !usage2 || config.NOTES_PROVIDER === "openrouter" ? 0 : costOf(config.NOTES_MODEL, usage2);
+    notesUsages.length === 0 || config.NOTES_PROVIDER === "openrouter"
+      ? 0
+      : notesUsages.reduce((a, u) => a + costOf(config.NOTES_MODEL, u), 0);
 
   return {
     report,
     notesMarkdown,
     notesError,
+    unsupportedMentions: unsupportedList,
     usage: {
-      inputTokens: (usage1.input_tokens ?? 0) + (usage2?.input_tokens ?? 0),
-      outputTokens: (usage1.output_tokens ?? 0) + (usage2?.output_tokens ?? 0),
+      inputTokens: (usage1.input_tokens ?? 0) + sumUsage((u) => u.input_tokens),
+      outputTokens: (usage1.output_tokens ?? 0) + sumUsage((u) => u.output_tokens),
       cacheWriteTokens:
-        (usage1.cache_creation_input_tokens ?? 0) + (usage2?.cache_creation_input_tokens ?? 0),
-      cacheReadTokens: (usage1.cache_read_input_tokens ?? 0) + (usage2?.cache_read_input_tokens ?? 0),
+        (usage1.cache_creation_input_tokens ?? 0) + sumUsage((u) => u.cache_creation_input_tokens),
+      cacheReadTokens:
+        (usage1.cache_read_input_tokens ?? 0) + sumUsage((u) => u.cache_read_input_tokens),
       estimatedUsd: analysisCost + notesCost + openRouterUsd,
     },
   };
