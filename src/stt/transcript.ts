@@ -2,6 +2,7 @@ import type { TranscriptToken } from "@soniox/node";
 import { TimeMap } from "../audio/ffmpeg.js";
 import { fmtClock } from "../util/time.js";
 import { normalizeFa, containmentScore, tokens } from "../util/text.js";
+import { logger } from "../util/logger.js";
 
 export type SpeakerRole = "استاد" | "دانشجو" | "نامشخص";
 
@@ -328,6 +329,8 @@ export function anchorTopics(
 
   const anchors: number[] = [];
   let floorIdx = 0;
+  /** چند سرفصل هیچ شاهدی در رونوشت نداشتند و به حدسِ مدل برگشتند. */
+  let unanchored = 0;
 
   for (const topic of topics) {
     /**
@@ -402,7 +405,32 @@ export function anchorTopics(
     if (at <= prev) at = Math.min(durationMs, prev + MIN_TOPIC_GAP_MS);
     anchors.push(Math.min(durationMs, at));
     if (hit >= 0) floorIdx = hit;
+    else unanchored++;
   }
+
+  /**
+   * هشدار وقتی لنگر پیدا نشده و فهرست دارد **آبشار** می‌شود.
+   *
+   * وقتی هیچ پنجره‌ای به آستانه نمی‌رسد، تنها چیزی که می‌ماند حدسِ خودِ مدل
+   * است — و اگر آن حدس پرت باشد، قید «هر سرفصل بعد از قبلی» بقیه را هم
+   * دنبال خودش می‌کشد. روی سنجه، یک اجرا از سه اجرا سه سرفصل را با فاصلهٔ
+   * یک ثانیه پشت هم داد (۰۱:۲۶:۰۷، ۰۱:۲۶:۰۸، ۰۱:۲۶:۰۹).
+   *
+   * علتش کیفیتِ `terms` همان اجراست، نه خودِ لنگر: در دو اجرای دیگرِ همان
+   * صوت، همین سرفصل‌ها درست نشستند. اینجا چیزی اصلاح نمی‌شود — زمانِ تقریبی
+   * از نبودنش بهتر است — ولی باید در لاگ دیده شود، وگرنه دقیقاً همان شکستِ
+   * بی‌صدایی است که این تابع یک بار برای رفعش بازنویسی شد.
+   */
+  const cascade = anchors.filter(
+    (ms, i) => i > 0 && ms - anchors[i - 1]! <= MIN_TOPIC_GAP_MS,
+  ).length;
+  if (unanchored > 0 && cascade >= 2) {
+    logger.warn(
+      { unanchored, cascade, total: topics.length },
+      "لنگرِ چند سرفصل پیدا نشد و زمان‌ها پشت هم چیده شدند — terms این اجرا ضعیف بوده",
+    );
+  }
+
   return anchors;
 }
 
