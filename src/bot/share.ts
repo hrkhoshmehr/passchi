@@ -258,6 +258,10 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
   );
   await send(S.extractedMessage(r), asReply);
   await send(S.timelineMessage(r, linkable), asReply);
+  // جلسهٔ اشتراکی همان گزارش را می‌گیرد؛ اگر این خط نباشد، هم‌کلاسیِ گیرنده
+  // بخشی از خروجیِ همان جلسه را نمی‌بیند. خالی برمی‌گردد وقتی جلسه این پاس
+  // را نداشته، پس در حالت پیش‌فرض هیچ پیامی اضافه نمی‌شود.
+  await send(S.qaMessage(r), asReply);
 
   // `sendDoc` مسیر بله را دستی می‌فرستد و خطا را لاگ می‌کند؛ توضیح در
   // `bale-upload.ts`. پیش‌تر اینجا `.catch(() => {})` بود و کاربر بله جزوه و
