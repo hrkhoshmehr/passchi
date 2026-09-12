@@ -74,7 +74,7 @@ for (const id of ["confirm-dur", "confirm-cost", "confirm-have", "confirm-go", "
   check(`عنصر ${id} هست`, html.includes(`id="${id}"`));
 }
 check("اپ پس از آپلود قیمت را نشان می‌دهد", /askConfirm\(out, file\.name\)/.test(js));
-check("تأیید به سرور POST می‌شود", /\/confirm`, \{ method: "POST" \}/.test(js));
+check("تأیید به سرور POST می‌شود", /\/confirm`, \{\s*\n?\s*method: "POST"/.test(js));
 check(
   "موجودی کم، دکمهٔ تأیید را می‌بندد",
   /\$\("confirm-go"\)\.disabled = !out\.enough/.test(js),
@@ -212,9 +212,40 @@ check("دکمه‌های ربات فقط روی دسکتاپ پنهان می‌�
   check("ربات پیش از شروع، هزینه را می‌پرسد", intake.includes("confirmCostMessage"));
   check("جلسه در حالت انتظارِ تأیید نگه داشته می‌شود", /status: "awaiting_confirm"/.test(intake));
   check("متن تأیید هزینه هست", strings.includes("export function confirmCostMessage"));
-  check("دکمهٔ شروع و انصراف هر دو هستند", /`go:\$\{sessionId\}`/.test(intake) && /`nogo:\$\{sessionId\}`/.test(intake));
+  // صفحه‌کلید تأیید حالا یک تابع است، چون سه مسیر ورودی همان صفحه را می‌سازند
+  // و تصمیمِ تقسیم باید روی هر سه‌شان باشد.
+  const confirmKb = bot.slice(
+    bot.indexOf("function confirmKeyboard("),
+    bot.indexOf("function lowBalanceKeyboard("),
+  );
+  check("همهٔ مسیرها یک صفحه‌کلیدِ تأیید می‌سازند", intake.includes("confirmKeyboard(sessionId)"));
+  check(
+    "دکمهٔ شروع و انصراف هر دو هستند",
+    /`go:\$\{sessionId\}`/.test(confirmKb) && /`nogo:\$\{sessionId\}`/.test(confirmKb),
+  );
   check("دست‌کدِ شروع هست", /callbackQuery\(\/\^go:/.test(bot));
   check("دست‌کدِ انصراف هست", /callbackQuery\(\/\^nogo:/.test(bot));
+
+  // ── تصمیمِ تقسیم، پیش از خرج‌شدن سکه ─────────────────────────────────────
+  //
+  // پیشنهاد تقسیم فقط *بعد* از تحویل می‌آمد: همان لحظه‌ای که کاربر چیزی را
+  // که می‌خواست گرفته و دلیلی برای زدن دکمه ندارد. حالا سرِ صفحهٔ تأیید هم
+  // هست، جایی که دارد به هزینه نگاه می‌کند.
+  check("صفحهٔ تأیید گزینهٔ تقسیم دارد", /`spre:\$\{sessionId\}`/.test(confirmKb));
+  check("صفحهٔ سکهٔ کم هم گزینهٔ تقسیم دارد", /`spre:\$\{sessionId\}`/.test(
+    bot.slice(bot.indexOf("function lowBalanceKeyboard("), bot.indexOf("/** درسی که خودمان")),
+  ));
+  check("دست‌کدِ تقسیمِ پیش از پرداخت هست", /callbackQuery\(\/\^spre:/.test(bot));
+  check("انتخابِ تعدادِ پیش از پرداخت هست", /callbackQuery\(\/\^sontp:/.test(bot));
+  check("انتخابِ پیش از پرداخت اشتراک را روشن می‌کند", /sontp:[\s\S]{0,600}setShareEnabled\(sessionId, true\)/.test(bot));
+  check("متن دکمه در strings است، نه در دست‌کد", /CONFIRM_BTN/.test(strings) && !/"👥 با هم‌کلاسیا تقسیم می‌کنم"/.test(bot));
+  check("دکمهٔ پس از تحویل سرِ جایش مانده", /callbackQuery\(\/\^son:/.test(bot));
+  // و اگر از قبل روشن شده، لینک دعوت خودش می‌آید — نه اینکه دوباره پرسیده شود
+  check("لینک دعوت پس از تحویل خودکار می‌آید", /if \(shareOn\) await sendInvitation\(/.test(bot));
+  check("مسیر مینی‌اپ هم تقسیم را می‌پذیرد", /if \(share\.share\) \{/.test(server));
+  check("تقسیم پیش از startJob نوشته می‌شود", server.indexOf("if (share.share) {") < server.indexOf("startJob({"));
+  check("مینی‌اپ تیکِ تقسیم دارد", html.includes('id="confirm-share"'));
+  check("مینی‌اپ تعداد را می‌فرستد", /people: Number\(\$\("confirm-share-n"\)\.value\)/.test(js));
 
   // انصراف نباید بن‌بست باشد: راهِ برگشت باید همان‌جا بماند
   const nogo = bot.slice(bot.indexOf("callbackQuery(/^nogo:"), bot.indexOf("callbackQuery(/^txt:"));

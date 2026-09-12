@@ -82,14 +82,28 @@ export function shareToggleKeyboard(sessionId: string, enabled: boolean): Inline
   );
 }
 
-/** انتخابِ تعدادِ کلاس — سهمِ ثابتِ هر نفر از همین درمی‌آید. */
-export function shareTargetKeyboard(sessionId: string): InlineKeyboard {
+/**
+ * انتخابِ تعدادِ کلاس — سهمِ ثابتِ هر نفر از همین درمی‌آید.
+ *
+ * **گزینهٔ «۱ نفر» حذف شد و برنمی‌گردد.** سهم با آن نصفِ کلِ جلسه می‌شد
+ * (۴۵ سکه روی یک کلاس ۹۰ دقیقه‌ای) و از هدیهٔ ۲۰ سکه‌ایِ تازه‌وارد بیشتر بود؛
+ * یعنی همان دکمه‌ای که قرار بود کلاس را بیاورد، اولین نفر را بیرون می‌انداخت.
+ * چراییِ کامل در `SHARE_TARGET_MIN`.
+ *
+ * `prefix` دو مسیر را از هم جدا می‌کند: `sont` انتخابِ **پس از تحویل** است و
+ * بلافاصله لینک دعوت می‌فرستد، `sontp` انتخابِ **پیش از پرداخت** روی صفحهٔ
+ * تأیید که هنوز نتیجه‌ای برای دعوت‌کردن ندارد.
+ */
+export function shareTargetKeyboard(
+  sessionId: string,
+  prefix: "sont" | "sontp" = "sont",
+): InlineKeyboard {
   return new InlineKeyboard()
-    .text("۱ نفر", `sont:${sessionId}:1`)
-    .text("۵ نفر", `sont:${sessionId}:5`)
+    .text("۵ نفر", `${prefix}:${sessionId}:5`)
+    .text("۱۰ نفر", `${prefix}:${sessionId}:10`)
     .row()
-    .text("۱۰ نفر", `sont:${sessionId}:10`)
-    .text("۲۰ نفر", `sont:${sessionId}:20`);
+    .text("۲۰ نفر", `${prefix}:${sessionId}:20`)
+    .text("۳۰ نفر", `${prefix}:${sessionId}:30`);
 }
 
 /** پیش‌نمایشی که تازه‌وارد پیش از پرداخت می‌بیند. */
@@ -268,6 +282,15 @@ export interface JoinOutcome {
   ok: boolean;
   message: string;
   session?: SessionRow;
+  /**
+   * دکمه‌ای که باید زیر پیام بنشیند — امروز فقط «شارژ حساب» وقتی سکه کم است.
+   *
+   * صداکننده (`jdo:`) پیش از این فقط متن را می‌فرستاد و صفحه‌کلیدِ دعوت را هم
+   * برداشته بود، پس تازه‌واردی که از گروه درس آمده بود در یک پیامِ خشک گیر
+   * می‌کرد. پاسخ باید راهِ خروج را با خودش بیاورد، نه اینکه به صداکننده
+   * بسپاردش.
+   */
+  keyboard?: InlineKeyboard;
 }
 
 /** برداشتن + تحویل. خبرِ بازگشتِ سهم به مالک هم از اینجا می‌رود. */
@@ -283,7 +306,19 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
       return { ok: true, message: "این جلسه از قبل مال خودته — دوباره فرستادم 👍" };
     }
     if (e instanceof InsufficientCredit) {
-      return { ok: false, message: S.lowBalanceMessage(e.needed, e.balance) };
+      /**
+       * سکهٔ کم روی مسیرِ **پیوستن** هم باید دکمهٔ شارژ داشته باشد.
+       *
+       * همان قاعده‌ای که مسیر آپلود از ممیزی لانچ گرفت: تازه‌وارد از گروه درس
+       * می‌آید، ربات را نمی‌شناسد، و «از فلان بخش شارژ کن» یعنی گشتن دنبال
+       * چیزی که ندیده. کسری هم در خودِ متن گفته می‌شود، چون تفاضلِ دو عدد را
+       * کسی وسط تصمیم‌گرفتن حساب نمی‌کند.
+       */
+      return {
+        ok: false,
+        message: S.lowBalanceMessage(e.needed, e.balance),
+        keyboard: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
+      };
     }
     if (e instanceof NotShareable) return { ok: false, message: e.message };
     throw e;
