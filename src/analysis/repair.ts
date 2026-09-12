@@ -154,6 +154,32 @@ export function repairAnalysis(input: unknown): Obj {
       }))
       .filter((k) => k.evidence !== null && k.title),
 
+    /**
+     * جفت‌های پرسش و پاسخ — همان انحراف‌های همیشگی، به‌علاوهٔ یکی مخصوصِ خودش.
+     *
+     * مدل ضعیف اینجا سه کار می‌کند: کلیدِ nullable را حذف می‌کند (پس
+     * `question_evidence` غایب می‌شود نه null)، نامِ فیلد را عوض می‌کند
+     * (`q`/`a` به‌جای `question`/`answer` — تابع `asString` همان‌ها را هم
+     * می‌خواند)، و **شاهدِ پاسخ را جا می‌اندازد**.
+     *
+     * جفتِ بی‌شاهد همین‌جا می‌افتد، دقیقاً به همان دلیلِ نکته‌ها: ترمیم حق
+     * ندارد دروازهٔ راستی‌آزمایی را دور بزند. و شاهدِ پرسش اگر خراب باشد
+     * فقط null می‌شود، نه اینکه جفت را بکشد — نبودنش یعنی «دانشجو نپرسیده»
+     * که یک حالتِ کاملاً عادی است.
+     *
+     * وقتی پرچم خاموش است این کلید در اسکیما نیست و zod خودش حذفش می‌کند،
+     * پس بی‌قید و شرط ساختنش بی‌خطر است.
+     */
+    qa_pairs: arr(r.qa_pairs)
+      .filter(isObj)
+      .map((p) => ({
+        answer_evidence: evidence(p.answer_evidence ?? p.evidence),
+        question_evidence: evidence(p.question_evidence),
+        question: asString(p.question ?? p.q) ?? "",
+        answer: asString(p.answer ?? p.a) ?? "",
+      }))
+      .filter((p) => p.answer_evidence !== null && p.question.trim() && p.answer.trim()),
+
     topics: arr(r.topics)
       .filter(isObj)
       .map((t) => ({

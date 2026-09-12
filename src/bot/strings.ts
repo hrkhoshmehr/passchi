@@ -334,6 +334,41 @@ export function extractedMessage(r: AnalysisReport): string {
 }
 
 /**
+ * پیام «پرسش و پاسخ جلسه» — فقط وقتی پاسش اجرا شده باشد.
+ *
+ * شرطِ نمایش خودِ **داده** است نه پرچم: گزارش‌های قدیمیِ بایگانی این فیلد را
+ * ندارند و نباید کادر خالی بگیرند، و اگر پرچم روی سرور خاموش شود گزارشی که
+ * قبلاً ساخته شده همچنان درست چاپ می‌شود.
+ *
+ * دو جنسِ جفت **در خودِ متن** از هم جدا می‌شوند، نه فقط با یک نشان کوچک:
+ * «دانشجو پرسید» یک ادعای واقعی دربارهٔ کلاس است و اگر خواننده اشتباه
+ * بفهمدش، سؤالی را مهم می‌شمارد که هیچ‌کس نپرسیده. برای همین جنسِ اول عینِ
+ * حرفِ دانشجو را هم نشان می‌دهد و جنسِ دوم صریح می‌گوید «سؤال از ما است».
+ */
+export function qaMessage(r: AnalysisReport): string {
+  const pairs = r.qa_pairs ?? [];
+  if (pairs.length === 0) return "";
+
+  const out = ["❓ <b>پرسش و پاسخ جلسه</b>", "<i>برای مرور، با عین جواب استاد.</i>"];
+  for (const p of pairs) {
+    out.push("");
+    out.push(
+      `${p.source === "asked" ? "🙋 <i>دانشجو پرسید</i>" : "🧠 <i>سؤال خودآزمایی</i>"}`,
+    );
+    out.push(`<b>${escapeHtml(p.question.trim())}</b>`);
+    out.push(fmtClockLink(p.answer_evidence.at_ms));
+    const inner: string[] = [];
+    if (p.source === "asked" && p.question_evidence) {
+      inner.push(`دانشجو: «${escapeHtml(trimQuote(p.question_evidence.quote))}»`);
+    }
+    if (p.answer.trim()) inner.push(escapeHtml(p.answer.trim()));
+    inner.push(`استاد: «${escapeHtml(trimQuote(p.answer_evidence.quote))}»`);
+    out.push(`<blockquote>${inner.join("\n\n")}</blockquote>`);
+  }
+  return out.join("\n");
+}
+
+/**
  * ترتیب نمایش، بر اساس «چقدر فوری است» — تعریفش در schema.js است چون اعمالِ
  * سقف در تحلیل هم به همان ترتیب نیاز دارد و دو نسخه شدنش یعنی سقف چیزی را
  * ببُرد که کاربر انتظار دارد بالای فهرست باشد.

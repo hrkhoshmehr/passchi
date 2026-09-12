@@ -150,6 +150,9 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
   );
   await send(S.extractedMessage(r), asReply);
   await send(S.timelineMessage(r, linkable), asReply);
+  // خالی برمی‌گردد وقتی این جلسه پاسِ پرسش و پاسخ نداشته — یعنی حالت پیش‌فرض
+  // یک پیام هم بیشتر نمی‌فرستد و `send` رشتهٔ خالی را همان اول رد می‌کند.
+  await send(S.qaMessage(r), asReply);
 
   if (s.pdf_path && fs.existsSync(s.pdf_path)) {
     await sendFileTo(

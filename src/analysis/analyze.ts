@@ -8,15 +8,18 @@ import { anchorTopics, renderForModel, verifyQuote } from "../stt/transcript.js"
 import { normalizeFa } from "../util/text.js";
 import {
   ClassAnalysis,
+  ClassAnalysisWithQa,
   type AnalysisReport,
   type Evidence,
+  type QaPair,
   type SegmentKind,
   type TimelineStats,
   type VerifiedEvidence,
   MAX_KEY_POINTS,
+  MAX_QA_PAIRS,
   keyPointRank,
 } from "./schema.js";
-import { SYSTEM_COMMON, TASK_ANALYSIS, TASK_NOTES, transcriptBlock } from "./prompts.js";
+import { SYSTEM_COMMON, TASK_ANALYSIS, TASK_NOTES, TASK_QA, transcriptBlock } from "./prompts.js";
 import { cached, chat as orChat, extractJson } from "./openrouter.js";
 import { isDegenerate, repairAnalysis } from "./repair.js";
 import { transcriptText as transcriptNormalized, unsupportedMentions } from "./notes-check.js";
@@ -114,6 +117,100 @@ function verifyEvidence(t: BuiltTranscript, e: Evidence | null): VerifiedEvidenc
     // بافت فقط برای دروازه‌هاست و هیچ‌جا چاپ نمی‌شود — توضیحش در schema.ts
     context: m.ok ? m.utteranceText : "",
   };
+}
+
+/**
+ * دروازهٔ «پرسش و پاسخ جلسه» — همان مسیرِ نکته‌ها، بی‌کم‌وکاست.
+ *
+ * ## چرا برچسبِ «دانشجو پرسید» در کد ساخته می‌شود
+ *
+ * «این سؤال را دانشجو از استاد پرسید» یک ادعای واقعی دربارهٔ کلاس است، نه
+ * یک انتخابِ سلیقه‌ای: دانشجویی که آن را می‌خواند فرض می‌کند سؤال سرِ کلاس
+ * مطرح شده و ممکن است روی همین حساب کند که مهم است. اگر تصمیمش دستِ مدل
+ * باشد، دقیقاً همان جنسِ ادعای تفسیری می‌شود که `emphasis` بود — و آنجا
+ * دیدیم که پرامپت جلویش را نمی‌گیرد.
+ *
+ * پس برچسب از **شاهد** درمی‌آید، با سه شرط که هر سه باید برقرار باشند:
+ *
+ *   ۱) نقل‌قولِ پرسش در رونوشت پیدا شود (همان دروازه، همان آستانه)،
+ *   ۲) پاره‌گفتاری که پیدا شد نقشش «دانشجو» باشد — نه استاد، و نه
+ *      «نامشخص». کلاسی که تفکیک گوینده‌اش قطعی نیست هیچ جفتِ `asked`
+ *      نمی‌گیرد، و این عمدی است: «نگفتن از غلط گفتن بهتر است»، همان قاعده‌ای
+ *      که در نقش‌دهیِ خودِ رونوشت هم اعمال شده،
+ *   ۳) پرسش و پاسخ از یک پاره‌گفتار نیامده باشند، وگرنه استاد دارد سؤال
+ *      خودش را جواب می‌دهد.
+ *
+ * هر جفتی که شرط‌ها را نداشته باشد **حذف نمی‌شود**؛ به `implied` تنزل
+ * می‌کند و شاهدِ پرسشش دور ریخته می‌شود. چیزی از دست نمی‌رود چون خودِ
+ * پرسش‌وپاسخ سر جایش می‌ماند، و ادعای نادرست هم به دانشجو نمی‌رسد.
+ *
+ * حذف فقط یک علت دارد و همان علتِ نکته‌هاست: **پاسخ به رونوشت نچسبید.**
+ */
+export function gateQaPairs(
+  t: BuiltTranscript,
+  pairs: QaPair[],
+): { kept: NonNullable<AnalysisReport["qa_pairs"]>; dropped: number; demoted: number } {
+  const kept: NonNullable<AnalysisReport["qa_pairs"]> = [];
+  let dropped = 0;
+  let demoted = 0;
+  const seen = new Set<string>();
+
+  for (const p of pairs) {
+    const ev = verifyEvidence(t, p.answer_evidence);
+    if (!ev || !ev.verified) {
+      dropped++;
+      logger.debug({ question: p.question, score: ev?.score }, "پاسخ به رونوشت نچسبید — جفت حذف شد");
+      continue;
+    }
+    /**
+     * پاسخی که از دهانِ دانشجو درآمده، پاسخِ درس نیست.
+     *
+     * نقل‌قول واقعی است و از دروازهٔ اول رد می‌شود، ولی اعتبارش را از «استاد
+     * این را گفت» می‌گیرد. هم‌کلاسی‌ای که وسط کلاس حدس می‌زند، منبعِ مرورِ
+     * امتحان نیست.
+     */
+    if (ev.speaker === "دانشجو") {
+      dropped++;
+      logger.debug({ question: p.question }, "پاسخ از گویندهٔ دانشجو بود — جفت حذف شد");
+      continue;
+    }
+
+    const key = `${ev.at_ms}|${normalizeFa(ev.quote)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const qEv = verifyEvidence(t, p.question_evidence);
+    const asked =
+      qEv !== null && qEv.verified && qEv.speaker === "دانشجو" && qEv.at_ms !== ev.at_ms;
+    if (p.question_evidence && !asked) {
+      demoted++;
+      logger.info(
+        { question: p.question, score: qEv?.score, speaker: qEv?.speaker },
+        "شاهدِ پرسشِ دانشجو تأیید نشد — جفت به «پرسش خودآزمایی» تنزل کرد",
+      );
+    }
+    kept.push({
+      question: p.question,
+      answer: p.answer,
+      answer_evidence: ev,
+      question_evidence: asked ? qEv : null,
+      source: asked ? "asked" : "implied",
+    });
+  }
+
+  /**
+   * سقف در کد، و مرتب‌سازی پیش از بریدن — همان قاعدهٔ `MAX_KEY_POINTS`.
+   *
+   * جفتِ `asked` بالاتر می‌نشیند چون خودِ کلاس رویش وقت گذاشته و ما فقط
+   * گزارشش می‌کنیم؛ جفتِ خودآزمایی را ما ساخته‌ایم. اگر قرار است چیزی
+   * بریده شود، اول ساختهٔ ما.
+   */
+  const ordered = [...kept].sort(
+    (a, b) =>
+      (a.source === "asked" ? 0 : 1) - (b.source === "asked" ? 0 : 1) ||
+      a.answer_evidence.at_ms - b.answer_evidence.at_ms,
+  );
+  return { kept: ordered.slice(0, MAX_QA_PAIRS), dropped, demoted };
 }
 
 /**
@@ -857,10 +954,27 @@ function warnIfCompressed(chapters: ClassAnalysis["chapters"], durationMs: numbe
  * رویش می‌زند و صوت جایی نمی‌رود، و کل قرارداد «ذکر منبع» زیر سؤال می‌رود.
  * سرفصلی که شروعش بیرون از فایل است حذف می‌شود، بقیه به بازهٔ معتبر می‌آیند.
  */
-function clampTimes(a: ClassAnalysis, durationMs: number): ClassAnalysis {
+function clampTimes<T extends ClassAnalysis & { qa_pairs?: QaPair[] }>(
+  a: T,
+  durationMs: number,
+): T {
   const clamp = (ms: number) => Math.min(Math.max(0, Math.round(ms)), durationMs);
   return {
     ...a,
+    // زمانِ بیرون از فایل در جفت‌های پرسش و پاسخ هم همان بلا را دارد: کاربر
+    // رویش می‌زند و صوت جایی نمی‌رود. راستی‌آزمایی بعداً زمان را از خودِ
+    // رونوشت می‌گیرد، ولی جفتی که حذف می‌شود هم نباید عددِ خارج از بازه ببرد.
+    ...(a.qa_pairs
+      ? {
+          qa_pairs: a.qa_pairs.map((p) => ({
+            ...p,
+            answer_evidence: { ...p.answer_evidence, at_ms: clamp(p.answer_evidence.at_ms) },
+            question_evidence: p.question_evidence
+              ? { ...p.question_evidence, at_ms: clamp(p.question_evidence.at_ms) }
+              : null,
+          })),
+        }
+      : {}),
     chapters: normalizeChapters(a.chapters, durationMs),
     topics: a.topics
       .filter((t) => t.start_ms < durationMs)
@@ -894,6 +1008,19 @@ export async function analyzeClass(
 
   const system: Anthropic.TextBlockParam[] = [{ type: "text", text: SYSTEM_COMMON }];
 
+  /**
+   * پرچمِ «پرسش و پاسخ جلسه» — دو چیز را با هم عوض می‌کند و باید با هم عوض
+   * شوند: اسکیمای پاس اول و دستورش. اسکیمای بی‌دستور یعنی فیلدی که مدل
+   * نمی‌داند چطور پرش کند، و دستورِ بی‌اسکیما یعنی چند صد توکنِ بی‌مصرف.
+   *
+   * دستور به **انتهای** `TASK_ANALYSIS` می‌چسبد، یعنی بعد از بلوکِ
+   * کش‌شونده؛ نه `SYSTEM_COMMON` دست می‌خورد و نه خودِ بلوک، پس مرزِ کش
+   * دست‌نخورده می‌ماند و پاس دوم همچنان کش می‌خورد.
+   */
+  const withQa = config.QA_PAIRS;
+  const analysisSchema = withQa ? ClassAnalysisWithQa : ClassAnalysis;
+  const analysisTask = withQa ? `${TASK_ANALYSIS}\n\n${TASK_QA}` : TASK_ANALYSIS;
+
   logger.info(
     {
       chars: rendered.length,
@@ -903,18 +1030,19 @@ export async function analyzeClass(
     "analysis pass 1",
   );
 
-  let parsed: ClassAnalysis;
+  // `qa_pairs` وقتی پرچم خاموش است اصلاً در اسکیما نیست و zod حذفش می‌کند
+  let parsed: ClassAnalysis & { qa_pairs?: QaPair[] };
   let usage1: Anthropic.Usage;
   let openRouterUsd = 0;
 
   if (config.ANALYSIS_PROVIDER === "openrouter") {
-    const format = zodOutputFormat(ClassAnalysis);
+    const format = zodOutputFormat(analysisSchema);
     const res = await orChat(
       [
         { role: "system", content: SYSTEM_COMMON },
         // رونوشت بلوکِ کش‌شونده است و در هر دو پاس عیناً یکسان می‌رود؛ دستور
         // که کوتاه است **بعد** از آن می‌آید تا مرزِ کش را نشکند.
-        { role: "user", content: [cached(transcriptText), { type: "text", text: TASK_ANALYSIS }] },
+        { role: "user", content: [cached(transcriptText), { type: "text", text: analysisTask }] },
       ],
       {
         model: config.OPENROUTER_ANALYSIS_MODEL || config.OPENROUTER_MODEL,
@@ -933,7 +1061,7 @@ export async function analyzeClass(
         `تحلیل قابل استفاده نبود: ${degenerate}. مدل ${res.model} برای این کار ضعیف است.`,
       );
     }
-    parsed = ClassAnalysis.parse(repaired);
+    parsed = analysisSchema.parse(repaired);
     usage1 = fakeUsage(res.inputTokens, res.outputTokens);
     openRouterUsd += res.costUsd;
   } else {
@@ -944,9 +1072,9 @@ export async function analyzeClass(
       thinking: { type: "adaptive" },
       output_config: {
         effort: config.ANALYSIS_EFFORT,
-        format: zodOutputFormat(ClassAnalysis),
+        format: zodOutputFormat(analysisSchema),
       },
-      messages: [{ role: "user", content: [cachedBlock, { type: "text", text: TASK_ANALYSIS }] }],
+      messages: [{ role: "user", content: [cachedBlock, { type: "text", text: analysisTask }] }],
     });
     if (!pass1.parsed_output) throw new Error("تحلیل ساختاریافته برنگشت — خروجی مدل با اسکیما نخواند.");
     parsed = pass1.parsed_output;
@@ -1074,6 +1202,18 @@ export async function analyzeClass(
     const obligation = fixed === "homework" ? obligationOf(ev.quote) : "required";
     keyPoints.push({ ...kp, kind: fixed, obligation, evidence: ev });
   }
+
+  /**
+   * جفت‌های پرسش و پاسخ از **همان** دروازه رد می‌شوند و در **همان**
+   * شمارنده‌ها شمرده می‌شوند.
+   *
+   * شمارندهٔ جدا وسوسه‌کننده بود، ولی `droppedCitations` همان عددی است که در
+   * گزارش و بایگانی دیده می‌شود؛ اگر جفتِ حذف‌شده در آن نیاید، یک پاسِ کاملِ
+   * تولید بی‌صدا بیرون از دیدِ ما کار می‌کند. تفکیکش برای عیب‌یابی در لاگ
+   * می‌آید، همان‌جا که تفکیکِ نکته‌ها هم می‌آید.
+   */
+  const qa = parsed.qa_pairs ? gateQaPairs(transcript, parsed.qa_pairs) : null;
+  if (qa) droppedUnverified += qa.dropped;
 
   const professorActions = parsed.professor_actions.map((a) => {
     const ev = verifyEvidence(transcript, a.evidence);
@@ -1244,6 +1384,9 @@ export async function analyzeClass(
     ...parsed,
     glossary,
     key_points: capped,
+    // `undefined` یعنی «این جلسه اصلاً پاس پرسش و پاسخ نداشت» و آرایهٔ خالی
+    // یعنی «داشت و چیزی از دروازه رد نشد» — تفاوتشان در نمایش دیده می‌شود.
+    qa_pairs: qa ? qa.kept : undefined,
     professor_actions: professorActions,
     composition: computeComposition(parsed.chapters, meta.originalDurationMs, meta.silenceMs),
     silenceMs: meta.silenceMs,
@@ -1493,7 +1636,12 @@ ${short.map((s) => `- ${s}`).join("\n")}
         emptySyllabus: droppedEmptySyllabus,
         courseLevel: droppedCourseLevel,
         actions: demotedActions,
+        // تفکیکِ سهمِ پرسش و پاسخ از همان `unverified` بالا، برای عیب‌یابی
+        qaUnverified: qa?.dropped ?? null,
       },
+      qa: qa
+        ? { kept: qa.kept.length, asked: qa.kept.filter((p) => p.source === "asked").length, demoted: qa.demoted }
+        : null,
     },
     "analysis done",
   );
