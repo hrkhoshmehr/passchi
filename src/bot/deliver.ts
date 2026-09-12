@@ -14,6 +14,7 @@
  */
 
 import fs from "node:fs";
+import { InlineKeyboard, type Api } from "grammy";
 import { sendFileTo } from "./bale-upload.js";
 import { config } from "../config.js";
 import { audioExt } from "../audio/container.js";
@@ -21,6 +22,7 @@ import { logger } from "../util/logger.js";
 import { escapeHtml, transcriptBytes } from "../util/text.js";
 import { transcodeForTelegram } from "../audio/ffmpeg.js";
 import { getCourse, getUser, sessionReport, updateSession, type SessionRow } from "../db/index.js";
+import type { Platform } from "../db/identity.js";
 import { deliveryChannel } from "./notify.js";
 import { invitationMessage, shareToggleKeyboard } from "./share.js";
 import * as S from "./strings.js";
@@ -61,11 +63,170 @@ async function playableAudio(s: SessionRow): Promise<{ file: string; temp: boole
   }
 }
 
+/* ─── چیزهای پشتِ دکمه ────────────────────────────────────────────────────── */
+
 /**
- * گزارش کامل جلسه را به چتِ ربات بفرست.
+ * پیشوندِ کال‌بکِ هر بخشِ به‌تعویق‌افتاده.
  *
- * ترتیب عمدی است: اول صوت، بعد سه پیام گزارش که **ریپلای همان صوت**اند.
+ * کوتاه‌اند چون `callback_data` تلگرام شصت‌وچهار بایت بیشتر نیست و شناسهٔ
+ * جلسه هم در همان رشته می‌آید.
+ */
+export const MORE_CB = {
+  timeline: "dtl",
+  transcript: "dtx",
+  srt: "dsrt",
+} as const;
+
+export type MorePart = keyof typeof MORE_CB;
+
+/** از پیشوندِ کال‌بک به نام بخش — تا هندلر یک `switch` دستی نداشته باشد. */
+export const MORE_PART_OF: Record<string, MorePart> = Object.fromEntries(
+  Object.entries(MORE_CB).map(([part, cb]) => [cb, part as MorePart]),
+) as Record<string, MorePart>;
+
+/** مقصدِ ارسال، وقتی `Context` در کار نیست — همان شکلی که `deliveryChannel` می‌دهد. */
+export interface SendTarget {
+  api: Api;
+  chatId: number;
+  platform: Platform;
+}
+
+/**
+ * رونوشت: PDF اگر هست، وگرنه متن خام. دلیلِ ترجیحِ PDF در `pdf/transcript.ts`.
+ *
+ * `null` یعنی هیچ‌کدام نمانده — فایل reap شده یا اصلاً ساخته نشده.
+ */
+function transcriptSource(
+  s: SessionRow,
+): { path: string; filename: string } | { bytes: Buffer; filename: string } | null {
+  if (s.transcript_pdf && fs.existsSync(s.transcript_pdf)) {
+    return { path: s.transcript_pdf, filename: "رونوشت کامل.pdf" };
+  }
+  if (s.transcript_txt) return { bytes: transcriptBytes(s.transcript_txt), filename: "رونوشت کامل.txt" };
+  return null;
+}
+
+/** کدام بخش‌ها **همین حالا** واقعاً چیزی برای دادن دارند. */
+export function moreParts(s: SessionRow): MorePart[] {
+  const out: MorePart[] = [];
+  const r = sessionReport(s);
+  if (r && r.chapters.length > 0) out.push("timeline");
+  if (transcriptSource(s)) out.push("transcript");
+  if (s.transcript_srt && fs.existsSync(s.transcript_srt)) out.push("srt");
+  return out;
+}
+
+/**
+ * صفحه‌کلیدِ بخش‌های به‌تعویق‌افتاده — یا `null` اگر هیچ‌کدام نیست.
+ *
+ * هر دکمه ردیف خودش را دارد و هیچ `row()` انتهایی زده نمی‌شود: ردیف خالی را
+ * تلگرام رد می‌کند و کل پیام از دست می‌رود.
+ */
+export function moreKeyboard(s: SessionRow): InlineKeyboard | null {
+  const parts = moreParts(s);
+  if (parts.length === 0) return null;
+  const kb = new InlineKeyboard();
+  parts.forEach((p, i) => {
+    if (i) kb.row();
+    kb.text(S.MORE_BTN[p], `${MORE_CB[p]}:${s.id}`);
+  });
+  return kb;
+}
+
+/**
+ * ریپلای به صوتی که گزارشِ این جلسه به آن آویزان است.
+ *
+ * این تنها راهِ زنده‌نگه‌داشتنِ زمان‌هاست وقتی بخش‌بندی دقایقی — یا هفته‌ها —
+ * بعد از خودِ صوت فرستاده می‌شود: تلگرام `MM:SS` را فقط داخل پیامی که
+ * ریپلایِ یک صوتِ **همان چت** است به لینکِ پخش تبدیل می‌کند.
+ *
+ * **یک جفت ستون، و بس.** دو مسیرِ تحویل دو صوتِ متفاوت دارند — در مسیر ربات
+ * صوت را خودِ کاربر فرستاده و در مسیر مینی‌اپ ما — ولی هر دو همان یک پرسش را
+ * جواب می‌دهند و جواب را در `delivered_chat_id`/`delivered_audio_message_id`
+ * می‌نویسند. اگر هرکدام میدان خودش را می‌خواند، همان دوتکه‌شدنی تکرار می‌شد
+ * که این بازنویسی برای بستنش انجام شد.
+ *
+ * شرطِ چت جدی است. عضوی که جلسه با او تقسیم شده دکمه را در چتِ خودش می‌زند و
+ * آن شناسهٔ پیام آنجا یا وجود ندارد یا پیامِ دیگری است؛ پس بی‌ریپلای فرستاده
+ * می‌شود و زمان‌ها متن ساده می‌مانند — که بدترین حالتش «کمی کمتر» است، نه
+ * ریپلای به پیامِ اشتباه.
+ */
+export function reportReplyTo(s: SessionRow, chatId: number): Record<string, unknown> {
+  if (!s.delivered_audio_message_id) return {};
+  if (s.delivered_chat_id !== null && s.delivered_chat_id !== chatId) return {};
+  return {
+    reply_parameters: {
+      message_id: s.delivered_audio_message_id,
+      allow_sending_without_reply: true,
+    },
+  };
+}
+
+/**
+ * یکی از بخش‌های پشتِ دکمه را بفرست.
+ *
+ * `false` یعنی چیزی برای فرستادن نبود یا نرفت — و صدازننده باید یک جملهٔ
+ * روشن به کاربر بدهد. هیچ خطایی بیرون نمی‌زند: دکمه‌ای که هفته‌ها بعد زده
+ * می‌شود روی فایلی که reap شده نباید هندلر را بترکاند.
+ */
+export async function sendMorePart(to: SendTarget, s: SessionRow, part: MorePart): Promise<boolean> {
+  if (part === "timeline") {
+    const r = sessionReport(s);
+    const asReply = reportReplyTo(s, to.chatId);
+    // زدنی‌بودنِ زمان‌ها قابلیتِ تلگرام است؛ بله ندارد و نباید وعده‌اش را بخواند.
+    const linkable = "reply_parameters" in asReply && to.platform === "telegram";
+    const text = r ? S.timelineMessage(r, linkable) : "";
+    if (!text) return false;
+    let ok = true;
+    for (const chunk of S.chunk(text)) {
+      await to.api
+        .sendMessage(to.chatId, chunk, {
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+          ...asReply,
+        })
+        .catch((e: unknown) => {
+          ok = false;
+          logger.warn({ sessionId: s.id, err: String(e) }, "deferred timeline failed");
+        });
+    }
+    return ok;
+  }
+
+  const source =
+    part === "transcript"
+      ? transcriptSource(s)
+      : s.transcript_srt && fs.existsSync(s.transcript_srt)
+        ? ({ path: s.transcript_srt, filename: "رونوشت زمان‌دار.srt" } as const)
+        : null;
+  if (!source) return false;
+
+  // از `sendFileTo` و نه `InputFile` خام: روی بله ارجاعِ `attach://` رد می‌شود
+  // و کاربر بی‌صدا چیزی نمی‌گیرد.
+  return await sendFileTo(to.api, to.chatId, to.platform, "sendDocument", source, {
+    caption: part === "transcript" ? S.CAPTION.transcript : S.CAPTION.srt,
+  })
+    .then(() => true)
+    .catch((e: unknown) => {
+      logger.warn({ sessionId: s.id, part, err: String(e) }, "deferred file failed");
+      return false;
+    });
+}
+
+/**
+ * گزارش جلسه را به چتِ ربات بفرست.
+ *
+ * ترتیب عمدی است: اول صوت، بعد پیام‌های گزارش که **ریپلای همان صوت**اند.
  * تلگرام زمان‌ها را فقط در این حالت به لینک پخش تبدیل می‌کند.
+ *
+ * **چهار چیز می‌آید، سه چیز پشت دکمه می‌ماند.** پیش‌تر هر هفت‌تا پشت‌سرهم
+ * می‌آمدند و نتیجه یک دیوار بود؛ حالا صوت و خلاصه و نکته‌ها و جزوه می‌رسند و
+ * بخش‌بندی زمانی و رونوشت و SRT پشت دکمه‌های آخرین پیام‌اند.
+ *
+ * دکمه‌ها روی یک پیام کوتاهِ جداگانه می‌نشینند، نه روی خودِ جزوه: زدنِ
+ * `reply_markup` روی مسیر آپلودِ دستیِ بله آزموده نشده، و اگر آنجا رد شود
+ * **جزوه** از دست می‌رود — همان باگی که یک بار افتاد. یک پیام متنیِ اضافه
+ * ارزان‌تر از آن ریسک است.
  *
  * هر شکستی بلعیده می‌شود جز نبودِ گزارش: کاربر جلسه‌اش را در تاریخچه دارد و
  * نباید یک خطای شبکه، کل نتیجه را از بین ببرد.
@@ -112,7 +273,17 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
       audioMessageId = sent?.message_id ?? null;
       // `file_id` نگه داشته می‌شود تا دفعهٔ بعد (اشتراک‌گذاری، تاریخچه) آپلود
       // دوباره لازم نباشد.
-      if (sent?.fileId) updateSession(s.id, { audio_file_id: sent.fileId });
+      //
+      // و شناسهٔ همین پیام هم ذخیره می‌شود: بخش‌بندی زمانی پشت دکمه رفته و
+      // وقتی زده شود باید **ریپلای همین صوت** باشد، وگرنه زمان‌هایش دیگر
+      // لینکِ پخش نیستند. در حافظه نگه‌داشتنش کافی نیست چون دکمه ممکن است
+      // بعد از ری‌استارتِ سرویس زده شود.
+      updateSession(s.id, {
+        ...(sent?.fileId ? { audio_file_id: sent.fileId } : {}),
+        ...(audioMessageId !== null
+          ? { delivered_chat_id: ch.chatId, delivered_audio_message_id: audioMessageId }
+          : {}),
+      });
     } catch (e) {
       logger.warn({ sessionId: s.id, err: String(e) }, "deliver audio failed");
     } finally {
@@ -123,9 +294,6 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
   const asReply = audioMessageId
     ? { reply_parameters: { message_id: audioMessageId, allow_sending_without_reply: true } }
     : {};
-  // زمان‌ها فقط وقتی لینک می‌شوند که صوتی در همان چت باشد و بشود ریپلایش کرد.
-  const linkable = audioMessageId !== null && ch.platform === "telegram";
-
   const send = async (text: string, extra: Record<string, unknown> = {}) => {
     if (!text) return;
     for (const part of S.chunk(text)) {
@@ -149,8 +317,9 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
       qualityWarnings: [],
     }),
   );
+  // بخش‌بندی زمانی دیگر اینجا نمی‌آید؛ پشت دکمه رفته و آنجا هم ریپلایِ همین
+  // صوت فرستاده می‌شود تا زمان‌هایش لینکِ پخش بمانند.
   await send(S.extractedMessage(r), asReply);
-  await send(S.timelineMessage(r, linkable), asReply);
 
   if (s.pdf_path && fs.existsSync(s.pdf_path)) {
     await sendFileTo(
@@ -159,30 +328,26 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
       ch.platform,
       "sendDocument",
       { path: s.pdf_path, filename: `${s.title ?? "جزوه"}.pdf` },
-      { caption: "📕 جزوهٔ این جلسه" },
+      { caption: S.CAPTION.notes },
     ).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver pdf failed"));
   }
-  // رونوشت به شکل PDF؛ دلیلش در `pdf/transcript.ts`. اگر PDF نبود، متن خام.
-  const tx =
-    s.transcript_pdf && fs.existsSync(s.transcript_pdf)
-      ? ({ path: s.transcript_pdf, filename: "رونوشت کامل.pdf" } as const)
-      : s.transcript_txt
-        ? ({ bytes: transcriptBytes(s.transcript_txt), filename: "رونوشت کامل.txt" } as const)
-        : null;
-  if (tx) {
-    await sendFileTo(ch.api, ch.chatId, ch.platform, "sendDocument", tx, {
-      caption: "📄 رونوشت کامل — همهٔ حرف‌های جلسه، پشت سر هم.",
-    }).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver transcript failed"));
-  }
-  if (s.transcript_srt && fs.existsSync(s.transcript_srt)) {
-    await sendFileTo(
-      ch.api,
-      ch.chatId,
-      ch.platform,
-      "sendDocument",
-      { path: s.transcript_srt, filename: "رونوشت زمان‌دار.srt" },
-      { caption: "⏱ نسخهٔ زمان‌دار — برای پیدا کردن یک لحظه یا زیرنویسِ ویدیو." },
-    ).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver srt failed"));
+
+  /**
+   * آخرین پیامِ فوری: دکمه‌های بایگانی.
+   *
+   * سطرِ جلسه دوباره از حافظه ساخته نمی‌شود — `s` همان است — ولی شناسهٔ صوتِ
+   * تحویل تازه در پایگاه‌داده نشسته و هندلرِ دکمه خودش سطر را تازه می‌خواند،
+   * پس اینجا لازم نیست.
+   */
+  const kb = moreKeyboard(s);
+  if (kb) {
+    await ch.api
+      .sendMessage(ch.chatId, S.MORE_PROMPT, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+        reply_markup: kb,
+      })
+      .catch((e: unknown) => logger.warn({ err: String(e) }, "deliver more buttons failed"));
   }
 
   /**

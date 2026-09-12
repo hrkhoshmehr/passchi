@@ -94,6 +94,23 @@ for (const [column, ddl] of [
   // شناسهٔ پیام صوت در کانال بایگانی. گزارش بعداً **ریپلای همین پیام** فرستاده
   // می‌شود، پس بدون نگه‌داشتنش گزارش از صوتش جدا می‌افتد.
   ["archive_message_id", "ALTER TABLE sessions ADD COLUMN archive_message_id INTEGER"],
+  // صوتی که گزارشِ این جلسه به آن آویزان است، و چتی که در آن نشسته.
+  //
+  // بخش‌بندی زمانی پشت دکمه رفته و شاید هفته‌ها بعد زده شود؛ بدون این دو، آن
+  // پیام دیگر ریپلایِ صوت نیست و زمان‌هایش از لینکِ پخش می‌افتند — یعنی همان
+  // قابلیتی که کل ترتیبِ تحویل برایش چیده شده.
+  //
+  // **جوابِ یک پرسش، برای هر دو مسیر.** آپلود در ربات یعنی صوت را خودِ کاربر
+  // فرستاده (`audio_message_id`)، و آپلود در مینی‌اپ یعنی `deliverToBot` خودش
+  // فرستاده؛ ولی هر دو همین‌جا می‌نویسند و همه از همین‌جا می‌خوانند. اگر هر
+  // مسیر میدان خودش را داشت، دکمه در یکی از دو مسیر بی‌صدا زمان‌هایش را
+  // می‌باخت — و `audio_message_id` که برای جلسهٔ مینی‌اپ همیشه تهی است دقیقاً
+  // همین را می‌کرد.
+  //
+  // چت هم لازم است نه فقط پیام: عضوی که جلسه با او تقسیم شده دکمه را در چتِ
+  // *خودش* می‌زند، جایی که آن شمارهٔ پیام یا نیست یا پیامِ دیگری است.
+  ["delivered_chat_id", "ALTER TABLE sessions ADD COLUMN delivered_chat_id INTEGER"],
+  ["delivered_audio_message_id", "ALTER TABLE sessions ADD COLUMN delivered_audio_message_id INTEGER"],
 ] as const) {
   const cols = db.prepare("PRAGMA table_info(sessions)").all() as unknown as Array<{ name: string }>;
   if (!cols.some((c) => c.name === column)) db.exec(ddl);
@@ -407,6 +424,8 @@ export interface SessionRow {
   share_target: number | null;
   mode: SessionMode;
   archive_message_id: number | null;
+  delivered_chat_id: number | null;
+  delivered_audio_message_id: number | null;
 }
 
 /**
@@ -489,6 +508,7 @@ type Updatable = Partial<
     | "pdf_path" | "transcript_pdf" | "transcript_srt" | "cost_usd" | "error" | "finished_at" | "course_id"
     | "audio_chat_id" | "audio_message_id" | "download_route"
     | "audio_file_id" | "share_enabled" | "share_target" | "mode" | "archive_message_id"
+    | "delivered_chat_id" | "delivered_audio_message_id"
   >
 >;
 

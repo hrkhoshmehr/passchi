@@ -42,6 +42,7 @@ import {
 import {
   archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption, setArchiveApi,
 } from "./archive.js";
+import { MORE_CB, MORE_PART_OF, moreKeyboard, reportReplyTo, sendMorePart } from "./deliver.js";
 import {
   beginTopup, cancelTopup, decide, gatewayConfigured, paymentConfigured, receiveReceipt, settleTopup,
 } from "./topup.js";
@@ -2442,9 +2443,10 @@ handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
     return;
   }
   const course = s.course_id ? getCourse(s.course_id) : null;
-  const asReply = s.audio_message_id
-    ? { reply_parameters: { message_id: s.audio_message_id, allow_sending_without_reply: true } }
-    : {};
+  // همان یک جفت ستونِ معتبر که هر دو مسیر تحویل می‌نویسند — نه
+  // `audio_message_id` خام، که برای جلسه‌های آمده از مینی‌اپ همیشه تهی است و
+  // اینجا بی‌صدا زمان‌ها را از لینکِ پخش می‌انداخت.
+  const asReply = reportReplyTo(s, ctx.chat!.id);
   await reply(
     ctx,
     S.recapMessage({
@@ -2459,9 +2461,64 @@ handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
   await reply(ctx, S.extractedMessage(r), asReply);
   // زدنی‌بودن زمان‌ها قابلیتِ **تلگرام** است؛ بله ندارد. بدون این شرط، کاربر
   // بله وعده‌ای می‌خواند که سکویش نمی‌تواند انجام دهد.
-  const timeline = S.timelineMessage(r, Boolean(s.audio_message_id) && platformOf(ctx) === "telegram");
+  const timeline = S.timelineMessage(
+    r,
+    "reply_parameters" in asReply && platformOf(ctx) === "telegram",
+  );
   if (timeline) await reply(ctx, timeline, asReply);
 });
+
+/**
+ * دکمه را از روی پیام بردار.
+ *
+ * قاعده‌اش را تور نمونه گذاشت: دکمهٔ زده‌شده باید برود، وگرنه کاربر نمی‌فهمد
+ * زدنِ دوباره کاری می‌کند یا نه و همان فایل دو بار می‌آید. اینجا اما سه دکمه
+ * روی یک پیام‌اند، پس فقط همان یکی حذف می‌شود نه کلِ صفحه‌کلید.
+ *
+ * شکست بلعیده می‌شود: پیامِ خیلی قدیمی ویرایش‌شدنی نیست و بله هم گاهی
+ * `editMessageReplyMarkup` را رد می‌کند — هیچ‌کدام نباید جلوی ارسالِ خودِ
+ * فایل را بگیرد.
+ */
+async function dropPressedButton(ctx: Context): Promise<void> {
+  const data = ctx.callbackQuery?.data;
+  const rows = ctx.callbackQuery?.message?.reply_markup?.inline_keyboard ?? [];
+  if (!data || rows.length === 0) return;
+  const left = rows
+    .map((row) => row.filter((b) => !("callback_data" in b && b.callback_data === data)))
+    .filter((row) => row.length > 0);
+  await ctx
+    .editMessageReplyMarkup({ reply_markup: left.length ? { inline_keyboard: left } : undefined })
+    .catch(() => {});
+}
+
+/**
+ * بخش‌های بایگانیِ یک جلسه: بخش‌بندی زمانی، رونوشت کامل، و SRT.
+ *
+ * `readableSession` اینجا حیاتی است. `callback_data` یک URL است که هرکس
+ * می‌تواند تکرارش کند و شناسهٔ جلسه هم رازی نیست (در لینک دعوت می‌آید)؛ بدون
+ * این بررسی، هر کسی رونوشت هر جلسه‌ای را بی‌پرداختِ سهم برمی‌داشت.
+ */
+handlers.callbackQuery(
+  new RegExp(String.raw`^(${MORE_CB.timeline}|${MORE_CB.transcript}|${MORE_CB.srt}):([a-f0-9]+)$`),
+  async (ctx) => {
+    const part = MORE_PART_OF[ctx.match![1]!]!;
+    const s = readableSession(ctx, ctx.match![2]!);
+    if (!s) {
+      await ctx.answerCallbackQuery({ text: S.MORE_DENIED });
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    await dropPressedButton(ctx);
+    const ok = await sendMorePart(
+      { api: ctx.api, chatId: ctx.chat!.id, platform: platformOf(ctx) },
+      s,
+      part,
+    );
+    // فایل ممکن است reap شده باشد (`KEEP_AUDIO_DAYS` و همسایه‌هایش). سکوت
+    // بدترین جواب است: کاربر فکر می‌کند دکمه خراب است.
+    if (!ok) await ctx.reply(S.MORE_GONE[part]);
+  },
+);
 
 // ─── اجرای کار ──────────────────────────────────────────────────────────────
 
@@ -2599,17 +2656,28 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
 type PipelineOut = Awaited<ReturnType<typeof runPipeline>>;
 
 /**
- * خروجی کامل، در چهار تکه و به همین ترتیب:
+ * خروجی، در سه تکه و به همین ترتیب:
  *
  *   ۱) کلاس چه خبر بود — روایت، برای اینکه در سی ثانیه بداند چه از دست داده
  *   ۲) چی درآوردم — حضور و غیاب، تکلیف، نکته‌های امتحانی با نقل‌قول
- *   ۳) بخش‌بندی کلاس — ریپلای صوت، تا زمان‌ها لینک پخش شوند
- *   ۴) جزوهٔ PDF و رونوشت
+ *   ۳) جزوهٔ PDF
+ *
+ * و بعد یک پیام کوتاه با سه دکمه: بخش‌بندی زمانی، رونوشت کامل، و SRT.
+ *
+ * **چرا دقیقاً همان تقسیمِ `deliverToBot`.** دو در ورودی داریم — آپلود در
+ * خودِ ربات که به اینجا می‌رسد، و آپلود در مینی‌اپ که به `deliverToBot`
+ * می‌رسد — و تا امروز هرکدام شکل خودش را داشت. یعنی نیمی از دانشجوها هفت
+ * پیام می‌دیدند و نیمی پنج‌تا، و هر تغییرِ بعدی باید دو بار نوشته می‌شد؛
+ * همان مکانیزمی که این دو مسیر را از اول از هم دور کرد. پس همان
+ * `MORE_CB`/`moreKeyboard`/`sendMorePart` اینجا هم استفاده می‌شود، نه یک
+ * پیاده‌سازی موازی.
  *
  * تفکیک عمدی است: هر تکه یک سؤال دارد، و کسی که فقط سؤال اول را دارد لازم
- * نیست از سه پیام دیگر رد شود.
+ * نیست از بقیه رد شود.
  */
-async function sendResults(
+// صادر شده تا آزمونِ تحویل بتواند همین مسیر را هم براند بدون اجرای خط لوله؛
+// هیچ صدازنندهٔ دیگری بیرون از این فایل ندارد.
+export async function sendResults(
   ctx: Context,
   sessionId: string,
   out: PipelineOut,
@@ -2617,28 +2685,32 @@ async function sendResults(
 ): Promise<void> {
   const r = out.report;
   if (!r) return;
-  const s = getSession(sessionId);
+  const before = getSession(sessionId);
 
   /**
+   * صوتی که گزارش به آن آویزان می‌شود، همین‌جا **قطعی و ذخیره** می‌شود.
+   *
    * زمان‌های داخل متن فقط وقتی لینکِ پخش می‌شوند که پیام، ریپلایِ همان پیام
-   * صوتی باشد. پس هر پیامی که مهر زمانی دارد باید به پیام صوت وصل شود.
-   * (روی اندروید و آی‌اواس کار می‌کند؛ در نسخهٔ دسکتاپ فعلاً متن ساده می‌ماند.)
-   */
-  const audioMsgId = s?.audio_message_id ?? null;
-  /**
-   * **زدنی‌بودن زمان‌ها فقط روی تلگرام است.**
+   * صوتی باشد. (روی اندروید و آی‌اواس؛ در دسکتاپ فعلاً متن ساده می‌ماند.)
    *
-   * بله چنین قابلیتی ندارد؛ ریپلای‌کردنِ پیام روی صوت هیچ زمانی را به لینکِ
-   * پخش تبدیل نمی‌کند. شرط قبلی فقط «صوتی هست؟» بود، پس کاربر بله خطِ «رو هر
-   * زمان بزنی، صوت از همون‌جا پخش میشه» را می‌خواند و هرچه می‌زد هیچ اتفاقی
-   * نمی‌افتاد — بدترین نوع باگ، چون کاربر فکر می‌کند خودش بلد نیست.
+   * اینجا آن صوت را **خودِ کاربر** فرستاده و `intakeAudio` شناسه‌اش را نگه
+   * داشته؛ در مسیر مینی‌اپ `deliverToBot` خودش صوت را می‌فرستد. دو منبعِ
+   * متفاوت با یک پرسشِ مشترک — «بخش‌بندی زمانی باید ریپلای کدام پیام در کدام
+   * چت شود؟» — پس هر دو جواب را در همان یک جفت ستون می‌نویسند و
+   * `sendMorePart` فقط همان را می‌خواند. اگر هرکدام میدان خودش را می‌داشت،
+   * دکمه در یکی از دو مسیر بی‌صدا زمان‌هایش را می‌باخت.
    *
-   * ریپلای اما روی هر دو سکو می‌ماند: آنجا فقط به گزارش زمینه می‌دهد.
+   * کاری که از **لینک** آمده هیچ پیام صوتی ندارد؛ آنجا این‌ها تهی می‌مانند و
+   * بخش‌بندی بی‌ریپلای می‌رود، همان‌طور که تا امروز می‌رفته.
    */
-  const linkable = audioMsgId !== null && platformOf(ctx) === "telegram";
-  const asReply = linkable
-    ? { reply_parameters: { message_id: audioMsgId, allow_sending_without_reply: true } }
-    : {};
+  if (before?.audio_message_id) {
+    updateSession(sessionId, {
+      delivered_chat_id: before.audio_chat_id ?? ctx.chat!.id,
+      delivered_audio_message_id: before.audio_message_id,
+    });
+  }
+  const s = getSession(sessionId);
+  const asReply = s ? reportReplyTo(s, ctx.chat!.id) : {};
 
   await reply(
     ctx,
@@ -2652,10 +2724,9 @@ async function sendResults(
     }),
   );
 
+  // بخش‌بندی زمانی دیگر اینجا نمی‌آید؛ پشت دکمه رفته و `sendMorePart` آن را
+  // ریپلایِ همین صوت می‌فرستد تا زمان‌هایش لینکِ پخش بمانند.
   await reply(ctx, S.extractedMessage(r), asReply);
-
-  const timeline = S.timelineMessage(r, linkable);
-  if (timeline) await reply(ctx, timeline, asReply);
 
   if (out.pdfPath) {
     await sendDoc(ctx, out.pdfPath, out.pdfName ?? "جزوه.pdf", {
@@ -2673,23 +2744,20 @@ async function sendResults(
   }
 
   /**
-   * رونوشت **PDF** فرستاده می‌شود، نه `.txt`.
+   * رونوشت کامل و SRT دیگر خودبه‌خود نمی‌آیند — پشت دکمه‌اند.
    *
-   * فایل متنی روی موبایلِ بله ناخوانا در می‌آمد و هیچ چیزی داخل خودش این را
-   * درست نمی‌کرد — نه BOM، نه اعلامِ رمزگذاری (هر پنج ترکیب آزموده شد و بله
-   * همه را `text/plain; charset=utf-8` ثبت کرد). PDF قلم و رمزگذاری را با
-   * خودش می‌برد. متنِ خام همچنان با دکمهٔ «رونوشت» در تاریخچه در دسترس است.
+   * `moreKeyboard` از **سطر پایگاه‌داده** ساخته می‌شود نه از `out`، و فقط
+   * برای چیزهایی دکمه می‌گذارد که همان لحظه واقعاً هستند. پس جلسه‌ای که SRT
+   * ندارد یا جزوه‌اش ساخته نشده، دکمه‌ای نمی‌گیرد که بزنی و چیزی نیاید.
+   * خط لولهٔ پردازش هر سه مسیر (`transcript_pdf`، `transcript_srt`،
+   * `report_json`) را پیش از برگشتن نوشته، پس سطر تازه است.
    */
-  await sendDoc(
-    ctx,
-    out.transcriptPdfPath ?? out.transcriptPath,
-    out.transcriptPdfPath ? "رونوشت کامل.pdf" : "رونوشت کامل.txt",
-    { caption: "📄 <b>رونوشت کامل</b>\n<i>همهٔ حرف‌های جلسه، پشت سر هم.</i>", parse_mode: "HTML" },
-  );
-  if (out.transcriptSrtPath) {
-    await sendDoc(ctx, out.transcriptSrtPath, "رونوشت زمان‌دار.srt", {
-      caption: "⏱ <b>نسخهٔ زمان‌دار</b>\n<i>برای پیدا کردن یک لحظه، یا زیرنویسِ ویدیوی کلاس.</i>",
+  const kb = s ? moreKeyboard(s) : null;
+  if (kb) {
+    await ctx.reply(S.MORE_PROMPT, {
       parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: kb,
     });
   }
 

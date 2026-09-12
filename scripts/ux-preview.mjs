@@ -2,7 +2,11 @@
  * پیش‌نمایش متن صفحه‌ها و پیام‌های خروجی، بدون بالاآوردن ربات.
  *
  * پیام‌های تلگرام تنها رابط کاربری این محصول‌اند و تنها راه دیدنشان پیش از
- * انتشار، همین است: چاپشان در ترمینال. اجرا: `node scripts/ux-preview.mjs`
+ * انتشار، همین است: چاپشان در ترمینال.
+ *
+ * اجرا: `node --import tsx scripts/ux-preview.mjs`
+ * (`tsx` لازم است چون همین‌جا مستقیم از `src/*.ts` می‌خواند؛ با `node` تنها
+ * روی `ERR_MODULE_NOT_FOUND` می‌افتد.)
  */
 import { WELCOME, HOW_IT_WORKS, packagesMessage, supportMessage, mainKeyboard } from "../src/bot/menu.ts";
 import {
