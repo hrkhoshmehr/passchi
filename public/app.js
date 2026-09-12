@@ -1234,6 +1234,10 @@ function askConfirm(out, filename) {
   $("confirm-cost").textContent = `${faGroup(out.costCoins)} 🪙`;
   $("confirm-have").textContent = `${faGroup(out.haveCoins)} 🪙`;
   fail($("confirm-err"), "");
+  // هر فایل تصمیم خودش را دارد؛ تیکِ جلسهٔ قبلی نباید بی‌خبر روی این یکی
+  // بنشیند — این تصمیم دربارهٔ سکه‌های کاربر است.
+  $("confirm-share").checked = false;
+  $("confirm-share-box").classList.add("hidden");
 
   // موجودی کم؟ دکمه را نبند — بگو چقدر کم دارد و بگذار برود شارژ کند.
   const short = Math.max(0, out.costCoins - out.haveCoins);
@@ -1249,13 +1253,28 @@ $("confirm-cancel").addEventListener("click", () => {
   go("send");
 });
 
+// تعدادِ کلاس فقط وقتی دیده می‌شود که کاربر تقسیم را خواسته باشد — وگرنه یک
+// سؤالِ اضافه سرِ راهِ تأیید است.
+$("confirm-share").addEventListener("change", () => {
+  $("confirm-share-box").classList.toggle("hidden", !$("confirm-share").checked);
+});
+
 $("confirm-go").addEventListener("click", async () => {
   if (!pendingSession) return;
   const btn = $("confirm-go");
   btn.disabled = true;
   fail($("confirm-err"), "");
   try {
-    await api.call(`/api/sessions/${pendingSession}/confirm`, { method: "POST" });
+    // تصمیمِ تقسیم با همین تأیید می‌رود، نه در درخواستی جدا: کاربر می‌تواند
+    // بلافاصله صفحه را ببندد و کارِ نیمه‌تمام یعنی جلسه‌ای که اشتراکش هیچ‌وقت
+    // روشن نشد.
+    await api.call(`/api/sessions/${pendingSession}/confirm`, {
+      method: "POST",
+      body: {
+        share: $("confirm-share").checked,
+        people: Number($("confirm-share-n").value) || 10,
+      },
+    });
   } catch (err) {
     btn.disabled = false;
     if (err.status === 402) {

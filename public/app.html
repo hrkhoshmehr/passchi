@@ -402,6 +402,36 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
         </div>
       </div>
 
+      <!--
+        ─── تقسیم با هم‌کلاسیا، **پیش از پرداخت** ──────────────────────────
+
+        این تصمیم تا امروز فقط بعد از تحویلِ نتیجه پرسیده می‌شد — و روی مسیر
+        مینی‌اپ اصلاً پرسیده نمی‌شد. بعد از تحویل، کاربر چیزی را که می‌خواست
+        گرفته و دلیلی برای زدنِ دکمه ندارد؛ اینجا اما دارد به هزینه نگاه
+        می‌کند و «نصفش برمی‌گرده» جوابِ همان چیزی است که در ذهنش می‌گذرد.
+      -->
+      <label
+        for="confirm-share"
+        style="display:flex;align-items:center;gap:9px;margin-top:16px;text-align:right;cursor:pointer"
+      >
+        <input type="checkbox" id="confirm-share" style="width:18px;height:18px;flex:none" />
+        <span style="font-size:14px">👥 با هم‌کلاسیا تقسیم می‌کنم — تا نصف سکه‌هات برمی‌گرده</span>
+      </label>
+      <div id="confirm-share-box" class="hidden" style="margin-top:10px;text-align:right">
+        <label class="dim" for="confirm-share-n" style="font-size:13px">چند نفرید؟</label>
+        <select id="confirm-share-n" style="width:100%;padding:13px 15px;font:inherit;font-size:15px;
+                background:var(--surface);color:var(--text);border:1px solid var(--border-strong);
+                border-radius:var(--radius);margin-top:6px">
+          <option value="5">۵ نفر</option>
+          <option value="10" selected>۱۰ نفر</option>
+          <option value="20">۲۰ نفر</option>
+          <option value="30">۳۰ نفر</option>
+        </select>
+        <p class="dim" style="margin-top:6px;font-size:12.5px">
+          سهم هر نفر ثابته و همون به حساب تو برمی‌گرده. لینک دعوت رو توی ربات برات می‌فرستم.
+        </p>
+      </div>
+
       <div class="err hidden" id="confirm-err" style="margin-top:14px"></div>
 
       <button class="btn btn-primary btn-block" type="button" id="confirm-go" style="margin-top:18px">

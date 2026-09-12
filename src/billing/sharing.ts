@@ -14,8 +14,10 @@
  *
  * روی یک جلسهٔ ۵۲ سکه‌ای (`cap` = ۲۶):
  *
- *   مالک «۱ نفر» می‌گوید  → آن یک نفر ۲۶ می‌دهد و کامل به مالک برمی‌گردد
+ *   مالک «۵ نفر» می‌گوید  → هر نفر ۶ سکه، تا جمعاً ۲۶ به مالک برگردد، بعد رایگان
  *   مالک «۱۰ نفر» می‌گوید → هر نفر ۳ سکه، تا جمعاً ۲۶ به مالک برگردد، بعد رایگان
+ *
+ * کمتر از پنج نفر پذیرفته نمی‌شود؛ چرایش در `SHARE_TARGET_MIN`.
  *
  * سه ویژگی که عمداً این‌طور انتخاب شده‌اند:
  *
@@ -35,7 +37,7 @@
 
 import { db } from "../db/index.js";
 import { logger } from "../util/logger.js";
-import { SHARE_TARGET, coinsToSec, costCoins, shareBack } from "./coins.js";
+import { SHARE_TARGET, SHARE_TARGET_MIN, coinsToSec, costCoins, shareBack } from "./coins.js";
 import { InsufficientCredit, move } from "./ledger.js";
 
 export interface Member {
@@ -101,10 +103,16 @@ export function registerOwner(sessionId: string, tgId: number, costSec: number):
   ).run(sessionId, tgId, coinsToSec(costCoins(costSec)));
 }
 
-/** مالک تعداد تقریبیِ کلاس را انتخاب می‌کند؛ سهمِ ثابتِ هر نفر از همین درمی‌آید. */
+/**
+ * مالک تعداد تقریبیِ کلاس را انتخاب می‌کند؛ سهمِ ثابتِ هر نفر از همین درمی‌آید.
+ *
+ * کف روی `SHARE_TARGET_MIN` بسته است و **اینجا** اعمال می‌شود نه در صفحه‌کلید،
+ * چون صفحه‌کلید تنها راهِ رسیدن به این تابع نیست: دست‌کدِ دستی، مینی‌اپ و هر
+ * مسیر بعدی هم از همین‌جا رد می‌شوند. چراییِ خودِ کف در `SHARE_TARGET_MIN`.
+ */
 export function setShareTarget(sessionId: string, people: number): void {
   db.prepare(`UPDATE sessions SET share_target = ? WHERE id = ?`).run(
-    Math.max(1, Math.round(people)),
+    Math.max(SHARE_TARGET_MIN, Math.round(people)),
     sessionId,
   );
 }

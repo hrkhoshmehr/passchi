@@ -36,7 +36,8 @@ import { probe } from "../audio/ffmpeg.js";
 import { getProgress, setProgress } from "./progress.js";
 import { startJob } from "../jobs/service.js";
 import { InsufficientCredit } from "../billing/ledger.js";
-import { balanceCoins, costCoins, fmtCoins, PACKAGES, COINS_PER_MINUTE } from "../billing/coins.js";
+import { balanceCoins, costCoins, fmtCoins, PACKAGES, COINS_PER_MINUTE, SHARE_TARGET } from "../billing/coins.js";
+import { setShareEnabled, setShareTarget } from "../billing/sharing.js";
 import { history } from "../billing/ledger.js";
 import {
   createCourse, createSession, getCourse, getSession, getUser, listCourses, listSessions,
@@ -437,7 +438,14 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
   if (sessionMatch && req.method === "POST" && sessionMatch[2] === "/confirm") {
     const uid = requireUser(req, res);
     if (uid === null) return;
-    return confirmSession(res, uid, sessionMatch[1]!);
+    /**
+     * تصمیمِ تقسیم **همراهِ همین تأیید** می‌آید، نه در درخواستی جدا.
+     *
+     * بدنهٔ خالی هم درست است: نسخهٔ قدیمیِ `app.js` که در وب‌ویوی بله کش شده
+     * چیزی نمی‌فرستد و نباید بشکند.
+     */
+    const body = await readJson<{ share?: boolean; people?: number }>(req).catch(() => ({}));
+    return confirmSession(res, uid, sessionMatch[1]!, body);
   }
 
   if (sessionMatch && req.method === "GET") {
@@ -1076,7 +1084,12 @@ async function finishUpload(
  * ببندد و برود. به همین دلیل بلافاصله پس از شروع، یک پیام «گرفتم» در ربات
  * فرستاده می‌شود تا کاربر بداند کجا منتظر بماند.
  */
-async function confirmSession(res: Res, userId: number, sessionId: string): Promise<void> {
+async function confirmSession(
+  res: Res,
+  userId: number,
+  sessionId: string,
+  share: { share?: boolean; people?: number } = {},
+): Promise<void> {
   const s = getSession(sessionId);
   if (!s || s.tg_id !== userId) return json(res, 404, { error: "این جلسه پیدا نشد." });
   // فقط جلسه‌ای که هنوز شروع نشده تأیید می‌شود؛ وگرنه دو بار زدن دکمه یعنی
@@ -1090,6 +1103,21 @@ async function confirmSession(res: Res, userId: number, sessionId: string): Prom
     sec = Math.round((await probe(dest)).durationMs / 1000);
   } catch {
     return json(res, 400, { error: "مدت این فایل خوانده نشد." });
+  }
+
+  /**
+   * **تقسیم، پیش از خرج‌شدن سکه** — همان چیزی که مسیر ربات هم دارد.
+   *
+   * پیش از این تصمیمِ تقسیم فقط بعد از تحویل پرسیده می‌شد، و روی مسیر
+   * مینی‌اپ اصلاً پرسیده نمی‌شد. اینجا و پیش از `startJob` نوشته می‌شود تا
+   * لینک دعوت همان لحظه‌ای که نتیجه به ربات می‌رسد آماده باشد.
+   *
+   * کفِ تعداد در `setShareTarget` بسته می‌شود، پس عددِ آمده از مرورگر — که
+   * هرچه باشد می‌تواند باشد — سهم را از کنترل خارج نمی‌کند.
+   */
+  if (share.share) {
+    setShareTarget(sessionId, Number(share.people) || SHARE_TARGET);
+    setShareEnabled(sessionId, true);
   }
 
   setProgress(sessionId, { stage: "preprocess" });

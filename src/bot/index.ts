@@ -47,7 +47,8 @@ import {
   mintGift, refusalMessage,
 } from "./gift.js";
 import {
-  RATE_LINE, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtBalance, fmtCoins, fmtCost, fmtToman,
+  RATE_LINE, SHARE_TARGET, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtBalance, fmtCoins,
+  fmtCost, fmtToman,
 } from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
@@ -1639,6 +1640,47 @@ async function tooManyPending(ctx: Context, userId: number): Promise<boolean> {
   return true;
 }
 
+/**
+ * صفحه‌کلیدِ تأییدِ هزینه — و **تصمیمِ تقسیم، پیش از خرج‌شدن سکه**.
+ *
+ * پیشنهادِ تقسیم تا امروز فقط *بعد* از تحویل می‌آمد. آن لحظه بدترین جای
+ * ممکن است: کاربر جزوه‌اش را گرفته، سؤالش جواب گرفته، و دیگر دلیلی ندارد
+ * دکمه‌ای بزند. اینجا اما دارد به هزینه نگاه می‌کند و «نصفش برمی‌گرده»
+ * دقیقاً جوابِ همان چیزی است که در ذهنش می‌گذرد.
+ *
+ * دکمهٔ بعد از تحویل سرِ جایش می‌ماند — کسی که اینجا تصمیم نگرفت نباید
+ * راهش بسته شود.
+ *
+ * وضعیت از خودِ ردیفِ جلسه خوانده می‌شود نه از پارامتر، چون هر سه مسیرِ
+ * ورودی درست پیش از صداکردنِ این تابع جلسه را نوشته‌اند و یک منبعِ حقیقت
+ * جلوی «دکمه می‌گوید خاموش، پایگاه‌داده می‌گوید روشن» را می‌گیرد.
+ */
+function confirmKeyboard(sessionId: string): InlineKeyboard {
+  const s = getSession(sessionId);
+  const kb = new InlineKeyboard()
+    .text(S.CONFIRM_BTN.go, `go:${sessionId}`)
+    .text(S.CONFIRM_BTN.cancel, `nogo:${sessionId}`)
+    .row();
+  return s?.share_enabled
+    ? kb.text(S.shareOnButton(s.share_target ?? SHARE_TARGET), `spre:${sessionId}`)
+    : kb.text(S.CONFIRM_BTN.share, `spre:${sessionId}`);
+}
+
+/**
+ * همان صفحه، وقتی سکه کم است: شارژ، و راهِ ادامه پس از شارژ.
+ *
+ * تقسیم اینجا هم پیشنهاد می‌شود — کسی که سکه کم دارد بیشترین انگیزه را
+ * دارد که نصفش برگردد.
+ */
+function lowBalanceKeyboard(sessionId: string, resumeData = `go:${sessionId}`): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(S.CONFIRM_BTN.topup, "topup")
+    .row()
+    .text("▶️ ادامه بده", resumeData)
+    .row()
+    .text(S.CONFIRM_BTN.share, `spre:${sessionId}`);
+}
+
 /** درسی که خودمان حدس می‌زنیم — بدون پرسیدن از کاربر. */
 function autoCourseId(userId: number): number | null {
   const courses = listCourses(userId);
@@ -1682,20 +1724,13 @@ async function holdBeforeDownload(
       ctx,
       S.lowBalanceMessage(sec, u.credit_sec) +
         "\n\n<i>فایلت همون‌جا تو چت هست — بعد از شارژ همین دکمه رو بزن، لازم نیست دوباره بفرستی.</i>",
-      {
-        reply_markup: new InlineKeyboard()
-          .text("🪙 شارژ حساب", "topup")
-          .row()
-          .text("▶️ ادامه بده", `go:${sessionId}`),
-      },
+      { reply_markup: lowBalanceKeyboard(sessionId) },
     );
     return;
   }
 
   await reply(ctx, S.confirmCostMessage(sec, u.credit_sec), {
-    reply_markup: new InlineKeyboard()
-      .text("✅ شروع کن", `go:${sessionId}`)
-      .text("✖️ بی‌خیال", `nogo:${sessionId}`),
+    reply_markup: confirmKeyboard(sessionId),
   });
 }
 
@@ -1835,12 +1870,7 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
       ctx,
       S.lowBalanceMessage(effectiveSec, u.credit_sec) +
         "\n\n<i>فایلت نگه داشته شد — بعد از شارژ لازم نیست دوباره بفرستی.</i>",
-      {
-        reply_markup: new InlineKeyboard()
-          .text("🪙 شارژ حساب", "topup")
-          .row()
-          .text("▶️ ادامه بده", `resume:${sessionId}`),
-      },
+      { reply_markup: lowBalanceKeyboard(sessionId, `resume:${sessionId}`) },
     );
     return;
   }
@@ -1873,9 +1903,7 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
       original_ms: effectiveSec * 1000,
     });
     await reply(ctx, S.confirmCostMessage(effectiveSec, u.credit_sec), {
-      reply_markup: new InlineKeyboard()
-        .text("✅ شروع کن", `go:${sessionId}`)
-        .text("✖️ بی‌خیال", `nogo:${sessionId}`),
+      reply_markup: confirmKeyboard(sessionId),
     });
     return;
   }
@@ -2141,12 +2169,7 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
               ctx,
               `مدت واقعی این فایل <b>${toFaDigits(fmtDuration(realSec * 1000))}</b> بود، نه چیزی که فرستنده اعلام کرده بود.\n\n` +
                 S.lowBalanceMessage(realSec, u.credit_sec),
-              {
-                reply_markup: new InlineKeyboard()
-                  .text("🪙 شارژ حساب", "topup")
-                  .row()
-                  .text("▶️ ادامه بده", `go:${sessionId}`),
-              },
+              { reply_markup: lowBalanceKeyboard(sessionId) },
             );
             return;
           }
@@ -2155,11 +2178,7 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
             ctx,
             `مدت واقعی بیشتر از چیزی بود که سکو اعلام کرده بود.\n\n` +
               S.confirmCostMessage(realSec, u.credit_sec),
-            {
-              reply_markup: new InlineKeyboard()
-                .text("✅ شروع کن", `go:${sessionId}`)
-                .text("✖️ بی‌خیال", `nogo:${sessionId}`),
-            },
+            { reply_markup: confirmKeyboard(sessionId) },
           );
           return;
         }
@@ -2579,15 +2598,74 @@ async function sendResults(
 
   const u = getUser(uid(ctx));
   const cost = Math.round(out.originalDurationMs / 1000);
+  /**
+   * **اگر کاربر سرِ تأیید گفته بود «تقسیم می‌کنم»، حالا وقتِ لینک است.**
+   *
+   * پیش از این اینجا همیشه `false` نوشته شده بود، یعنی حتی جلسه‌ای که
+   * اشتراکش روشن بود باز هم دکمهٔ «تقسیم با هم‌کلاسیا» می‌گرفت — کاربر
+   * می‌دید انتخابش انگار ثبت نشده و دوباره از اول می‌پرسید.
+   *
+   * و فرستادنِ خودکارِ دعوت همان چیزی است که تصمیمِ زودهنگام را ارزشمند
+   * می‌کند: کاربر یک بار انتخاب کرده، حالا لینک بی‌آنکه دکمه‌ای بزند آماده
+   * است تا در گروه درس فوروارد شود.
+   */
+  const shareOn = Boolean(getSession(sessionId)?.share_enabled);
   if (u) {
-    await ctx.reply(S.settlementMessage(cost, u.credit_sec), {
+    await ctx.reply(S.settlementMessage(cost, u.credit_sec, shareOn), {
       parse_mode: "HTML",
-      reply_markup: shareToggleKeyboard(sessionId, false),
+      reply_markup: shareToggleKeyboard(sessionId, shareOn),
     });
   }
+  if (shareOn) await sendInvitation(ctx, sessionId);
 }
 
 // ─── اشتراک‌گذاری ───────────────────────────────────────────────────────────
+
+/**
+ * «👥 با هم‌کلاسیا تقسیم می‌کنم» روی صفحهٔ **تأیید هزینه**.
+ *
+ * پرسشِ تعداد در یک پیام **تازه** می‌آید و پیام تأیید دست‌نخورده می‌ماند —
+ * اگر ویرایشش می‌کردیم، کاربری که تعداد را انتخاب نمی‌کرد دکمهٔ «شروع کن»
+ * را از دست می‌داد و همان بن‌بستی می‌شد که جای دیگری داریم رفعش می‌کنیم.
+ */
+handlers.callbackQuery(/^spre:([a-f0-9]+)$/, async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  const s = getSession(sessionId);
+  if (!s || s.tg_id !== uid(ctx)) {
+    await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  await ctx.reply(S.shareTargetPrompt(Math.round(s.original_ms / 1000)), {
+    parse_mode: "HTML",
+    reply_markup: shareTargetKeyboard(sessionId, "sontp"),
+  });
+});
+
+/**
+ * انتخابِ تعداد **پیش از پرداخت** — روشن می‌کند و تمام.
+ *
+ * برخلاف `sont:`، اینجا لینک دعوت فرستاده نمی‌شود: جلسه هنوز پردازش نشده و
+ * `joinSession` روی جلسهٔ ناتمام کسی را راه نمی‌دهد. لینک همان لحظه‌ای که
+ * نتیجه تحویل شد خودش می‌آید (`sendResults`).
+ */
+handlers.callbackQuery(/^sontp:([a-f0-9]+):(\d+)$/, async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  const people = Number(ctx.match![2]);
+  const s = getSession(sessionId);
+  if (!s || s.tg_id !== uid(ctx)) {
+    await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
+    return;
+  }
+  setShareTarget(sessionId, people);
+  setShareEnabled(sessionId, true);
+  await ctx.answerCallbackQuery({ text: "تقسیم روشن شد" });
+  await ctx
+    .editMessageText(S.sharePreEnabledMessage(Math.round(s.original_ms / 1000), people), {
+      parse_mode: "HTML",
+    })
+    .catch(() => {});
+});
 
 handlers.callbackQuery(/^son:([a-f0-9]+)$/, async (ctx) => {
   const sessionId = ctx.match![1]!;
@@ -2649,7 +2727,9 @@ handlers.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {
   await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   try {
     const out = await handleJoin(ctx, sessionId);
-    await reply(ctx, out.message);
+    // صفحه‌کلیدِ دعوت همین بالا برداشته شده؛ اگر پاسخ دکمه‌ای دارد (سکهٔ کم)
+    // باید همراه پیام برود، وگرنه تازه‌وارد در یک متنِ بی‌راه گیر می‌کند.
+    await reply(ctx, out.message, out.keyboard ? { reply_markup: out.keyboard } : {});
   } catch (e) {
     logger.error({ sessionId, err: String(e) }, "join failed");
     await reply(ctx, "پیوستن به این جلسه ممکن نشد. دوباره تلاش کن.");

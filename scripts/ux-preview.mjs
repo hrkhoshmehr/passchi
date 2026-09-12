@@ -6,8 +6,9 @@
  */
 import { WELCOME, HOW_IT_WORKS, packagesMessage, supportMessage, mainKeyboard } from "../src/bot/menu.ts";
 import {
-  HELP, PRIVACY, accountMessage, extractedMessage, lowBalanceMessage, recapMessage,
-  settlementMessage, timelineMessage, upsellMessage,
+  HELP, PRIVACY, accountMessage, confirmCostMessage, extractedMessage, lowBalanceMessage,
+  recapMessage, settlementMessage, sharePreEnabledMessage, shareTargetPrompt, timelineMessage,
+  upsellMessage,
 } from "../src/bot/strings.ts";
 import {
   DEMO_INTRO, SAMPLE_COURSE, SAMPLE_DURATION_MS, SAMPLE_REPORT, outroMessage,
@@ -135,6 +136,8 @@ line("۳ — بخش‌بندی کلاس (ریپلای صوت)");
 show(timelineMessage(report, true));
 line("۴ — تسویه و پیشنهاد اشتراک");
 show(settlementMessage(5400, 1_800));
+line("۴ب — تسویه، وقتی سرِ تأیید گفته «تقسیم می‌کنم»");
+show(settlementMessage(5400, 1_800, true));
 
 line("پایان اجرای رایگان — رونوشت و پیشنهاد");
 show(upsellMessage(5400));
@@ -175,6 +178,16 @@ line("شارژ");
 show(packagesMessage());
 line("سکهٔ کم");
 show(lowBalanceMessage(90 * 60, coinsToSec(20)));
+
+// ── تصمیمِ تقسیم، پیش از خرج‌شدن سکه ────────────────────────────────────────
+line("تأیید هزینه — جایی که تصمیمِ تقسیم هم گرفته می‌شود");
+show(confirmCostMessage(90 * 60, coinsToSec(120)));
+console.log("\n[ ✅ شروع کن ] [ ✖️ بی‌خیال ]\n[ 👥 با هم‌کلاسیا تقسیم می‌کنم ]");
+line("چند نفرید؟");
+show(shareTargetPrompt(90 * 60));
+console.log("\n[ ۵ نفر ] [ ۱۰ نفر ]\n[ ۲۰ نفر ] [ ۳۰ نفر ]");
+line("تقسیم، پیش از پرداخت روشن شد");
+show(sharePreEnabledMessage(90 * 60, 10));
 line("پشتیبانی");
 show(supportMessage());
 line("راهنما");

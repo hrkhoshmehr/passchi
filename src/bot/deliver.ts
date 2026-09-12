@@ -20,8 +20,9 @@ import { audioExt } from "../audio/container.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml, transcriptBytes } from "../util/text.js";
 import { transcodeForTelegram } from "../audio/ffmpeg.js";
-import { getCourse, sessionReport, updateSession, type SessionRow } from "../db/index.js";
+import { getCourse, getUser, sessionReport, updateSession, type SessionRow } from "../db/index.js";
 import { deliveryChannel } from "./notify.js";
+import { invitationMessage, shareToggleKeyboard } from "./share.js";
 import * as S from "./strings.js";
 
 /**
@@ -182,6 +183,37 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
       { path: s.transcript_srt, filename: "رونوشت زمان‌دار.srt" },
       { caption: "⏱ نسخهٔ زمان‌دار — برای پیدا کردن یک لحظه یا زیرنویسِ ویدیو." },
     ).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver srt failed"));
+  }
+
+  /**
+   * تسویه و **تقسیم با هم‌کلاسیا** — که تا امروز روی این مسیر اصلاً نبود.
+   *
+   * کاربری که از مینی‌اپ می‌آمد نه می‌فهمید چقدر برایش مانده و نه هیچ‌وقت
+   * پیشنهاد تقسیم را می‌دید: آن دکمه فقط در `sendResults` مسیر ربات بود. یعنی
+   * برای کاربر بله — که به‌خاطر سقف بیست مگابایت اغلب از مینی‌اپ می‌آید —
+   * کلِ اقتصادِ اشتراک خاموش بود.
+   *
+   * اگر کاربر سرِ تأییدِ هزینه گفته باشد «تقسیم می‌کنم»، لینک دعوت هم همین‌جا
+   * می‌آید و لازم نیست دکمه‌ای بزند.
+   */
+  const u = getUser(userId);
+  const shareOn = Boolean(s.share_enabled);
+  if (u) {
+    await ch.api
+      .sendMessage(
+        ch.chatId,
+        S.settlementMessage(Math.round(s.original_ms / 1000), u.credit_sec, shareOn),
+        { parse_mode: "HTML", reply_markup: shareToggleKeyboard(s.id, shareOn) },
+      )
+      .catch((e: unknown) => logger.warn({ err: String(e) }, "deliver settlement failed"));
+  }
+  if (shareOn) {
+    await ch.api
+      .sendMessage(ch.chatId, await invitationMessage(ch.api, s), {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      })
+      .catch((e: unknown) => logger.warn({ err: String(e) }, "deliver invitation failed"));
   }
 
   logger.info({ sessionId: s.id, userId, platform: ch.platform }, "delivered to bot");

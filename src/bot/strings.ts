@@ -4,7 +4,7 @@ import { chunkMessage, escapeHtml } from "../util/text.js";
 import { fmtClockLink, fmtDuration, toFaDigits } from "../util/time.js";
 import {
   balanceCoins, coinsAsMinutesIfUseful, costCoins,
-  fmtBalance, fmtCoins, fmtCoinsWithToman, fmtCost, RATE_LINE, shareBack,
+  fmtBalance, fmtCoins, fmtCoinsWithToman, fmtCost, RATE_LINE, shareBack, SHARE_TARGET_MIN,
 } from "../billing/coins.js";
 import { BTN } from "./menu.js";
 
@@ -521,6 +521,23 @@ export function accountMessage(i: AccountInput): string {
  *
  * موجودیِ پس از کسر هم نوشته می‌شود، چون سؤال بعدیِ همه همان است.
  */
+/**
+ * برچسب دکمه‌های صفحهٔ تأیید — یک‌جا، چون سه مسیرِ ورودی همین صفحه را
+ * می‌سازند و پیش از این هرکدام متن خودش را داشت.
+ */
+export const CONFIRM_BTN = {
+  go: "✅ شروع کن",
+  cancel: "✖️ بی‌خیال",
+  topup: "🪙 شارژ حساب",
+  /** تصمیمِ تقسیم، **پیش از** خرج‌شدن سکه */
+  share: "👥 با هم‌کلاسیا تقسیم می‌کنم",
+} as const;
+
+/** وقتی تقسیم از قبل روشن است، دکمه باید حالت را بگوید نه اینکه دوباره بپرسد. */
+export function shareOnButton(target: number): string {
+  return `👥 تقسیم روشنه · ${toFaDigits(Math.max(SHARE_TARGET_MIN, target))} نفر — تغییر`;
+}
+
 export function confirmCostMessage(neededSec: number, balanceSec: number): string {
   const after = Math.max(0, balanceSec - neededSec);
   return [
@@ -534,12 +551,22 @@ export function confirmCostMessage(neededSec: number, balanceSec: number): strin
   ].join("\n");
 }
 
+/**
+ * **کسری هم گفته می‌شود، نه فقط دو عددِ خام.**
+ *
+ * «۹۰ سکه می‌خواد، ۲۰ سکه داری» یعنی کاربر باید وسط تصمیم‌گرفتن تفریق کند —
+ * و عددی که او دنبالش است «چقدر کم دارم» است، نه آن دو تا. روی مسیرِ پیوستن
+ * از گروه درس این بدتر بود: کسی که تازه رسیده و ربات را نمی‌شناسد باید هم
+ * حساب می‌کرد هم دنبال بخش حساب می‌گشت.
+ */
 export function lowBalanceMessage(neededSec: number, balanceSec: number): string {
+  const short = Math.max(0, costCoins(neededSec) - balanceCoins(balanceSec));
   return [
     "سکه‌هات کم میاد 😅",
     "",
     `این کار <b>${fmtCoinsWithToman(costCoins(neededSec))}</b> می‌خواد ولی ` +
       `<b>${fmtBalance(balanceSec)}</b> داری.`,
+    `<b>${fmtCoins(short)}</b> کم داری.`,
     "",
     `از «${BTN.account}» شارژ کن.`,
   ].join("\n");
@@ -575,11 +602,26 @@ export function upsellMessage(costSec: number): string {
   ].join("\n");
 }
 
-/** پیام پایانی هر جلسهٔ کامل: چقدر رفت، چقدر مانده، و چطور برمی‌گردد. */
-export function settlementMessage(costSec: number, balanceSec: number): string {
+/**
+ * پیام پایانی هر جلسهٔ کامل: چقدر رفت، چقدر مانده، و چطور برمی‌گردد.
+ *
+ * `shareOn` یعنی کاربر **پیش از پرداخت** تقسیم را روشن کرده. آن‌وقت دعوت‌کردن
+ * دیگر پیشنهاد نیست، کاری است که همین حالا انجام شده — و دوباره پیشنهاد
+ * دادنش کاربر را وامی‌دارد فکر کند انتخابش ثبت نشده.
+ */
+export function settlementMessage(costSec: number, balanceSec: number, shareOn = false): string {
   const { cap } = shareBack(costSec);
+  const head = `تمومه ✅ این جلسه <b>${fmtCost(costSec)}</b> شد و <b>${fmtBalance(balanceSec)}</b> برات مونده.`;
+  if (shareOn) {
+    return [
+      head,
+      "",
+      `تقسیم با هم‌کلاسیا روشنه — لینک دعوت همین پایینه 👇 ` +
+        `هر کی برش داره سکه‌ش برمی‌گرده به حساب تو، تا نصفِ هزینه (<b>${fmtCoins(cap)}</b>).`,
+    ].join("\n");
+  }
   return [
-    `تمومه ✅ این جلسه <b>${fmtCost(costSec)}</b> شد و <b>${fmtBalance(balanceSec)}</b> برات مونده.`,
+    head,
     "",
     `جزوه رو با هم‌کلاسیا تقسیم کن: هر کی برش داره سکه‌ش برمی‌گرده به حساب تو، ` +
       `تا نصفِ هزینه (<b>${fmtCoins(cap)}</b>) جبران شه. بعدش برای بقیه رایگانه 👇`,
@@ -587,18 +629,41 @@ export function settlementMessage(costSec: number, balanceSec: number): string {
 }
 
 /**
- * پرسشِ «چند نفر؟» پیش از ساختنِ لینکِ دعوت.
+ * پرسشِ «چند نفر؟» — هم پیش از پرداخت، هم پیش از ساختنِ لینکِ دعوت.
  *
- * سهمِ ثابتِ هر نفر از همین انتخاب درمی‌آید، پس عمداً ساده و کوتاه است.
- * گزینهٔ «۱ نفر» یعنی همان یک نفر نصفِ هزینه را می‌دهد و کامل به مالک
- * برمی‌گردد.
+ * سهمِ ثابتِ هر نفر از همین انتخاب درمی‌آید، پس عمداً ساده و کوتاه است. عددِ
+ * سهمِ کمترین گزینه نوشته می‌شود، چون سؤالِ واقعیِ کاربر «هم‌کلاسیم چقدر
+ * می‌ده؟» است نه «چند نفریم؟».
  */
 export function shareTargetPrompt(costSec: number): string {
-  const { cap } = shareBack(costSec, 1);
+  const { seat } = shareBack(costSec, SHARE_TARGET_MIN);
   return [
-    "برای چند نفر دیگه می‌خوای بفرستی؟",
+    "چند نفرید؟",
     "",
-    `<i>سهم هر نفر از همین‌جا معلوم می‌شه. با «۱ نفر»، همون یک نفر نصفِ هزینه ` +
-      `(${fmtCoins(cap)}) رو می‌ده و کامل برمی‌گرده به تو.</i>`,
+    `<i>سهم هر نفر از همین‌جا معلوم می‌شه و ثابت می‌مونه — کلاسِ ${toFaDigits(SHARE_TARGET_MIN)} نفره ` +
+      `یعنی نفری ${fmtCoins(seat)}، کلاسِ بزرگ‌تر یعنی کمتر.</i>`,
+  ].join("\n");
+}
+
+/**
+ * تأییدِ روشن‌شدنِ تقسیم **پیش از پرداخت**.
+ *
+ * تا امروز این تصمیم فقط *بعد* از تحویل پرسیده می‌شد — یعنی درست وقتی کاربر
+ * چیزی را که می‌خواست گرفته بود و دلیلی برای زدنِ دکمه نداشت. حالا همان سؤال
+ * سرِ صفحهٔ تأییدِ هزینه هم هست، جایی که کاربر دارد به پول فکر می‌کند و
+ * «نصفش برمی‌گرده» بیشترین معنا را دارد.
+ *
+ * پیام عمداً می‌گوید هنوز چیزی کم نشده: انتخابِ تعداد، «شروع کن» نیست.
+ */
+export function sharePreEnabledMessage(costSec: number, people: number): string {
+  const { seat, cap } = shareBack(costSec, people);
+  return [
+    "👥 <b>تقسیم با هم‌کلاسیا روشن شد.</b>",
+    "",
+    `کلاسِ ${toFaDigits(Math.max(SHARE_TARGET_MIN, Math.round(people)))} نفره · ` +
+      `سهم هر نفر <b>${fmtCoins(seat)}</b> · تا <b>${fmtCoins(cap)}</b> به تو برمی‌گرده.`,
+    "",
+    "<i>لینک دعوت رو همون لحظه‌ای که جزوه آماده شد برات می‌فرستم. " +
+      "هنوز چیزی کم نشده — برای شروع، «شروع کن» رو بزن.</i>",
   ].join("\n");
 }
