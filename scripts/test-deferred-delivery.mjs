@@ -1,0 +1,292 @@
+/**
+ * تحویل جلسه: چهار چیز فوری، سه چیز پشت دکمه.
+ *
+ * ## مسئله‌ای که این آزمون قفل می‌کند
+ *
+ * `deliverToBot` هفت پیام پشت‌سرهم می‌فرستاد — صوت، خلاصه، نکته‌ها،
+ * بخش‌بندی زمانی، جزوه، رونوشت کامل، و SRT. دانشجو در آن دیوار نمی‌فهمید
+ * کجا را نگاه کند و فورواردکردنی‌ترین چیز، خلاصه، زیر بقیه گم می‌شد.
+ *
+ * حالا فقط صوت و خلاصه و نکته‌ها و جزوه می‌آیند و سه تای دیگر پشت دکمه‌اند.
+ *
+ * ## چهار چیزی که اینجا سنجیده می‌شود، و هیچ آزمون دیگری نمی‌گیرد
+ *
+ * ۱. **تحویل فوری دقیقاً چهار چیز است.** هر پیام اضافه‌ای که کسی بعداً به
+ *    مسیر تحویل اضافه کند، همین‌جا قرمز می‌شود.
+ *
+ * ۲. **زمان‌ها بعد از فشردن دکمه هم لینکِ پخش می‌مانند.** ستون این محصول
+ *    همین است: تلگرام `MM:SS` را فقط داخل پیامی که ریپلایِ صوتِ همان چت
+ *    است زدنی می‌کند. بخش‌بندی حالا شاید هفته‌ها بعد فرستاده شود، پس شناسهٔ
+ *    صوتِ تحویل باید در پایگاه‌داده مانده باشد و آن پیام ریپلایش شود.
+ *    و در چتِ *دیگری* — یعنی هم‌کلاسی‌ای که جلسه با او تقسیم شده — نباید
+ *    ریپلای شود، چون آن شناسه آنجا پیام دیگری است.
+ *
+ * ۳. **کال‌بک یک URL است و هرکس می‌تواند تکرارش کند.** شناسهٔ جلسه رازی نیست
+ *    (در لینک دعوت می‌آید)، پس غریبه باید رد شود نه اینکه رونوشت بگیرد.
+ *
+ * ۴. **فایلِ reap‌شده باید یک جمله بدهد، نه استثنا.** `KEEP_AUDIO_DAYS` فایل‌ها
+ *    را پاک می‌کند ولی دکمه در تاریخچهٔ چت می‌ماند.
+ *
+ * اجرا: DATA_DIR=./data/tmp-deliver npx tsx scripts/test-deferred-delivery.mjs
+ */
+process.env.BOT_TOKEN ||= "111:aaa";
+process.env.PUBLIC_URL ||= "https://passchi.ir";
+// بله عمداً خاموش است: مسیر آپلود دستی‌اش واقعاً `fetch` می‌زند و این آزمون
+// آفلاین است. بی‌واسطه‌بودنِ همان مسیر پایین با بازرسی متن کد سنجیده می‌شود.
+delete process.env.BALE_BOT_TOKEN;
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const { bot } = await import("../src/bot/index.ts");
+const { setNotifyApis } = await import("../src/bot/notify.ts");
+const { deliverToBot, MORE_CB, moreKeyboard } = await import("../src/bot/deliver.ts");
+const { createSession, getSession, updateSession } = await import("../src/db/index.ts");
+const { resolveIdentity } = await import("../src/db/identity.ts");
+const S = await import("../src/bot/strings.ts");
+
+let bad = 0;
+const check = (label, ok, extra = "") => {
+  if (!ok) bad++;
+  console.log(`${ok ? "✅" : "❌"} ${label}${extra ? ` — ${extra}` : ""}`);
+};
+
+// ─── ربات جعلی: هیچ درخواستی به شبکه نمی‌رود ────────────────────────────────
+//
+// ترنسفورمر پیش از لایهٔ شبکه می‌نشیند و خودش پاسخ می‌سازد.
+const botInfo = {
+  id: 1, is_bot: true, first_name: "passchi", username: "passchi",
+  can_join_groups: true, can_read_all_group_messages: false,
+  supports_inline_queries: false, can_connect_to_business_account: false,
+  has_main_web_app: false,
+};
+bot.botInfo = botInfo;
+
+let calls = [];
+let nextMessageId = 500;
+bot.api.config.use(async (_prev, method, payload) => {
+  const call = { method, payload, result: true };
+  calls.push(call);
+  if (method === "getMe") return { ok: true, result: botInfo };
+  if (method.startsWith("answer") || method.startsWith("edit") || method.startsWith("delete")) {
+    return { ok: true, result: true };
+  }
+  call.result = {
+    message_id: ++nextMessageId,
+    date: 0,
+    chat: { id: payload.chat_id, type: "private" },
+    audio: { file_id: "AUDIO-FID" },
+    document: { file_id: "DOC-FID" },
+  };
+  return { ok: true, result: call.result };
+});
+setNotifyApis(bot.api, null);
+
+// ─── یک جلسهٔ واقعی روی دیسک ────────────────────────────────────────────────
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "passchi-deliver-"));
+const touch = (name) => {
+  const p = path.join(tmp, name);
+  fs.writeFileSync(p, "x");
+  return p;
+};
+
+const OWNER = 7_100_001;
+const STRANGER = 7_100_002;
+const SESSION = "aaaa1111bbbb2222";
+
+resolveIdentity({ platform: "telegram", platformUserId: String(OWNER), name: "مالک" });
+resolveIdentity({ platform: "telegram", platformUserId: String(STRANGER), name: "غریبه" });
+
+const report = {
+  session_title: "مشتق جهت‌دار",
+  headline: "مشتق جهت‌دار تدریس شد.",
+  class_recap: "استاد مشتق جهت‌دار را از رو تعریف شروع کرد.",
+  course_guess: null,
+  chapters: [
+    {
+      start_ms: 0, end_ms: 900_000, kind: "teaching", title: "بخش اول",
+      parts: [{ at_ms: 0, label: "شروع درس" }, { at_ms: 240_000, label: "مثال" }],
+    },
+  ],
+  topics: [], professor_actions: [],
+  key_points: [
+    {
+      kind: "exam", title: "نکتهٔ امتحانی", detail: "توضیح",
+      evidence: { quote: "این تو امتحان میاد", at_ms: 300_000, speaker: "استاد", verified: true, score: 1 },
+    },
+  ],
+  glossary: [], open_questions: [], next_session_hint: null,
+  composition: [], silenceMs: 0, droppedCitations: 0,
+};
+
+createSession(SESSION, OWNER, null);
+updateSession(SESSION, {
+  status: "done",
+  title: "مشتق جهت‌دار",
+  original_file: touch("class.m4a"),
+  original_ms: 900_000,
+  billed_ms: 900_000,
+  report_json: JSON.stringify(report),
+  pdf_path: touch("notes.pdf"),
+  transcript_pdf: touch("transcript.pdf"),
+  transcript_txt: JSON.stringify([{ at_ms: 0, speaker: "استاد", text: "سلام" }]),
+  transcript_srt: touch("subs.srt"),
+});
+
+// ─── ۱) تحویل فوری ──────────────────────────────────────────────────────────
+
+calls = [];
+const ok = await deliverToBot(OWNER, getSession(SESSION));
+check("تحویل موفق بود", ok === true);
+
+const sent = calls.filter((c) => c.method !== "getMe");
+const texts = sent.filter((c) => c.method === "sendMessage").map((c) => c.payload.text);
+const docs = sent.filter((c) => c.method === "sendDocument");
+
+check("صوت اول از همه فرستاده شد", sent[0]?.method === "sendAudio", sent.map((c) => c.method).join(" → "));
+check("خلاصهٔ کلاس آمد", texts.some((t) => t.includes(report.class_recap)));
+check("نکته‌های استخراج‌شده آمد", texts.some((t) => t.includes("چی از کلاس درآوردم")));
+check("جزوه آمد و فقط همان یک سند", docs.length === 1 && docs[0].payload.caption === S.CAPTION.notes);
+check(
+  "بخش‌بندی زمانی در تحویل فوری **نیامد**",
+  !texts.some((t) => t.includes("کلاس به چه بخش‌هایی گذشت")),
+);
+check("رونوشت کامل در تحویل فوری نیامد", !docs.some((d) => d.payload.caption === S.CAPTION.transcript));
+check("SRT در تحویل فوری نیامد", !docs.some((d) => d.payload.caption === S.CAPTION.srt));
+check(
+  "دقیقاً پنج ارسال: صوت، خلاصه، نکته‌ها، جزوه، و پیامِ دکمه‌ها",
+  sent.length === 5,
+  sent.map((c) => c.method).join(" → "),
+);
+
+// ─── ۲) دکمه‌ها ─────────────────────────────────────────────────────────────
+
+const prompt = sent.find((c) => c.method === "sendMessage" && c.payload.reply_markup);
+const rows = prompt?.payload.reply_markup?.inline_keyboard ?? [];
+const datas = rows.flat().map((b) => b.callback_data);
+check("پیام آخر دکمه دارد", rows.length > 0);
+check("هیچ ردیفِ خالی‌ای نیست", !rows.some((r) => r.length === 0));
+check(
+  "هر سه کال‌بک با شناسهٔ جلسه",
+  datas.join(",") === `${MORE_CB.timeline}:${SESSION},${MORE_CB.transcript}:${SESSION},${MORE_CB.srt}:${SESSION}`,
+  datas.join(" | "),
+);
+check("هیچ کال‌بکی از ۶۴ بایت رد نمی‌شود", datas.every((d) => Buffer.byteLength(d) <= 64));
+
+// شناسهٔ صوتِ تحویل باید مانده باشد، وگرنه دکمهٔ بخش‌بندی زمان‌هایش را می‌بازد.
+const audioMsgId = sent[0].result.message_id;
+const rowAfter = getSession(SESSION);
+check("شناسهٔ چتِ تحویل ذخیره شد", rowAfter.delivered_chat_id === OWNER);
+check(
+  "شناسهٔ پیامِ صوتِ تحویل ذخیره شد",
+  Number.isInteger(rowAfter.delivered_audio_message_id) && rowAfter.delivered_audio_message_id === audioMsgId,
+  String(rowAfter.delivered_audio_message_id),
+);
+
+// ─── همان دکمه‌ها، از سطرِ تازهٔ پایگاه‌داده ─────────────────────────────────
+check("صفحه‌کلید از سطر تازه هم ساخته می‌شود", moreKeyboard(rowAfter) !== null);
+
+// ─── ۳) فشردنِ دکمه ─────────────────────────────────────────────────────────
+
+let updateId = 0;
+async function press(data, fromId, chatId = fromId) {
+  calls = [];
+  await bot.handleUpdate({
+    update_id: ++updateId,
+    callback_query: {
+      id: String(updateId),
+      from: { id: fromId, is_bot: false, first_name: "u" },
+      chat_instance: "ci",
+      data,
+      message: {
+        message_id: 490,
+        date: 0,
+        chat: { id: chatId, type: "private" },
+        from: botInfo,
+        text: "…",
+        reply_markup: { inline_keyboard: rows },
+      },
+    },
+  });
+  return calls;
+}
+
+// ── بخش‌بندی زمانی: باید ریپلای همان صوت باشد ──────────────────────────────
+let c = await press(`${MORE_CB.timeline}:${SESSION}`, OWNER);
+const timeline = c.find((x) => x.method === "sendMessage");
+check("بخش‌بندی زمانی فرستاده شد", Boolean(timeline?.payload.text.includes("کلاس به چه بخش‌هایی گذشت")));
+check(
+  "و **ریپلای همان صوتِ تحویل** است — وگرنه زمان‌ها لینکِ پخش نمی‌شوند",
+  timeline?.payload.reply_parameters?.message_id === rowAfter.delivered_audio_message_id,
+  JSON.stringify(timeline?.payload.reply_parameters),
+);
+check(
+  "به کاربر هم گفته می‌شود زمان‌ها زدنی‌اند",
+  timeline?.payload.text.includes("رو هر زمان بزنی"),
+);
+check(
+  "دکمهٔ زده‌شده برداشته شد و بقیه ماندند",
+  c.some(
+    (x) =>
+      x.method === "editMessageReplyMarkup" &&
+      !JSON.stringify(x.payload.reply_markup).includes(`"${MORE_CB.timeline}:${SESSION}"`) &&
+      JSON.stringify(x.payload.reply_markup).includes(`"${MORE_CB.transcript}:${SESSION}"`),
+  ),
+  JSON.stringify(c.find((x) => x.method === "editMessageReplyMarkup")?.payload.reply_markup),
+);
+
+// ── همان دکمه در چتِ دیگر: ریپلای نباید به پیامِ بی‌ربط بچسبد ───────────────
+//
+// هم‌کلاسی‌ای که جلسه با او تقسیم شده دکمه را در چتِ خودش می‌زند و شمارهٔ
+// پیامِ صوت آنجا پیامِ دیگری است.
+c = await press(`${MORE_CB.timeline}:${SESSION}`, OWNER, OWNER + 900);
+const elsewhere = c.find((x) => x.method === "sendMessage");
+check(
+  "در چتِ دیگر بی‌ریپلای می‌رود، نه ریپلای به پیامِ اشتباه",
+  elsewhere !== undefined && elsewhere.payload.reply_parameters === undefined,
+);
+check("و آنجا وعدهٔ زدنی‌بودن داده نمی‌شود", !elsewhere?.payload.text.includes("رو هر زمان بزنی"));
+
+// ── رونوشت کامل ─────────────────────────────────────────────────────────────
+c = await press(`${MORE_CB.transcript}:${SESSION}`, OWNER);
+check(
+  "رونوشت کامل با دکمه می‌آید",
+  c.some((x) => x.method === "sendDocument" && x.payload.caption === S.CAPTION.transcript),
+);
+
+// ─── ۴) غریبه ───────────────────────────────────────────────────────────────
+
+c = await press(`${MORE_CB.transcript}:${SESSION}`, STRANGER);
+check("غریبه رد می‌شود", c.some((x) => x.method === "answerCallbackQuery" && x.payload.text === S.MORE_DENIED));
+check(
+  "و هیچ فایلی یا پیامی برایش نمی‌رود",
+  !c.some((x) => x.method === "sendDocument" || x.method === "sendMessage"),
+  c.map((x) => x.method).join(" | "),
+);
+
+// ─── ۵) فایلی که reap شده ───────────────────────────────────────────────────
+//
+// دکمه در تاریخچهٔ چت می‌ماند و ممکن است هفته‌ها بعد زده شود.
+fs.rmSync(path.join(tmp, "subs.srt"));
+c = await press(`${MORE_CB.srt}:${SESSION}`, OWNER);
+check("فایلِ نبوده استثنا نمی‌دهد و سندی هم نمی‌فرستد", !c.some((x) => x.method === "sendDocument"));
+check(
+  "به‌جایش یک جملهٔ روشن می‌آید",
+  c.some((x) => x.method === "sendMessage" && x.payload.text === S.MORE_GONE.srt),
+  c.map((x) => x.method).join(" | "),
+);
+
+// ─── ۶) مسیر بله ────────────────────────────────────────────────────────────
+//
+// یک بار جزوه برای کاربر بله بی‌صدا نرسید چون `InputFile` خام ساخته شده بود و
+// بله ارجاعِ `attach://` را نمی‌فهمد. آزمون رفتاری اینجا ممکن نیست (مسیر بله
+// واقعاً `fetch` می‌زند)، پس خودِ متن کد بررسی می‌شود.
+const src = fs.readFileSync("src/bot/deliver.ts", "utf8");
+check("هیچ `InputFile` خامی در مسیر تحویل نیست", !src.includes("new InputFile"));
+check("هر ارسال فایل از `sendFileTo` رد می‌شود", (src.match(/sendFileTo\(/g) ?? []).length >= 3);
+check("هر ارسال فایل جداگانه `catch` شده", (src.match(/\.catch\(/g) ?? []).length >= 4);
+
+fs.rmSync(tmp, { recursive: true, force: true });
+console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
+process.exit(bad === 0 ? 0 : 1);

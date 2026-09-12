@@ -39,6 +39,7 @@ import {
 import {
   archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption, setArchiveApi,
 } from "./archive.js";
+import { MORE_CB, MORE_PART_OF, sendMorePart } from "./deliver.js";
 import {
   beginTopup, cancelTopup, decide, gatewayConfigured, paymentConfigured, receiveReceipt, settleTopup,
 } from "./topup.js";
@@ -2346,6 +2347,58 @@ handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
   const timeline = S.timelineMessage(r, Boolean(s.audio_message_id) && platformOf(ctx) === "telegram");
   if (timeline) await reply(ctx, timeline, asReply);
 });
+
+/**
+ * دکمه را از روی پیام بردار.
+ *
+ * قاعده‌اش را تور نمونه گذاشت: دکمهٔ زده‌شده باید برود، وگرنه کاربر نمی‌فهمد
+ * زدنِ دوباره کاری می‌کند یا نه و همان فایل دو بار می‌آید. اینجا اما سه دکمه
+ * روی یک پیام‌اند، پس فقط همان یکی حذف می‌شود نه کلِ صفحه‌کلید.
+ *
+ * شکست بلعیده می‌شود: پیامِ خیلی قدیمی ویرایش‌شدنی نیست و بله هم گاهی
+ * `editMessageReplyMarkup` را رد می‌کند — هیچ‌کدام نباید جلوی ارسالِ خودِ
+ * فایل را بگیرد.
+ */
+async function dropPressedButton(ctx: Context): Promise<void> {
+  const data = ctx.callbackQuery?.data;
+  const rows = ctx.callbackQuery?.message?.reply_markup?.inline_keyboard ?? [];
+  if (!data || rows.length === 0) return;
+  const left = rows
+    .map((row) => row.filter((b) => !("callback_data" in b && b.callback_data === data)))
+    .filter((row) => row.length > 0);
+  await ctx
+    .editMessageReplyMarkup({ reply_markup: left.length ? { inline_keyboard: left } : undefined })
+    .catch(() => {});
+}
+
+/**
+ * بخش‌های بایگانیِ یک جلسه: بخش‌بندی زمانی، رونوشت کامل، و SRT.
+ *
+ * `readableSession` اینجا حیاتی است. `callback_data` یک URL است که هرکس
+ * می‌تواند تکرارش کند و شناسهٔ جلسه هم رازی نیست (در لینک دعوت می‌آید)؛ بدون
+ * این بررسی، هر کسی رونوشت هر جلسه‌ای را بی‌پرداختِ سهم برمی‌داشت.
+ */
+handlers.callbackQuery(
+  new RegExp(String.raw`^(${MORE_CB.timeline}|${MORE_CB.transcript}|${MORE_CB.srt}):([a-f0-9]+)$`),
+  async (ctx) => {
+    const part = MORE_PART_OF[ctx.match![1]!]!;
+    const s = readableSession(ctx, ctx.match![2]!);
+    if (!s) {
+      await ctx.answerCallbackQuery({ text: S.MORE_DENIED });
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    await dropPressedButton(ctx);
+    const ok = await sendMorePart(
+      { api: ctx.api, chatId: ctx.chat!.id, platform: platformOf(ctx) },
+      s,
+      part,
+    );
+    // فایل ممکن است reap شده باشد (`KEEP_AUDIO_DAYS` و همسایه‌هایش). سکوت
+    // بدترین جواب است: کاربر فکر می‌کند دکمه خراب است.
+    if (!ok) await ctx.reply(S.MORE_GONE[part]);
+  },
+);
 
 // ─── اجرای کار ──────────────────────────────────────────────────────────────
 

@@ -94,6 +94,18 @@ for (const [column, ddl] of [
   // شناسهٔ پیام صوت در کانال بایگانی. گزارش بعداً **ریپلای همین پیام** فرستاده
   // می‌شود، پس بدون نگه‌داشتنش گزارش از صوتش جدا می‌افتد.
   ["archive_message_id", "ALTER TABLE sessions ADD COLUMN archive_message_id INTEGER"],
+  // چت و پیامِ صوتی که **خودِ تحویل** فرستاده — نه صوتی که کاربر آپلود کرده.
+  //
+  // کاری که از مینی‌اپ آمده هیچ پیام صوتی در چت ندارد، پس `audio_message_id`
+  // تهی می‌ماند و تنها صوتِ چت همان است که `deliverToBot` خودش می‌فرستد.
+  // بخش‌بندی زمانی حالا پشت دکمه است و شاید هفته‌ها بعد زده شود؛ بدون
+  // نگه‌داشتن این دو، آن پیام دیگر ریپلایِ صوت نیست و زمان‌هایش از لینکِ پخش
+  // می‌افتند — یعنی همان قابلیتی که کل ترتیبِ تحویل برایش چیده شده.
+  //
+  // چت هم لازم است نه فقط پیام: عضوی که جلسه با او تقسیم شده دکمه را در چتِ
+  // *خودش* می‌زند، جایی که آن پیام صوتی اصلاً وجود ندارد.
+  ["delivered_chat_id", "ALTER TABLE sessions ADD COLUMN delivered_chat_id INTEGER"],
+  ["delivered_audio_message_id", "ALTER TABLE sessions ADD COLUMN delivered_audio_message_id INTEGER"],
 ] as const) {
   const cols = db.prepare("PRAGMA table_info(sessions)").all() as unknown as Array<{ name: string }>;
   if (!cols.some((c) => c.name === column)) db.exec(ddl);
@@ -376,6 +388,8 @@ export interface SessionRow {
   share_target: number | null;
   mode: SessionMode;
   archive_message_id: number | null;
+  delivered_chat_id: number | null;
+  delivered_audio_message_id: number | null;
 }
 
 /**
@@ -458,6 +472,7 @@ type Updatable = Partial<
     | "pdf_path" | "transcript_pdf" | "transcript_srt" | "cost_usd" | "error" | "finished_at" | "course_id"
     | "audio_chat_id" | "audio_message_id" | "download_route"
     | "audio_file_id" | "share_enabled" | "share_target" | "mode" | "archive_message_id"
+    | "delivered_chat_id" | "delivered_audio_message_id"
   >
 >;
 
