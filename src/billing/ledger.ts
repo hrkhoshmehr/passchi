@@ -25,7 +25,9 @@ export type LedgerReason =
   | "commit"         // تسویهٔ نهایی پس از موفقیت (تفاوت مدت واقعی و تخمینی)
   | "refund"         // برگشت به‌خاطر شکست کار
   | "share_charge"   // سهم کسی که به جلسه پیوسته
-  | "share_refund";  // برگشت به اعضای قبلی چون سهم هرکس کمتر شد
+  | "share_refund"   // برگشت به اعضای قبلی چون سهم هرکس کمتر شد
+  | "transfer_out"   // سکه‌ای که کاربر برای هم‌کلاسی‌اش فرستاد
+  | "transfer_in";   // سکه‌ای که از هم‌کلاسی رسید
 
 export class InsufficientCredit extends Error {
   readonly shortfall: number;
@@ -138,6 +140,138 @@ export function refund(tgId: number, seconds: number, sessionId: string, note?: 
 export function currentBalance(tgId: number): number {
   const row = balanceOf.get(tgId) as unknown as { credit_sec: number } | undefined;
   return row?.credit_sec ?? 0;
+}
+
+// ─── انتقال بین دو کاربر ─────────────────────────────────────────────────────
+
+/**
+ * سکه‌هایی که کاربر **پول داده** و هنوز خرجشان نکرده — تنها چیزی که اجازهٔ
+ * فرستادن دارد.
+ *
+ * ## چرا از دفتر، نه از `users.credit_sec`
+ *
+ * موجودی نمی‌گوید سکه از کجا آمده. اگر ملاکِ انتقال موجودی باشد، ده حساب
+ * قلابی که هرکدام ۲۰ سکهٔ `trial` گرفته‌اند، ۲۰۰ سکهٔ مجانی را در یک حساب
+ * جمع می‌کنند و هزینه‌اش را ما می‌دهیم. پس منبعِ هر سکه از `reason` خوانده
+ * می‌شود و فقط دو منبع «خریداری‌شده» حساب می‌شوند:
+ *
+ *   • `topup` — پولی که واقعاً وارد شده.
+ *   • `transfer_in` — سکه‌ای که خودش قبلاً `topup` بوده و دست‌به‌دست شده؛
+ *     اگر اینجا نیاید، سکهٔ خریداری‌شده پس از یک انتقال می‌میرد.
+ *
+ * `trial` و `grant` بیرون‌اند — همان دروازهٔ اصلی. `share_refund` هم بیرون
+ * است و این عمدی است: برگشتیِ اشتراک‌گذاری از جیبِ کسانی می‌آید که پیوسته‌اند،
+ * و اگر آن‌ها حساب تازه باشند سهمشان را با سکهٔ هدیه داده‌اند. یعنی همان
+ * قیفِ سکهٔ مجانی، فقط یک گام درازتر.
+ *
+ * ## کدام سکه اول خرج می‌شود: **خریداری‌شده**
+ *
+ * تصمیمِ عمدی، و سختگیرانه‌ترین حالت. هر ثانیه‌ای که کاربر خرج کرده اول از
+ * سهمِ خریدش کم می‌شود و هدیه دست‌نخورده می‌ماند؛ پس آنچه در پایان قابل
+ * انتقال است هرگز بیشتر از «آنچه خریدی و مصرف نکردی» نمی‌شود.
+ *
+ * عکسش (اول هدیه) دستِ کاربر را بازتر می‌گذارد ولی ارزشِ سکهٔ رایگان را از
+ * راهِ کناری قابل‌انتقال می‌کند: کسی که ۱۰۰ سکه خریده و ۹۰ سکه خرج کرده، با
+ * «اول هدیه» ۳۰ سکه می‌فرستد در حالی که ۲۰ تای آن هدیه بوده است. با «اول
+ * خرید» ۱۰ سکه می‌فرستد — دقیقاً همان‌قدر که پولش را داده و مصرفش نکرده.
+ *
+ * هزینهٔ این سختگیری در عمل کم است: هم‌کلاسی‌ای که ۱۰ سکه می‌گذارد، معمولاً
+ * تازه پکیج خریده. و قاعده در یک جمله گفتنی است: «هرچی خریدی و خرج نکردی».
+ *
+ * سرانجام با موجودیِ واقعی هم بریده می‌شود؛ سکه‌ای که همین حالا برای یک کارِ
+ * در جریان رزرو شده، در `credit_sec` نیست و نباید فرستاده شود.
+ */
+export function transferableSec(tgId: number): number {
+  const row = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN reason IN ('topup','transfer_in') THEN delta_sec END), 0) AS bought,
+         COALESCE(SUM(CASE WHEN reason = 'transfer_out' THEN -delta_sec END), 0) AS sent,
+         -- خرجِ خالص: رزرو و تسویه و بازپرداخت با هم، تا کاری که برگشت خورده
+         -- دو بار حساب نشود. برگشتیِ اشتراک‌گذاری عمداً اینجا نیست، پس خرج
+         -- کمتر از واقع برآورد نمی‌شود.
+         COALESCE(SUM(CASE WHEN reason IN ('reserve','commit','refund','share_charge')
+                           THEN -delta_sec END), 0) AS spent
+       FROM credit_ledger WHERE tg_id = ?`,
+    )
+    .get(tgId) as unknown as { bought: number; sent: number; spent: number };
+
+  const free = row.bought - row.sent - Math.max(0, row.spent);
+  return Math.max(0, Math.min(free, currentBalance(tgId)));
+}
+
+export interface TransferResult {
+  fromBalance: number;
+  toBalance: number;
+}
+
+/**
+ * یک انتقال، **یک** تراکنش.
+ *
+ * دو بار صداکردن `move` وسوسه‌انگیز است ولی هر کدام `BEGIN IMMEDIATE` خودش
+ * را دارد: مردنِ پروسه بین آن دو یعنی سکه از فرستنده کم شده و به گیرنده
+ * نرسیده — و چون هر دو سطر «درست»اند، هیچ‌جا معلوم نمی‌شود چه گم شده.
+ *
+ * ترتیب داخل تراکنش همان قاعدهٔ `claimGift` است: **اول ثبت برداشت، بعد
+ * واریز**. با تراکنشِ واحد هیچ‌کدام بدون دیگری نمی‌ماند، ولی ترتیب را نگه
+ * می‌داریم تا اگر روزی این تابع شکسته شد، بدترین حالت همان حالتِ بی‌ضرر
+ * بماند.
+ *
+ * `guard` — اگر داده شود — **درون همان تراکنش** اجرا می‌شود. تنها راهِ
+ * اینکه «ثبتِ برداشتِ لینک» و «جابه‌جایی سکه» یک اتم باشند، بی‌آنکه این
+ * ماژول از کدهای انتقال چیزی بداند. برگرداندنِ `false` کل انتقال را
+ * برمی‌گرداند و `null` بیرون می‌دهد.
+ */
+export function moveBetween(opt: {
+  fromId: number;
+  toId: number;
+  deltaSec: number;
+  note?: string | null;
+  guard?: () => boolean;
+}): TransferResult | null {
+  const amount = Math.round(opt.deltaSec);
+  if (amount <= 0) throw new Error("مقدار انتقال باید مثبت باشد.");
+  // فرستادن به خود، جابه‌جایی نیست؛ دو سطرِ خنثی در دفتر می‌گذارد و در
+  // گزارش‌ها مثل گردشِ واقعی به‌نظر می‌رسد.
+  if (opt.fromId === opt.toId) throw new Error("فرستادن سکه به خود ممکن نیست.");
+
+  db.prepare("BEGIN IMMEDIATE").run();
+  try {
+    if (opt.guard && !opt.guard()) {
+      db.prepare("ROLLBACK").run();
+      return null;
+    }
+
+    const from = balanceOf.get(opt.fromId) as unknown as { credit_sec: number } | undefined;
+    const to = balanceOf.get(opt.toId) as unknown as { credit_sec: number } | undefined;
+    if (!from) throw new Error(`کاربر ${opt.fromId} وجود ندارد.`);
+    if (!to) throw new Error(`کاربر ${opt.toId} وجود ندارد.`);
+
+    // سنجهٔ «قابل انتقال» **داخل** تراکنش خوانده می‌شود، وگرنه دو برداشتِ
+    // همزمان هر دو همان عددِ کهنه را می‌بینند و مجموعشان از سقف رد می‌شود.
+    const free = transferableSec(opt.fromId);
+    if (free < amount) throw new InsufficientCredit(free, amount);
+
+    const fromNext = from.credit_sec - amount;
+    const toNext = to.credit_sec + amount;
+
+    // `total_used_sec` عمداً بالا نمی‌رود: آن ستون «چقدر صوت پردازش کردی» را
+    // می‌گوید و صفحهٔ حساب همان را نشان می‌دهد. فرستادنِ سکه مصرف نیست.
+    applyDelta.run(fromNext, opt.fromId);
+    writeRow.run(opt.fromId, -amount, fromNext, "transfer_out", null, opt.note ?? null);
+    applyDelta.run(toNext, opt.toId);
+    writeRow.run(opt.toId, amount, toNext, "transfer_in", null, opt.note ?? null);
+
+    db.prepare("COMMIT").run();
+    logger.info(
+      { from: opt.fromId, to: opt.toId, sec: amount },
+      "coin transfer",
+    );
+    return { fromBalance: fromNext, toBalance: toNext };
+  } catch (e) {
+    db.prepare("ROLLBACK").run();
+    throw e;
+  }
 }
 
 export interface LedgerRow {

@@ -34,6 +34,7 @@ export const HELP = `<b>چیکار می‌کنم</b>
 <b>دستورا</b>
 /history جلسه‌های قبلی
 /credit حساب و سکه‌ها
+/send فرستادن سکه به هم‌کلاسی
 /course ثبت درس
 /privacy دادهٔ من
 /forget پاک‌کردن داده‌هام`;
@@ -466,6 +467,8 @@ export interface AccountInput {
   usedSec: number;
   refundedSec: number;
   sessionCount: number;
+  /** سکه‌های خریداری‌شده و خرج‌نشده — تنها چیزی که می‌شود برای هم‌کلاسی فرستاد */
+  transferableSec?: number;
 }
 
 /**
@@ -487,6 +490,7 @@ export interface AccountInput {
 export function accountMessage(i: AccountInput): string {
   const coins = balanceCoins(i.creditSec);
   const asTime = coinsAsMinutesIfUseful(coins);
+  const transferable = balanceCoins(i.transferableSec ?? 0);
 
   const stats: string[] = [];
   if (i.sessionCount > 0) stats.push(`📚 ${toFaDigits(i.sessionCount)} جلسه فرستاده‌ای`);
@@ -500,6 +504,20 @@ export function accountMessage(i: AccountInput): string {
       ...(asTime ? [`<i>یعنی حدود ${asTime}</i>`] : []),
     ],
     ...(stats.length ? [stats] : []),
+    /**
+     * «فرستادن سکه» فقط وقتی گفته می‌شود که کاربر واقعاً چیزی برای فرستادن
+     * دارد.
+     *
+     * نشان‌دادنش به کسی که فقط سهمیهٔ رایگان دارد، دعوت به دیوارِ «قابل
+     * فرستادن نیست» است — همان اشتباهی که در مسیر آپلود قبلاً افتاد و به
+     * همین دلیل موجودی *پیش از* آپلود گفته می‌شود.
+     */
+    ...(transferable > 0
+      ? [[
+          `<i>می‌تونی تا ${fmtCoins(transferable)} از این‌ها رو برای هم‌کلاسیت بفرستی: ` +
+            `</i><code>/send ${toFaDigits(transferable)}</code>`,
+        ]]
+      : []),
     [`<i>${RATE_LINE}.</i>`],
   ];
   return groups.map((g) => g.join("\n")).join("\n\n");
@@ -601,4 +619,92 @@ export function shareTargetPrompt(costSec: number): string {
     `<i>سهم هر نفر از همین‌جا معلوم می‌شه. با «۱ نفر»، همون یک نفر نصفِ هزینه ` +
       `(${fmtCoins(cap)}) رو می‌ده و کامل برمی‌گرده به تو.</i>`,
   ].join("\n");
+}
+
+// ─── فرستادن سکه ─────────────────────────────────────────────────────────────
+
+/** راهنمای `/send` — هر دو جهت در یک متن، چون کاربر فقط یک دستور را می‌بیند. */
+export const SEND_USAGE = [
+  "🎁 <b>فرستادن سکه به هم‌کلاسی</b>",
+  "",
+  "<code>/send 10</code> — یه لینک می‌سازم؛ هرکی بازش کنه ۱۰ سکه می‌گیره.",
+  "<code>/send 12345678 10</code> — مستقیم به کسی که شناسه‌ش رو داری.",
+  "",
+  "<i>فقط سکه‌هایی که خودت خریدی قابل فرستادنه؛ سکهٔ هدیه و سهمیهٔ رایگان نه.</i>",
+].join("\n");
+
+/**
+ * جملهٔ «چقدر می‌تونی بفرستی» — و چرا عدد گفته می‌شود نه فقط «کم است».
+ *
+ * سؤالِ بعدیِ هرکسی که این پیام را می‌گیرد همان عدد است؛ بدون آن باید با
+ * آزمون‌وخطا پیدایش کند. دلیلِ تفاوتِ این عدد با موجودی هم همان‌جا گفته
+ * می‌شود، وگرنه کاربر فکر می‌کند ربات موجودی‌اش را اشتباه می‌بیند.
+ */
+export function sendTooMuchMessage(availableCoins: number): string {
+  const why =
+    "<i>سکهٔ هدیه و سهمیهٔ رایگان فرستاده نمی‌شه — فقط اونی که خودت خریدی و خرج نکردی.</i>";
+  return availableCoins > 0
+    ? `فقط <b>${fmtCoins(availableCoins)}</b> قابل فرستادنه.\n\n${why}`
+    : `سکهٔ قابل‌فرستادنی نداری 🙃\n\n${why}`;
+}
+
+/**
+ * پیامی که فرستنده پس از ساختِ لینک می‌بیند.
+ *
+ * جملهٔ «همون لحظه کم می‌شه» اختیاری نیست: سکه‌ای کنار گذاشته نشده، پس اگر
+ * فرستنده تا زمانِ برداشت خرجش کند لینک کار نمی‌کند. گفتنش اینجا ارزان است
+ * و نگفتنش یعنی یک هم‌کلاسیِ سردرگم پشت لینکی که وعده داده بود.
+ */
+export function transferLinkMessage(coins: number, link: string): string {
+  return [
+    `🎁 <b>لینک ${fmtCoins(coins)} ساخته شد</b>`,
+    "",
+    // لینک داخل <code> است تا با یک لمس کپی شود و پیش‌نمایشش باز نشود.
+    `<code>${link}</code>`,
+    "",
+    "<i>بفرستش تو گروه کلاس. اولین نفری که بازش کنه سکه‌ها رو می‌گیره، و همون " +
+      "لحظه از حساب تو کم می‌شه — پس تا اون موقع خرجشون نکن.</i>",
+  ].join("\n");
+}
+
+/** پیامِ گیرنده پس از برداشتِ موفق. */
+export function transferReceivedMessage(
+  coins: number,
+  fromName: string,
+  balanceSec: number,
+): string {
+  return [
+    `🎁 <b>${fmtCoins(coins)}</b> از ${escapeHtml(fromName)} رسید!`,
+    "",
+    `موجودی‌ات: <b>${fmtBalance(balanceSec)}</b>`,
+    `<i>${RATE_LINE}.</i>`,
+    "",
+    "صوت کلاستو بفرست تا خلاصه، نکات امتحانی و جزوه‌اش رو برات دربیارم 🎧",
+  ].join("\n");
+}
+
+/** خبری که به فرستنده می‌رسد وقتی لینکش برداشته شد. */
+export function transferTakenMessage(coins: number, byName: string): string {
+  return `✅ <b>${fmtCoins(coins)}</b> که فرستاده بودی به ${escapeHtml(byName)} رسید.`;
+}
+
+/** جوابِ رد — یک جا، تا سه مسیرِ `/send` سه جور نگویندش. */
+export function transferRefusal(
+  reason: "unknown" | "self" | "already" | "insufficient",
+  availableCoins = 0,
+): string {
+  switch (reason) {
+    case "unknown":
+      return "این لینک معتبر نیست.";
+    case "self":
+      return "به خودت که نمی‌شه سکه فرستاد 🙂";
+    case "already":
+      return "این سکه‌ها را یکی زودتر برداشته.";
+    case "insufficient":
+      return (
+        "فرستنده الان این‌قدر سکهٔ قابل‌انتقال نداره 🙃\n\n" +
+        `<i>${availableCoins > 0 ? `فقط ${fmtCoins(availableCoins)} مونده. ` : ""}` +
+        "احتمالاً بین ساختنِ لینک و باز کردنش خرجشون کرده.</i>"
+      );
+  }
 }

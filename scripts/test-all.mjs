@@ -15,6 +15,7 @@ import path from "node:path";
 /** آزمون‌هایی که به پایگاه‌دادهٔ تازه نیاز دارند. */
 const NEEDS_DB = new Set([
   "gift", "identity", "archive-routing", "interrupted-recovery", "sharing", "topup-gateway",
+  "transfer",
 ]);
 
 const tests = [
@@ -59,6 +60,7 @@ const tests = [
   "platform-neutral",
   "sharing",
   "gift",
+  "transfer",
   "identity",
   "topup-gateway",
 ];

@@ -182,6 +182,37 @@ CREATE TABLE IF NOT EXISTS gift_claims (
   PRIMARY KEY (code, tg_id)
 );
 CREATE INDEX IF NOT EXISTS idx_claims_user ON gift_claims(tg_id, claimed_at DESC);
+
+-- انتقال سکه بین دو کاربر، از راه لینک.
+--
+-- فرستنده معمولاً شناسهٔ داخلیِ گیرنده را **ندارد** — همان مشکلی که دستور /gift
+-- برای ادمین حل کرد. پس جهت برعکس می‌شود: فرستنده لینک می‌سازد و گیرنده با
+-- زدن رویش خودش را معرفی می‌کند.
+--
+-- ⚠️ اینجا سکه‌ای کنار گذاشته **نمی‌شود**. کسر در لحظهٔ برداشتن انجام می‌شود
+-- و در همان تراکنشِ ثبتِ برداشت. با کنارگذاشتن (escrow) باید مسیر انصراف و
+-- انقضا و برگشت هم می‌آمد، و هر کدام یک پنجرهٔ تازه برای گم‌شدن سکه است.
+-- بهایش این است که لینکِ ساخته‌شده تضمین نیست: اگر فرستنده تا زمان برداشت
+-- سکه‌هایش را خرج کند، برداشت رد می‌شود. متنِ لینک همین را می‌گوید.
+CREATE TABLE IF NOT EXISTS coin_transfers (
+  code       TEXT PRIMARY KEY,
+  from_id    INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+  coins      INTEGER NOT NULL,
+  note       TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- «این لینک را چه کسی برداشت». کلید روی خودِ ستون code است نه روی جفتِ
+-- (code, tg_id): برخلاف کد هدیه، انتقال ظرفیتی ندارد و **یک** بار برداشته
+-- می‌شود. پس دوبار-برداشتن را همین کلید غیرممکن می‌کند، نه یک بررسیِ if —
+-- حتی وقتی دو نفر همزمان روی یک لینک بزنند.
+CREATE TABLE IF NOT EXISTS coin_transfer_claims (
+  code       TEXT PRIMARY KEY REFERENCES coin_transfers(code) ON DELETE CASCADE,
+  tg_id      INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+  coins      INTEGER NOT NULL,
+  claimed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_transfers_from ON coin_transfers(from_id, created_at DESC);
 `);
 
 
@@ -744,4 +775,76 @@ export function listGifts(limit = 20): Array<GiftRow & { used: number }> {
        FROM gifts g ORDER BY g.created_at DESC LIMIT ?`,
     )
     .all(limit) as unknown as Array<GiftRow & { used: number }>;
+}
+
+// ─── انتقال سکه ──────────────────────────────────────────────────────────────
+
+export interface TransferRow {
+  code: string;
+  from_id: number;
+  coins: number;
+  note: string | null;
+  created_at: string;
+}
+
+export function createTransfer(opt: {
+  code: string;
+  fromId: number;
+  coins: number;
+  note?: string | null;
+}): TransferRow {
+  db.prepare(`INSERT INTO coin_transfers (code, from_id, coins, note) VALUES (?, ?, ?, ?)`).run(
+    opt.code,
+    opt.fromId,
+    opt.coins,
+    opt.note ?? null,
+  );
+  return getTransfer(opt.code)!;
+}
+
+export function getTransfer(code: string): TransferRow | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM coin_transfers WHERE code = ?`)
+      .get(code) as unknown as TransferRow | undefined) ?? null
+  );
+}
+
+export interface TransferClaimRow {
+  code: string;
+  tg_id: number;
+  coins: number;
+  claimed_at: string;
+}
+
+export function transferClaim(code: string): TransferClaimRow | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM coin_transfer_claims WHERE code = ?`)
+      .get(code) as unknown as TransferClaimRow | undefined) ?? null
+  );
+}
+
+/**
+ * ثبتِ «این لینک برداشته شد» — و تنها دروازهٔ واقعیِ یک‌بارمصرف‌بودن.
+ *
+ * عمداً تراکنشِ خودش را باز **نمی‌کند**: صدازننده آن را از داخل تراکنشِ
+ * `moveBetween` اجرا می‌کند تا ثبتِ برداشت و جابه‌جایی سکه یک اتم باشند.
+ * جدا کردنشان یعنی همان پنجره‌ای که در `claimGift` بسته شد، اینجا دوباره
+ * باز شود.
+ *
+ * `false` یعنی این کد قبلاً — یا در همین لحظه توسط کسی دیگر — برداشته شده.
+ * خطای کلید تکراری تراکنش را نمی‌کُشد، فقط همین درج را رد می‌کند.
+ */
+export function insertTransferClaim(code: string, tgId: number, coins: number): boolean {
+  try {
+    db.prepare(`INSERT INTO coin_transfer_claims (code, tg_id, coins) VALUES (?, ?, ?)`).run(
+      code,
+      tgId,
+      coins,
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }

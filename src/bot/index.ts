@@ -21,7 +21,10 @@ import {
   downloadTelegramFile,
   FileTooLargeError,
 } from "./download.js";
-import { commit, InsufficientCredit, grant, refund, reserve, totalShareRefunds } from "../billing/ledger.js";
+import {
+  commit, InsufficientCredit, grant, refund, reserve, totalShareRefunds, transferableSec,
+} from "../billing/ledger.js";
+import { claimTransfer, mintTransfer, sendDirect } from "./transfer.js";
 import {
   accessibleSessions, isMember, registerOwner, setShareEnabled, setShareTarget, shareStatus,
 } from "../billing/sharing.js";
@@ -268,6 +271,7 @@ async function accountScreen(ctx: Context): Promise<void> {
       usedSec: u.total_used_sec,
       refundedSec: totalShareRefunds(u.tg_id),
       sessionCount: done,
+      transferableSec: transferableSec(u.tg_id),
     }),
     { reply_markup: withBack(new InlineKeyboard().text("🪙 شارژ حساب", "topup")) },
   );
@@ -557,6 +561,33 @@ handlers.command("start", async (ctx) => {
     return;
   }
 
+  /**
+   * لینک انتقال سکه: /start t_<code>
+   *
+   * کنار شاخهٔ هدیه می‌نشیند و به همان دلیل پیش از منوی خوشامد می‌آید: گیرنده
+   * روی لینکی زده که به او سکه وعده داده، و منوی عمومی به‌جای آن یعنی خرابیِ
+   * وعده. صفحه‌کلید هم در هر دو حالت نشانده می‌شود، چون کسی که از این لینک
+   * آمده ممکن است هرگز `/start` ساده نزند.
+   */
+  if (payload.startsWith("t_")) {
+    const code = payload.slice(2);
+    const id = uid(ctx);
+    const out = claimTransfer(code, id);
+    await ctx.reply("سلام 👋", { reply_markup: mainKeyboard });
+    if (!out.ok) {
+      await reply(ctx, S.transferRefusal(out.reason, out.availableCoins ?? 0));
+      return;
+    }
+    await reply(
+      ctx,
+      S.transferReceivedMessage(out.coins, describeUser(out.fromId), out.balanceSec),
+    );
+    // فرستنده باید بداند سکه‌اش رفت — بی‌صدا شکست می‌خورد، چون گیرنده سکه‌اش
+    // را گرفته و هیچ خطایی در مسیر او نباید از این خبررسانی بیرون بزند.
+    await notifyUser(out.fromId, S.transferTakenMessage(out.coins, describeUser(id))).catch(() => {});
+    return;
+  }
+
   // لینک دعوت: /start j_<sessionId>
   if (payload.startsWith("j_")) {
     const sessionId = payload.slice(2);
@@ -775,6 +806,72 @@ handlers.command("help", (ctx) => reply(ctx, S.HELP, { reply_markup: mainKeyboar
 handlers.command("menu", (ctx) => ctx.reply("بفرما 👇", { reply_markup: mainKeyboard }));
 handlers.command("credit", (ctx) => accountScreen(ctx));
 handlers.command("buy", (ctx) => topupScreen(ctx));
+
+/**
+ * فرستادن سکه به هم‌کلاسی.
+ *
+ *   /send 10            →  لینک می‌سازد؛ هرکس بازش کند سکه‌ها را می‌گیرد
+ *   /send <tg_id> 10    →  مستقیم، به کسی که از قبل با ربات حرف زده
+ *
+ * دو جهت در **یک** دستور، برخلاف `/gift` و `/grant` که ادمین دارد. ادمین
+ * می‌داند کدام را بزند؛ دانشجو نه — و دو دستور یعنی نصفشان دستورِ اشتباه را
+ * می‌زنند و پیام خطا می‌گیرند. تفکیک از روی تعداد عددها انجام می‌شود: یک
+ * عدد یعنی لینک، دو عدد یعنی شناسه و مقدار.
+ *
+ * جهتِ **لینک** جهتِ اصلی است: فرستنده تقریباً هیچ‌وقت شناسهٔ داخلیِ
+ * هم‌کلاسی‌اش را ندارد و راهی هم برای پیدا کردنش نیست.
+ */
+handlers.command("send", async (ctx) => {
+  const u = touchUser(ctx);
+  if (!u) return;
+  const me = uid(ctx);
+
+  // رقم فارسی/عربی هم عدد است — همان دلیلی که در `/gift` و `/grant` هست:
+  // این دستور از روی موبایل و با صفحه‌کلید فارسی زده می‌شود.
+  const digits = (s: string) =>
+    s
+      .replace(/[٬,]/g, "")
+      .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+      .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+
+  const parts = ((ctx.match as string | undefined) ?? "").trim().split(/\s+/).filter(Boolean);
+  const nums = parts.map(digits).filter((p) => /^\d+$/.test(p)).map(Number);
+  const coins = nums.length >= 2 ? nums[1]! : nums[0];
+  const target = nums.length >= 2 ? nums[0]! : null;
+
+  if (coins === undefined || !Number.isFinite(coins) || coins <= 0) {
+    await reply(ctx, S.SEND_USAGE);
+    return;
+  }
+
+  // ── جهت دوم: مستقیم، وقتی شناسه در دست است ────────────────────────────────
+  if (target !== null) {
+    const out = sendDirect(me, target, coins);
+    if (!out.ok) {
+      await reply(
+        ctx,
+        out.reason === "insufficient"
+          ? S.sendTooMuchMessage(out.availableCoins ?? 0)
+          : S.transferRefusal(out.reason, out.availableCoins ?? 0),
+      );
+      return;
+    }
+    await reply(ctx, S.transferTakenMessage(out.coins, describeUser(target)));
+    await notifyUser(
+      target,
+      S.transferReceivedMessage(out.coins, describeUser(me), out.balanceSec),
+    ).catch(() => {});
+    return;
+  }
+
+  // ── جهت اصلی: لینک ────────────────────────────────────────────────────────
+  const minted = await mintTransfer(ctx.api, { fromId: me, coins });
+  if ("error" in minted) {
+    await reply(ctx, S.sendTooMuchMessage(minted.availableCoins));
+    return;
+  }
+  await reply(ctx, S.transferLinkMessage(minted.transfer.coins, minted.link));
+});
 
 handlers.command("course", async (ctx) => {
   touchUser(ctx);
