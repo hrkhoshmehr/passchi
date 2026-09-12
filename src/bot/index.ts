@@ -42,7 +42,9 @@ import {
 import {
   archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption, setArchiveApi,
 } from "./archive.js";
-import { MORE_CB, MORE_PART_OF, moreKeyboard, reportReplyTo, sendMorePart } from "./deliver.js";
+import {
+  MORE_CB, MORE_PART_OF, closingKeyboard, moreKeyboard, reportReplyTo, sendMorePart,
+} from "./deliver.js";
 import {
   beginTopup, cancelTopup, decide, gatewayConfigured, paymentConfigured, receiveReceipt, settleTopup,
 } from "./topup.js";
@@ -2752,15 +2754,6 @@ export async function sendResults(
    * خط لولهٔ پردازش هر سه مسیر (`transcript_pdf`، `transcript_srt`،
    * `report_json`) را پیش از برگشتن نوشته، پس سطر تازه است.
    */
-  const kb = s ? moreKeyboard(s) : null;
-  if (kb) {
-    await ctx.reply(S.MORE_PROMPT, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: kb,
-    });
-  }
-
   const u = getUser(uid(ctx));
   const cost = Math.round(out.originalDurationMs / 1000);
   /**
@@ -2775,10 +2768,12 @@ export async function sendResults(
    * است تا در گروه درس فوروارد شود.
    */
   const shareOn = Boolean(getSession(sessionId)?.share_enabled);
-  if (u) {
-    await ctx.reply(S.settlementMessage(cost, u.credit_sec, shareOn), {
+  // یک پیامِ پایانی، نه دو تا — چرایش در `closingKeyboard`.
+  if (s && (u || moreKeyboard(s))) {
+    await ctx.reply(u ? S.settlementMessage(cost, u.credit_sec, shareOn) : S.MORE_PROMPT, {
       parse_mode: "HTML",
-      reply_markup: shareToggleKeyboard(sessionId, shareOn),
+      link_preview_options: { is_disabled: true },
+      reply_markup: closingKeyboard(s, shareOn),
     });
   }
   if (shareOn) await sendInvitation(ctx, sessionId);

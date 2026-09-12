@@ -179,9 +179,11 @@ let rows = prompt?.payload.reply_markup?.inline_keyboard ?? [];
 const datas = rows.flat().map((b) => b.callback_data);
 check("پیام آخر دکمه دارد", rows.length > 0);
 check("هیچ ردیفِ خالی‌ای نیست", !rows.some((r) => r.length === 0));
+// تقسیم هزینه اولِ سطرهاست — کارِ همین حالاست — و بایگانی پشتِ سرش.
 check(
-  "هر سه کال‌بک با شناسهٔ جلسه",
-  datas.join(",") === `${MORE_CB.timeline}:${SESSION},${MORE_CB.transcript}:${SESSION},${MORE_CB.srt}:${SESSION}`,
+  "تقسیم هزینه و هر سه بخشِ بایگانی، زیرِ یک پیام",
+  datas.join(",") ===
+    `son:${SESSION},${MORE_CB.timeline}:${SESSION},${MORE_CB.transcript}:${SESSION},${MORE_CB.srt}:${SESSION}`,
   datas.join(" | "),
 );
 check("هیچ کال‌بکی از ۶۴ بایت رد نمی‌شود", datas.every((d) => Buffer.byteLength(d) <= 64));
@@ -361,16 +363,20 @@ check(
 check("و فقط یک سند می‌فرستد: جزوه", inbotDocs.length === 1, String(inbotDocs.length));
 check("خلاصه و نکته‌ها همچنان می‌آیند", inbotTexts.some((t) => t.includes("چی از کلاس درآوردم")));
 
-const inbotPrompt = inbot.find((c) => c.method === "sendMessage" && c.payload.text === S.MORE_PROMPT);
+// پیامِ پایانی با متنِ تسویه می‌آید، نه با `MORE_PROMPT` — پس آخرین پیامِ
+// دکمه‌دار را بگیر، نه پیامی با متنِ مشخص. همین یک بار جا افتاد و آزمون
+// بی‌صدا هیچ‌چیز پیدا نکرد و سبز ماند.
+const inbotPrompt = [...inbot].reverse().find((c) => c.method === "sendMessage" && c.payload.reply_markup);
 const inbotDatas = (inbotPrompt?.payload.reply_markup?.inline_keyboard ?? [])
   .flat()
   .map((b) => b.callback_data);
 check(
-  "همان سه دکمه، همان پیشوندها",
+  "مسیر ربات هم همان چهار دکمه را در یک پیام می‌دهد",
   inbotDatas.join(",") ===
-    `${MORE_CB.timeline}:${SESSION2},${MORE_CB.transcript}:${SESSION2},${MORE_CB.srt}:${SESSION2}`,
+    `son:${SESSION2},${MORE_CB.timeline}:${SESSION2},${MORE_CB.transcript}:${SESSION2},${MORE_CB.srt}:${SESSION2}`,
   inbotDatas.join(" | "),
 );
+check("پیامِ پایانی یکی است، نه دو تا", inbot.filter((c) => c.method === "sendMessage" && c.payload.reply_markup).length === 1);
 
 // و مهم‌تر از همه: صوتِ کاربر در همان جفت ستونی نشست که مسیر مینی‌اپ می‌نویسد.
 const row2 = getSession(SESSION2);

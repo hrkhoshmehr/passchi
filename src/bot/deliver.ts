@@ -151,6 +151,24 @@ export function moreKeyboard(s: SessionRow): InlineKeyboard | null {
  * می‌شود و زمان‌ها متن ساده می‌مانند — که بدترین حالتش «کمی کمتر» است، نه
  * ریپلای به پیامِ اشتباه.
  */
+/**
+ * صفحه‌کلیدِ پیامِ پایانی — تسویه و بخش‌های بایگانی، زیر **یک** پیام.
+ *
+ * این دو مستقل ساخته شدند و کنار هم دو پیامِ متنیِ پشت‌سرهم در انتهای تحویل
+ * می‌ساختند: یکی «چیز دیگری هم هست» و یکی «چقدر کم شد». هیچ‌کدام به‌تنهایی
+ * پیام کاملی نبود و کاربر آخرِ کار دو پیامِ نیمه می‌دید — یعنی همان شلوغی که
+ * قرار بود با دکمه‌ای‌کردن کم شود، از راه دیگری برمی‌گشت.
+ *
+ * ترتیب سطرها عمدی است: تقسیم هزینه اول، چون کارِ همین حالاست؛ رونوشت و
+ * زیرنویس بعد، چون بایگانی‌اند.
+ */
+export function closingKeyboard(s: SessionRow, shareOn: boolean): InlineKeyboard {
+  const kb = shareToggleKeyboard(s.id, shareOn);
+  const more = moreKeyboard(s);
+  if (more) kb.inline_keyboard.push(...more.inline_keyboard);
+  return kb;
+}
+
 export function reportReplyTo(s: SessionRow, chatId: number): Record<string, unknown> {
   if (!s.delivered_audio_message_id) return {};
   if (s.delivered_chat_id !== null && s.delivered_chat_id !== chatId) return {};
@@ -339,17 +357,6 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
    * تحویل تازه در پایگاه‌داده نشسته و هندلرِ دکمه خودش سطر را تازه می‌خواند،
    * پس اینجا لازم نیست.
    */
-  const kb = moreKeyboard(s);
-  if (kb) {
-    await ch.api
-      .sendMessage(ch.chatId, S.MORE_PROMPT, {
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-        reply_markup: kb,
-      })
-      .catch((e: unknown) => logger.warn({ err: String(e) }, "deliver more buttons failed"));
-  }
-
   /**
    * تسویه و **تقسیم با هم‌کلاسیا** — که تا امروز روی این مسیر اصلاً نبود.
    *
@@ -363,13 +370,17 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
    */
   const u = getUser(userId);
   const shareOn = Boolean(s.share_enabled);
-  if (u) {
+  const closing = closingKeyboard(s, shareOn);
+  const closingText = u
+    ? S.settlementMessage(Math.round(s.original_ms / 1000), u.credit_sec, shareOn)
+    : S.MORE_PROMPT;
+  if (u || moreKeyboard(s)) {
     await ch.api
-      .sendMessage(
-        ch.chatId,
-        S.settlementMessage(Math.round(s.original_ms / 1000), u.credit_sec, shareOn),
-        { parse_mode: "HTML", reply_markup: shareToggleKeyboard(s.id, shareOn) },
-      )
+      .sendMessage(ch.chatId, closingText, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+        reply_markup: closing,
+      })
       .catch((e: unknown) => logger.warn({ err: String(e) }, "deliver settlement failed"));
   }
   if (shareOn) {
