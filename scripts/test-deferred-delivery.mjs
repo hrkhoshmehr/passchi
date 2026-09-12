@@ -3,11 +3,22 @@
  *
  * ## مسئله‌ای که این آزمون قفل می‌کند
  *
- * `deliverToBot` هفت پیام پشت‌سرهم می‌فرستاد — صوت، خلاصه، نکته‌ها،
- * بخش‌بندی زمانی، جزوه، رونوشت کامل، و SRT. دانشجو در آن دیوار نمی‌فهمید
- * کجا را نگاه کند و فورواردکردنی‌ترین چیز، خلاصه، زیر بقیه گم می‌شد.
+ * تحویل هفت پیام پشت‌سرهم بود — صوت، خلاصه، نکته‌ها، بخش‌بندی زمانی، جزوه،
+ * رونوشت کامل، و SRT. دانشجو در آن دیوار نمی‌فهمید کجا را نگاه کند و
+ * فورواردکردنی‌ترین چیز، خلاصه، زیر بقیه گم می‌شد.
  *
  * حالا فقط صوت و خلاصه و نکته‌ها و جزوه می‌آیند و سه تای دیگر پشت دکمه‌اند.
+ *
+ * ## و **هر دو در** یک شکل دارند
+ *
+ * آپلود در مینی‌اپ به `deliverToBot` می‌رسد و آپلود در خودِ ربات به
+ * `sendResults`. هر دو اینجا رانده می‌شوند، چون تا امروز هرکدام شکل خودش را
+ * داشت — یعنی نیمی از دانشجوها هفت پیام می‌دیدند و نیمی پنج‌تا. اگر کسی فقط
+ * یکی را عوض کند، همین‌جا قرمز می‌شود.
+ *
+ * صوتِ آن دو هم فرق دارد: در مسیر ربات کاربر خودش صوت را فرستاده و در مسیر
+ * مینی‌اپ ما می‌فرستیم. ولی هر دو باید در **یک جفت ستون** بنویسند، وگرنه
+ * دکمهٔ بخش‌بندی در یکی از دو مسیر بی‌صدا زمان‌هایش را می‌بازد.
  *
  * ## چهار چیزی که اینجا سنجیده می‌شود، و هیچ آزمون دیگری نمی‌گیرد
  *
@@ -39,7 +50,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const { bot } = await import("../src/bot/index.ts");
+const { Context } = await import("grammy");
+const { bot, sendResults } = await import("../src/bot/index.ts");
 const { setNotifyApis } = await import("../src/bot/notify.ts");
 const { deliverToBot, MORE_CB, moreKeyboard } = await import("../src/bot/deliver.ts");
 const { createSession, getSession, updateSession } = await import("../src/db/index.ts");
@@ -163,7 +175,7 @@ check(
 // ─── ۲) دکمه‌ها ─────────────────────────────────────────────────────────────
 
 const prompt = sent.find((c) => c.method === "sendMessage" && c.payload.reply_markup);
-const rows = prompt?.payload.reply_markup?.inline_keyboard ?? [];
+let rows = prompt?.payload.reply_markup?.inline_keyboard ?? [];
 const datas = rows.flat().map((b) => b.callback_data);
 check("پیام آخر دکمه دارد", rows.length > 0);
 check("هیچ ردیفِ خالی‌ای نیست", !rows.some((r) => r.length === 0));
@@ -277,7 +289,120 @@ check(
   c.map((x) => x.method).join(" | "),
 );
 
-// ─── ۶) مسیر بله ────────────────────────────────────────────────────────────
+// ─── ۶) مسیر «آپلود در خودِ ربات» — همان شکل، صوتِ دیگر ─────────────────────
+//
+// اینجا صوت را کاربر فرستاده و `intakeAudio` شناسه‌اش را در
+// `audio_chat_id`/`audio_message_id` گذاشته. `sendResults` باید همان را در
+// `delivered_*` بنویسد تا دکمهٔ بخش‌بندی دقیقاً مثل مسیر مینی‌اپ کار کند.
+
+const SESSION2 = "cccc3333dddd4444";
+const USER_AUDIO_MSG = 42;
+createSession(SESSION2, OWNER, null);
+updateSession(SESSION2, {
+  status: "done",
+  title: "جلسهٔ دوم",
+  original_ms: 900_000,
+  billed_ms: 900_000,
+  audio_chat_id: OWNER,
+  audio_message_id: USER_AUDIO_MSG,
+  report_json: JSON.stringify(report),
+  pdf_path: touch("notes2.pdf"),
+  transcript_pdf: touch("transcript2.pdf"),
+  transcript_srt: touch("subs2.srt"),
+});
+
+/** `Context` دستی — خط لوله اجرا نمی‌شود، فقط مرحلهٔ تحویلش. */
+function fakeCtx(chatId, fromId) {
+  return new Context(
+    {
+      update_id: ++updateId,
+      message: {
+        message_id: 7,
+        date: 0,
+        chat: { id: chatId, type: "private" },
+        from: { id: fromId, is_bot: false, first_name: "u" },
+        text: "x",
+      },
+    },
+    bot.api,
+    botInfo,
+  );
+}
+
+const pipelineOut = {
+  report,
+  notesMarkdown: "# جزوه",
+  pdfPath: touch("out-notes.pdf"),
+  pdfName: "جزوه.pdf",
+  transcriptPath: touch("out-transcript.txt"),
+  transcriptPdfPath: touch("out-transcript.pdf"),
+  transcriptSrtPath: touch("out-subs.srt"),
+  transcriptText: "سلام",
+  originalDurationMs: 900_000,
+  skippedMs: 0,
+  billedDurationMs: 900_000,
+  savedMs: 0,
+  costUsd: 0,
+  qualityWarnings: [],
+  preprocessSteps: [],
+  notesError: null,
+};
+
+calls = [];
+await sendResults(fakeCtx(OWNER, OWNER), SESSION2, pipelineOut, "ریاضی مهندسی");
+const inbot = calls.filter((c) => c.method !== "getMe");
+const inbotTexts = inbot.filter((c) => c.method === "sendMessage").map((c) => c.payload.text);
+const inbotDocs = inbot.filter((c) => c.method === "sendDocument");
+
+check(
+  "مسیر ربات هم بخش‌بندی زمانی را فوری نمی‌فرستد",
+  !inbotTexts.some((t) => t.includes("کلاس به چه بخش‌هایی گذشت")),
+);
+check("و فقط یک سند می‌فرستد: جزوه", inbotDocs.length === 1, String(inbotDocs.length));
+check("خلاصه و نکته‌ها همچنان می‌آیند", inbotTexts.some((t) => t.includes("چی از کلاس درآوردم")));
+
+const inbotPrompt = inbot.find((c) => c.method === "sendMessage" && c.payload.text === S.MORE_PROMPT);
+const inbotDatas = (inbotPrompt?.payload.reply_markup?.inline_keyboard ?? [])
+  .flat()
+  .map((b) => b.callback_data);
+check(
+  "همان سه دکمه، همان پیشوندها",
+  inbotDatas.join(",") ===
+    `${MORE_CB.timeline}:${SESSION2},${MORE_CB.transcript}:${SESSION2},${MORE_CB.srt}:${SESSION2}`,
+  inbotDatas.join(" | "),
+);
+
+// و مهم‌تر از همه: صوتِ کاربر در همان جفت ستونی نشست که مسیر مینی‌اپ می‌نویسد.
+const row2 = getSession(SESSION2);
+check(
+  "صوتِ خودِ کاربر در `delivered_*` نوشته شد — یک میدانِ معتبر برای هر دو مسیر",
+  row2.delivered_chat_id === OWNER && row2.delivered_audio_message_id === USER_AUDIO_MSG,
+  `${row2.delivered_chat_id} / ${row2.delivered_audio_message_id}`,
+);
+
+rows = inbotPrompt?.payload.reply_markup?.inline_keyboard ?? [];
+c = await press(`${MORE_CB.timeline}:${SESSION2}`, OWNER);
+const tl2 = c.find((x) => x.method === "sendMessage");
+check(
+  "دکمهٔ بخش‌بندی در مسیر ربات هم ریپلایِ صوتِ درست است",
+  tl2?.payload.reply_parameters?.message_id === USER_AUDIO_MSG,
+  JSON.stringify(tl2?.payload.reply_parameters),
+);
+
+// ─── ۷) جلسه‌ای که همهٔ تکه‌ها را ندارد ─────────────────────────────────────
+//
+// دکمه‌ای که بزنی و چیزی نیاید از نبودِ دکمه بدتر است.
+const SESSION3 = "eeee5555ffff6666";
+createSession(SESSION3, OWNER, null);
+updateSession(SESSION3, { status: "done", report_json: JSON.stringify(report) });
+const lean = (moreKeyboard(getSession(SESSION3))?.inline_keyboard ?? []).flat().map((b) => b.callback_data);
+check(
+  "بی‌رونوشت و بی‌SRT فقط دکمهٔ بخش‌بندی می‌آید",
+  lean.join(",") === `${MORE_CB.timeline}:${SESSION3}`,
+  lean.join(" | "),
+);
+
+// ─── ۸) مسیر بله ────────────────────────────────────────────────────────────
 //
 // یک بار جزوه برای کاربر بله بی‌صدا نرسید چون `InputFile` خام ساخته شده بود و
 // بله ارجاعِ `attach://` را نمی‌فهمد. آزمون رفتاری اینجا ممکن نیست (مسیر بله

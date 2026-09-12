@@ -133,18 +133,24 @@ export function moreKeyboard(s: SessionRow): InlineKeyboard | null {
 }
 
 /**
- * ریپلای به **صوتی که خودِ تحویل فرستاده**.
+ * ریپلای به صوتی که گزارشِ این جلسه به آن آویزان است.
  *
  * این تنها راهِ زنده‌نگه‌داشتنِ زمان‌هاست وقتی بخش‌بندی دقایقی — یا هفته‌ها —
  * بعد از خودِ صوت فرستاده می‌شود: تلگرام `MM:SS` را فقط داخل پیامی که
  * ریپلایِ یک صوتِ **همان چت** است به لینکِ پخش تبدیل می‌کند.
+ *
+ * **یک جفت ستون، و بس.** دو مسیرِ تحویل دو صوتِ متفاوت دارند — در مسیر ربات
+ * صوت را خودِ کاربر فرستاده و در مسیر مینی‌اپ ما — ولی هر دو همان یک پرسش را
+ * جواب می‌دهند و جواب را در `delivered_chat_id`/`delivered_audio_message_id`
+ * می‌نویسند. اگر هرکدام میدان خودش را می‌خواند، همان دوتکه‌شدنی تکرار می‌شد
+ * که این بازنویسی برای بستنش انجام شد.
  *
  * شرطِ چت جدی است. عضوی که جلسه با او تقسیم شده دکمه را در چتِ خودش می‌زند و
  * آن شناسهٔ پیام آنجا یا وجود ندارد یا پیامِ دیگری است؛ پس بی‌ریپلای فرستاده
  * می‌شود و زمان‌ها متن ساده می‌مانند — که بدترین حالتش «کمی کمتر» است، نه
  * ریپلای به پیامِ اشتباه.
  */
-function replyToDeliveredAudio(s: SessionRow, chatId: number): Record<string, unknown> {
+export function reportReplyTo(s: SessionRow, chatId: number): Record<string, unknown> {
   if (!s.delivered_audio_message_id) return {};
   if (s.delivered_chat_id !== null && s.delivered_chat_id !== chatId) return {};
   return {
@@ -165,7 +171,7 @@ function replyToDeliveredAudio(s: SessionRow, chatId: number): Record<string, un
 export async function sendMorePart(to: SendTarget, s: SessionRow, part: MorePart): Promise<boolean> {
   if (part === "timeline") {
     const r = sessionReport(s);
-    const asReply = replyToDeliveredAudio(s, to.chatId);
+    const asReply = reportReplyTo(s, to.chatId);
     // زدنی‌بودنِ زمان‌ها قابلیتِ تلگرام است؛ بله ندارد و نباید وعده‌اش را بخواند.
     const linkable = "reply_parameters" in asReply && to.platform === "telegram";
     const text = r ? S.timelineMessage(r, linkable) : "";
