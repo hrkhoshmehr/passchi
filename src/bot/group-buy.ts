@@ -56,9 +56,39 @@ export function groupBuyEnabled(): boolean {
   return config.GROUP_BUY;
 }
 
-export function groupSizeKeyboard(sessionId: string, costSec: number): InlineKeyboard {
+/**
+ * اندازه‌هایی که مالک **همین حالا** سهمِ خودش را برایشان دارد.
+ *
+ * پیش از این همهٔ اندازه‌ها نشان داده می‌شد: مالکِ بیست‌سکه‌ای «۳ نفر · نفری
+ * ۳۰ سکه» را می‌زد و تازه آن‌وقت «سهم خودت را نداری» می‌شنید — دیواری درست
+ * بعد از انتخاب. اندازه‌ای که نمی‌شود بازش کرد نباید دکمه باشد.
+ */
+export function groupSizesFor(costSec: number, balanceSec: number): number[] {
+  return GROUP_SIZES.filter((n) => groupSeat(costSec, n).seatSec <= balanceSec);
+}
+
+/**
+ * اندازه‌ای که همان پیامِ سکهٔ کم پیشنهاد می‌دهد، پیش از هر کلیکی.
+ *
+ * کوچک‌ترین گروهی که مالک سهمش را دارد و سهمش با هدیهٔ تازه‌وارد هم جور
+ * درمی‌آید — گروهِ کوچک زودتر پر می‌شود. اگر هیچ‌کدام با هدیه جور نیست،
+ * کوچک‌ترین اندازه‌ای که مالک از پسش برمی‌آید؛ و اگر آن هم نیست، `null`.
+ */
+export function suggestedGroupSize(
+  costSec: number,
+  balanceSec: number,
+): { people: number; seatCoins: number } | null {
+  const sizes = groupSizesFor(costSec, balanceSec);
+  if (sizes.length === 0) return null;
+  const people = sizes.find((n) => groupSeat(costSec, n).seatCoins <= config.FREE_TRIAL_COINS) ?? sizes[0]!;
+  return { people, seatCoins: groupSeat(costSec, people).seatCoins };
+}
+
+/** بی `balanceSec` همهٔ اندازه‌ها (پیش‌نمایش و آزمون)؛ با آن فقط آن‌ها که مالک سهمش را دارد. */
+export function groupSizeKeyboard(sessionId: string, costSec: number, balanceSec?: number): InlineKeyboard {
   const kb = new InlineKeyboard();
-  for (const n of GROUP_SIZES) {
+  const sizes = balanceSec === undefined ? [...GROUP_SIZES] : groupSizesFor(costSec, balanceSec);
+  for (const n of sizes) {
     kb.text(
       S.groupSizeLabel(n, groupSeat(costSec, n).seatCoins, config.FREE_TRIAL_COINS),
       `${GROUP_CB.size}:${sessionId}:${n}`,

@@ -1475,6 +1475,7 @@ let pendingSession = null;
 
 /** هزینهٔ جلسهٔ روی صفحهٔ تأیید، برای حسابِ «نفری n سکه». */
 let confirmCost = 0;
+let confirmHave = 0;
 
 /**
  * سهمِ هر هم‌کلاسی — **همان** `shareBack` در `billing/coins.ts`.
@@ -1505,6 +1506,7 @@ function paintShareHow() {
 function askConfirm(out, filename, keep = false) {
   pendingSession = out.sessionId;
   confirmCost = out.costCoins;
+  confirmHave = out.haveCoins ?? 0;
   $("confirm-file").textContent = filename || "";
   $("confirm-dur").textContent = faDuration(out.durationSec);
   $("confirm-cost").textContent = `${faGroup(out.costCoins)} 🪙`;
@@ -1580,8 +1582,19 @@ $("confirm-group").addEventListener("click", async () => {
   const cfg = await groupConfig();
   const box = $("confirm-group-sizes");
   box.innerHTML = "";
-  for (const n of GROUP_SIZES) {
-    const seat = Math.max(1, Math.ceil((Number(confirmCost) || 0) / n));
+  // فقط اندازه‌هایی که سهمِ خودِ دانشجو از موجودیش درمی‌آید — همان `groupSizesFor` ربات.
+  // پیش از این «۳ نفر · نفری ۳۰» هم می‌آمد و دانشجوی بیست‌سکه‌ای بعد از زدنش به دیوار می‌خورد.
+  const seatOf = (n) => Math.max(1, Math.ceil((Number(confirmCost) || 0) / n));
+  const sizes = GROUP_SIZES.filter((n) => seatOf(n) <= confirmHave);
+  if (sizes.length === 0) {
+    const p = document.createElement("p");
+    p.className = "dim";
+    p.textContent =
+      `برای خرید گروهی باید سهم خودت رو داشته باشی: کمترینش ${faGroup(seatOf(GROUP_SIZES[GROUP_SIZES.length - 1]))} سکه میشه ولی ${faGroup(confirmHave)} سکه داری. اول از «🪙 حساب» شارژ کن؛ فایلت همین‌جا می‌مونه.`;
+    box.appendChild(p);
+  }
+  for (const n of sizes) {
+    const seat = seatOf(n);
     const b = document.createElement("button");
     b.type = "button";
     b.className = "btn btn-ghost btn-block";

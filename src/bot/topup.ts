@@ -47,7 +47,7 @@ import { notifyAdmins, notifyUser } from "./notify.js";
 import { APP_NAME } from "./menu.js";
 import { isMember } from "../billing/sharing.js";
 import { groupJoinable } from "../billing/group-buy.js";
-import { GROUP_CB } from "./group-buy.js";
+import { GROUP_CB, groupBuyEnabled, groupSizesFor } from "./group-buy.js";
 import * as S from "./strings.js";
 
 const orderId = () => randomBytes(4).toString("hex");
@@ -288,6 +288,18 @@ async function creditTopup(t: TopupRow): Promise<void> {
   if (wanted && wanted.status === "awaiting_group" && groupJoinable(wanted.id, t.tg_id)) {
     await notifyUser(t.tg_id, head + S.PENDING_GROUP_AFTER_TOPUP, {
       reply_markup: new InlineKeyboard().text(S.GROUP_BTN.join, `${GROUP_CB.join}:${wanted.id}`),
+    });
+    return;
+  }
+
+  // فایلش هنوز منتظر است و برای کل فایل کم دارد، ولی سهمِ یک خرید گروهی را دارد.
+  // بی این، مالکی که فقط برای سهمِ خودش شارژ کرده بود دیگر راهی به همان گروه نداشت.
+  const groupable = groupBuyEnabled()
+    ? waiting.find((s) => groupSizesFor(Math.round(s.original_ms / 1000), balance).length > 0)
+    : undefined;
+  if (groupable) {
+    await notifyUser(t.tg_id, head + S.PENDING_GROUP_OPEN_AFTER_TOPUP, {
+      reply_markup: new InlineKeyboard().text(S.GROUP_BTN.group, `${GROUP_CB.open}:${groupable.id}`),
     });
     return;
   }

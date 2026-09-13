@@ -242,7 +242,7 @@ for (const r of ["unknown", "revoked", "expired", "already", "exhausted"]) {
   const { groupSeat, GROUP_SIZES, GROUP_BUY_HOURS } = await import("../src/billing/coins.ts");
   const NL = "\n";
   line("خرید گروهی — سکهٔ کم، دو راه");
-  show(G.lowBalanceGroupMessage(90 * 60, coinsToSec(20)));
+  show(G.lowBalanceGroupMessage(90 * 60, coinsToSec(20), { people: 5, seatCoins: 18 }, 20));
   console.log(`${NL}[ ${G.GROUP_BTN.self} ] [ ${G.GROUP_BTN.group} ]${NL}[ ${G.GROUP_BTN.resume} ]`);
   line("خرید گروهی — چند نفر");
   show(G.groupSizePrompt(5400, GROUP_BUY_HOURS));

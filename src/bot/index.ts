@@ -71,10 +71,12 @@ import { notifyUser } from "./notify.js";
 import { extractUrl, fetchUrlToFile, UrlFetchError, type FetchUrlResult } from "./fetch-url.js";
 import { JobFailure } from "../util/job-failure.js";
 import {
-  GROUP_CB, GROUP_START_PREFIX, expireGroupsAndNotify, groupBuyEnabled, groupSizeKeyboard, joinGroup,
-  openGroup, payRestAndStart, payRestKeyboard, sendGroupInvite,
+  GROUP_CB, GROUP_START_PREFIX, expireGroupsAndNotify, groupBuyEnabled, groupSizeKeyboard, groupSizesFor, joinGroup,
+  openGroup, payRestAndStart, payRestKeyboard, sendGroupInvite, suggestedGroupSize,
 } from "./group-buy.js";
-import { GROUP_BUY_HOURS, cancelGroupBuy, groupProgress, groupSeats } from "../billing/group-buy.js";
+import {
+  GROUP_BUY_HOURS, GROUP_SIZES, cancelGroupBuy, groupProgress, groupSeat, groupSeats,
+} from "../billing/group-buy.js";
 import { funnelReport, recordStart, track } from "../db/funnel.js";
 import { clearStarting, markStarting } from "../queue.js";
 import { rememberPendingJoin } from "../db/index.js";
@@ -2036,7 +2038,9 @@ export function lowBalanceKeyboard(sessionId: string, resumeData = `go:${session
 
 /** متنِ همان صفحه؛ با خرید گروهی برچسبِ شارژ و جملهٔ دلگرمی هم می‌آید. */
 function lowBalanceText(sec: number, balanceSec: number): string {
-  return groupBuyEnabled() ? S.lowBalanceGroupMessage(sec, balanceSec) : S.lowBalanceMessage(sec, balanceSec);
+  return groupBuyEnabled()
+    ? S.lowBalanceGroupMessage(sec, balanceSec, suggestedGroupSize(sec, balanceSec), config.FREE_TRIAL_COINS)
+    : S.lowBalanceMessage(sec, balanceSec);
 }
 
 /** وضعیتِ شریک‌شدنِ یک جلسه، به شکلی که صفحهٔ تأیید می‌خواهد. */
@@ -3320,8 +3324,23 @@ handlers.callbackQuery(new RegExp(String.raw`^${GROUP_CB.open}:([a-f0-9]+)$`), a
   }
   await ctx.answerCallbackQuery();
   const costSec = Math.round(s.original_ms / 1000);
-  const text = S.groupSizePrompt(costSec, GROUP_BUY_HOURS);
-  const kb = groupSizeKeyboard(s.id, costSec);
+  const balanceSec = getUser(uid(ctx))?.credit_sec ?? 0;
+  const sizes = groupSizesFor(costSec, balanceSec);
+  if (sizes.length === 0) {
+    // حتی سهمِ بزرگ‌ترین گروه را هم ندارد: اندازه‌ای نشان نده که فقط به دیوار می‌رسد.
+    const biggest = GROUP_SIZES[GROUP_SIZES.length - 1]!;
+    const none = S.groupNoSizeMessage(groupSeat(costSec, biggest).seatCoins, balanceSec);
+    const noneKb = new InlineKeyboard()
+      .text(S.GROUP_BTN.self, "topup")
+      .row()
+      .text(S.GROUP_BTN.cancel, `${GROUP_CB.back}:${s.id}`);
+    await ctx
+      .editMessageText(none, { parse_mode: "HTML", reply_markup: noneKb })
+      .catch(() => reply(ctx, none, { reply_markup: noneKb }));
+    return;
+  }
+  const text = S.groupSizePrompt(costSec, GROUP_BUY_HOURS, sizes.length < GROUP_SIZES.length);
+  const kb = groupSizeKeyboard(s.id, costSec, balanceSec);
   await ctx
     .editMessageText(text, { parse_mode: "HTML", reply_markup: kb })
     .catch(() => reply(ctx, text, { reply_markup: kb }));

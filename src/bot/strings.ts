@@ -1315,10 +1315,57 @@ export const GROUP_BTN = {
 export const GROUP_REASSURE =
   "نگران نباش؛ اگه خودت بخری هم بعدش می‌تونی با بچه‌ها شریکش شی و سهمشون برمی‌گرده.";
 
-/** همان پیامِ سکهٔ کم، با برچسبِ دکمهٔ تازه و جملهٔ دلگرمی. */
-export function lowBalanceGroupMessage(neededSec: number, balanceSec: number): string {
-  return `${lowBalanceMessage(neededSec, balanceSec, GROUP_BTN.self)}\n\n<i>${GROUP_REASSURE}</i>`;
+/**
+ * پیامِ سکهٔ کم وقتی خرید گروهی روشن است — **عددِ گروه همان‌جا**.
+ *
+ * پیش از این پیام فقط «کم داری» و دو دکمه بود؛ دانشجو برای دیدنِ اینکه راهِ
+ * گروهی چقدر برایش درمی‌آید باید دکمه می‌زد و اندازه انتخاب می‌کرد، و گاهی
+ * تازه آن‌وقت می‌شنید سهمِ خودش را هم ندارد. حالا پیامِ اول می‌گوید «با ۵ نفر،
+ * نفری ۱۸ سکه» — عددی که مالک واقعاً از پسش برمی‌آید (`suggestedGroupSize`).
+ */
+export function lowBalanceGroupMessage(
+  neededSec: number,
+  balanceSec: number,
+  suggest: { people: number; seatCoins: number } | null = null,
+  giftCoins = 0,
+): string {
+  const short = Math.max(0, costCoins(neededSec) - balanceCoins(balanceSec));
+  const pkg = coveringPackage(short);
+  const lines = [
+    "سکه‌هات کم میاد 😅",
+    "",
+    `این فایل <b>${fmtCost(neededSec)}</b> می‌خواد و <b>${fmtBalance(balanceSec)}</b> داری.`,
+    "",
+  ];
+  if (suggest) {
+    const withGift = giftCoins > 0 && suggest.seatCoins <= giftCoins;
+    lines.push(
+      `👥 <b>با بچه‌های کلاس بخرید:</b> اگه ${toFaDigits(suggest.people)} نفر بشید، نفری <b>${fmtCoins(suggest.seatCoins)}</b> میشه` +
+        (withGift ? "؛ با همون سکهٔ هدیه‌ای که هر کی تازه بیاد می‌گیره." : "."),
+      "",
+    );
+  }
+  lines.push(
+    pkg
+      ? `🪙 <b>یا خودت شارژ کن:</b> کوچیک‌ترین بسته‌ای که کافیه ${fmtCoins(pkg.coins)}، ${fmtToman(pkg.price)}.`
+      : "🪙 <b>یا خودت شارژ کن.</b>",
+    "",
+    `<i>${GROUP_REASSURE}</i>`,
+  );
+  return lines.join("\n");
 }
+
+/** مالک سهمِ خودش را حتی برای بزرگ‌ترین گروه هم ندارد. */
+export function groupNoSizeMessage(seatCoins: number, balanceSec: number): string {
+  return (
+    `برای خرید گروهی باید سهم خودت رو داشته باشی: کمترینش <b>${fmtCoins(seatCoins)}</b> میشه ولی <b>${fmtBalance(balanceSec)}</b> داری.\n\n` +
+    `با «${GROUP_BTN.self}» شارژ کن؛ بعدش همین‌جا دوباره پیشنهادش رو می‌گیری.`
+  );
+}
+
+/** بعد از شارژ: فایلش هنوز منتظر است، برای کل فایل کم دارد ولی سهمِ گروهی را دارد. */
+export const PENDING_GROUP_OPEN_AFTER_TOPUP =
+  "<b>فایلی که فرستاده بودی هنوز اینجاست.</b> برای کل فایل هنوز کمه، ولی حالا می‌تونی با بچه‌های کلاس بخریش 👇";
 
 /**
  * «چند نفر می‌شید، با خودت؟»
@@ -1327,11 +1374,12 @@ export function lowBalanceGroupMessage(neededSec: number, balanceSec: number): s
  * بی آن عدد را یکی کمتر می‌گفتند و سهم‌ها گران‌تر درمی‌آمد. سهمِ هر اندازه
  * روی خودِ دکمه است (`groupSizeLabel`).
  */
-export function groupSizePrompt(costSec: number, hours: number): string {
+export function groupSizePrompt(costSec: number, hours: number, smallerHidden = false): string {
   return [
     "👥 <b>چند نفر می‌شید، با خودت؟</b>",
     "",
     `این کلاس <b>${fmtCost(costSec)}</b> هزینه داره و بین همه‌تون برابر تقسیم میشه.`,
+    ...(smallerHidden ? ["<i>گروه‌های کوچیک‌تر نیومدن، چون سهم خودت توشون از موجودیت بیشتر میشه.</i>"] : []),
     `<i>تا همه نیومدن سکه‌ای خرج نمیشه؛ اگه تا ${toFaDigits(hours)} ساعت پر نشد، سهم همه کامل برمی‌گرده.</i>`,
   ].join("\n");
 }
@@ -1339,8 +1387,8 @@ export function groupSizePrompt(costSec: number, hours: number): string {
 /**
  * برچسبِ هر اندازه: «۵ نفر · نفری ۱۸ سکه».
  *
- * هیچ اندازه‌ای پنهان نمی‌شود، حتی وقتی سهمش از هدیه بیشتر است؛ فقط آن‌که
- * با هدیهٔ تازه‌وارد جور درمی‌آید برچسبش را می‌گیرد.
+ * اندازه‌ای که مالک سهمش را ندارد اصلاً دکمه نمی‌شود (`groupSizesFor`)؛ از بقیه،
+ * آن‌که با هدیهٔ تازه‌وارد جور درمی‌آید برچسبش را می‌گیرد.
  */
 export function groupSizeLabel(people: number, seatCoins: number, giftCoins: number): string {
   const base = `${toFaDigits(people)} نفر · نفری ${fmtCoins(seatCoins)}`;

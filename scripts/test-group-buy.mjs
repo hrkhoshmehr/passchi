@@ -108,7 +108,17 @@ const notify = async (userId, text, extra = {}) => spy.push({ userId, text, extr
   check("برچسبِ «با سکهٔ هدیه میشه» وقتی سهم ≤ هدیه", S.groupSizeLabel(5, 18, 20).includes("با سکهٔ هدیه میشه"), S.groupSizeLabel(5, 18, 20));
   check("و نه وقتی سهم از هدیه بیشتر است", !S.groupSizeLabel(3, 30, 20).includes("هدیه"), S.groupSizeLabel(3, 30, 20));
   const kb = groupSizeKeyboard("ab00", 5400).inline_keyboard.flat();
-  check("هیچ اندازه‌ای پنهان نیست", GROUP_SIZES.every((n) => kb.some((b) => b.callback_data === `gbn:ab00:${n}`)));
+  check("بی موجودی (پیش‌نمایش) همهٔ اندازه‌ها هست", GROUP_SIZES.every((n) => kb.some((b) => b.callback_data === `gbn:ab00:${n}`)));
+
+  // مالکِ بیست‌سکه‌ای پیش از این «۳ نفر · نفری ۳۰» را می‌دید، می‌زد، و تازه
+  // آن‌وقت می‌شنید سهم خودش را ندارد. اندازه‌ای که نمی‌شود بازش کرد دکمه نیست.
+  const { suggestedGroupSize } = await import("../src/bot/group-buy.ts");
+  const kb20 = groupSizeKeyboard("ab00", 5400, coinsToSec(20)).inline_keyboard.flat();
+  check("با ۲۰ سکه، گروهِ ۳ نفره (نفری ۳۰) دکمه نمی‌شود", !kb20.some((b) => b.callback_data === "gbn:ab00:3"), kb20.map((b) => b.callback_data).join(" "));
+  check("و ۵ و ۱۰ و ۲۰ نفره می‌آیند", [5, 10, 20].every((n) => kb20.some((b) => b.callback_data === `gbn:ab00:${n}`)));
+  check("پیشنهادِ پیامِ اول: ۵ نفر، نفری ۱۸", JSON.stringify(suggestedGroupSize(5400, coinsToSec(20))) === '{"people":5,"seatCoins":18}', JSON.stringify(suggestedGroupSize(5400, coinsToSec(20))));
+  check("با ۴ سکه برای هیچ گروهی پیشنهادی نیست", suggestedGroupSize(5400, coinsToSec(4)) === null);
+  check("پیامِ اول عددِ گروه را همان‌جا می‌گوید", S.lowBalanceGroupMessage(5400, coinsToSec(20), { people: 5, seatCoins: 18 }, 20).includes("۵ نفر"));
   check("«بی‌خیال» به دو گزینه برمی‌گردد", kb.some((b) => b.callback_data === "gbx:ab00"));
   check("برچسبِ دکمه همان «۵ نفر · نفری ۱۸ سکه»", kb.some((b) => b.text.startsWith("۵ نفر · نفری ۱۸ سکه")), kb.map((b) => b.text).join(" | "));
 
