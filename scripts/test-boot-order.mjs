@@ -29,7 +29,12 @@ check("پیش از bot.start هیچ await روی resolveBotLinks نیست", !/aw
 check("پیش از bot.start هیچ await روی baleStatus نیست", !/await\s+baleStatus/.test(before));
 // فقط سطح بالای فایل؛ `await` داخلِ بدنهٔ `baleStatus` راه‌اندازی را نگه نمی‌دارد.
 check("پیش از bot.start هیچ await سطح‌بالایی روی baleBot نیست", !/^await\s+baleBot/m.test(before));
-check("بلهٔ خودش هم بی await شروع می‌شود", /void baleBot\?\.start\(/.test(before));
+check("بلهٔ خودش هم بی await شروع می‌شود", /^void startBaleWithRetry\(\);/m.test(before));
+// grammY اگر getMe اولِ start به شبکه نرسد یک بار پرتاب می‌کند و دیگر polling نمی‌کند.
+check(
+  "شروعِ بله پس از شکست دوباره تلاش می‌کند",
+  /async function startBaleWithRetry[\s\S]*for \(let attempt[\s\S]*baleBot\.start\([\s\S]*catch[\s\S]*setTimeout/.test(before),
+);
 check(
   "آدرس تلگرام به پاسخِ بله گره نخورده (هر سکو جدا پر می‌شود)",
   /telegram\?\.getMe\(\)\.then/.test(links) && /bale\?\.getMe\(\)\.then/.test(links),

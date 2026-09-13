@@ -202,8 +202,29 @@ process.on("unhandledRejection", (reason) => {
  *
  * `bot.start()` تا وقتی ربات در حال کار است برنمی‌گردد، پس بلهٔ را نمی‌شود
  * پشت سرش `await` کرد — وگرنه هرگز شروع نمی‌شود.
+ *
+ * **بله دوباره تلاش می‌کند.** grammY اگر `getMe` اولِ `start()` به شبکه نرسد
+ * یک بار پرتاب می‌کند و دیگر هیچ‌وقت سراغ polling نمی‌رود؛ ۲۰۲۶-۰۹-۱۴ که بله
+ * از سرور در دسترس نبود، یعنی ربات بله تا ری‌استارتِ بعدی خاموش می‌ماند حتی
+ * وقتی شبکه برگشته بود. فاصله‌ها تا پنج دقیقه بزرگ می‌شوند که لاگ پر نشود.
  */
-void baleBot?.start({ drop_pending_updates: true }).catch((e: unknown) => {
-  logger.error({ err: String(e) }, "bale bot failed to start");
-});
+let stoppingBots = false;
+process.once("SIGTERM", () => { stoppingBots = true; });
+process.once("SIGINT", () => { stoppingBots = true; });
+
+async function startBaleWithRetry(): Promise<void> {
+  if (!baleBot) return;
+  for (let attempt = 1; !stoppingBots; attempt++) {
+    try {
+      await baleBot.start({ drop_pending_updates: true });
+      return; // فقط با stop() برمی‌گردد
+    } catch (e) {
+      if (stoppingBots) return;
+      const waitSec = Math.min(300, 30 * attempt);
+      logger.error({ err: String(e), attempt, retryInSec: waitSec }, "bale bot failed to start");
+      await new Promise((r) => setTimeout(r, waitSec * 1000).unref());
+    }
+  }
+}
+void startBaleWithRetry();
 await bot.start({ drop_pending_updates: true });
