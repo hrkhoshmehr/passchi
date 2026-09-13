@@ -41,6 +41,14 @@ for (const u of [A, B, C, D]) upsertUser(u, `u${u}`, null);
 F.recordStart(A, "s_instagram");
 F.recordStart(A, "g_later");
 check("منبع اول می‌ماند", F.sourceOf(A), "instagram");
+
+// کاربرِ قدیمی که حالا روی آگهی می‌زند، به حسابِ آگهی نوشته نمی‌شود
+const RETURNING = 8_100_008;
+upsertUser(RETURNING, "returning", null);
+// بیرون از هم‌گروهیِ هفت‌روزه، تا شمارشِ پایین را عوض نکند
+db.prepare(`UPDATE users SET created_at = datetime('now', '-30 days') WHERE tg_id = ?`).run(RETURNING);
+F.recordStart(RETURNING, "s_instagram");
+check("کاربرِ قدیمی منبع نمی‌گیرد", F.sourceOf(RETURNING), null);
 F.recordStart(B, "");
 F.recordStart(C, "j_sess1");
 F.recordStart(D, "s_instagram");

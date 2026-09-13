@@ -67,12 +67,21 @@ type Res = http.ServerResponse;
  * یا قیف را جعل کند. سقفِ درحافظه کافی است: هدف دفعِ پُرکردن است نه امنیت،
  * و ری‌استارت که حافظه را پاک می‌کند فقط چند رویدادِ اضافه راه می‌دهد.
  * آی‌پی ذخیره **نمی‌شود**؛ فقط کلیدِ این نقشه است.
+ *
+ * **اولین مقدارِ `x-forwarded-for` را خودِ کلاینت می‌تواند بسازد**، پس سقفِ
+ * به‌ازای آی‌پی با عوض‌کردنِ هدر دور زده می‌شود. سقفِ سراسری برای همین است:
+ * هر هدری که بفرستد، جدول در ساعت بیش از این رشد نمی‌کند. جعلِ قیف با
+ * زحمت هنوز ممکن است — این شمارشِ بازاریابی است، نه پول.
  */
+const EV_GLOBAL_PER_HOUR = 3000;
+let evGlobal = { n: 0, since: 0 };
 const evHits = new Map<string, { n: number; since: number }>();
 function allowEvent(req: http.IncomingMessage): boolean {
   const fwd = req.headers["x-forwarded-for"];
   const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim() || req.socket.remoteAddress || "?";
   const now = Date.now();
+  if (now - evGlobal.since > 60 * 60_000) evGlobal = { n: 0, since: now };
+  if (++evGlobal.n > EV_GLOBAL_PER_HOUR) return false;
   if (evHits.size > 5000) evHits.clear();
   const h = evHits.get(ip);
   if (!h || now - h.since > 10 * 60_000) {
@@ -338,6 +347,12 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
      * `text/plain` است، پس بدنه دستی خوانده می‌شود و سقفش دو کیلوبایت است.
      */
     case "POST /api/ev": {
+      // بدنهٔ بزرگ پیش از خواندن کنار گذاشته می‌شود؛ `readBody` سوکت را می‌بندد
+      // و آن‌وقت دیگر پاسخی نمی‌شود فرستاد.
+      if (Number(req.headers["content-length"] ?? 0) > 2048) {
+        req.resume();
+        return json(res, 200, { ok: true });
+      }
       try {
         const body = JSON.parse((await readBody(req, 2048)).toString("utf8") || "{}") as {
           name?: unknown;

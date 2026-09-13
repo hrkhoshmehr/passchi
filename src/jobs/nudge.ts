@@ -90,8 +90,9 @@ export function dueNudges(now: Date = new Date(), limit = 25): DueNudge[] {
        SELECT u.tg_id, 2, u.credit_sec, u.created_at
          FROM users u
         WHERE u.created_at <= datetime(?, '-${NUDGE_STAGES[1].afterHours} hours')
+          -- کسی که پیامِ اول به او نرسید (ربات را بلاک کرده) دومی را هم نمی‌گیرد.
           AND EXISTS (SELECT 1 FROM nudges n WHERE n.user_id = u.tg_id AND n.stage = 1
-                        AND n.sent_at <= datetime(?, '-24 hours'))
+                        AND n.delivered = 1 AND n.sent_at <= datetime(?, '-24 hours'))
           AND NOT EXISTS (SELECT 1 FROM nudges n WHERE n.user_id = u.tg_id AND n.stage = 2)
           AND ${noActivity}
         ORDER BY c
@@ -146,8 +147,14 @@ export function nudgeMessage(stage: 1 | 2, creditSec: number, groupBuy: boolean)
       `صوت کلاس بعدیتو با گوشی ضبط کن و همین‌جا بفرست؛ چند دقیقه بعد جزوه‌ش دستته.`
     );
   }
-  const how = groupBuy
-    ? `وقتی صوتو فرستادی، «${GROUP_BTN_LABEL}» رو بزن تا هزینه بین بچه‌های کلاس برابر تقسیم بشه.`
+  /**
+   * دکمهٔ خرید گروهی **فقط روی صفحهٔ سکهٔ کم** است. کسی که سکه‌اش یک کلاسِ
+   * نود دقیقه‌ای را می‌پوشاند صفحهٔ تأیید را می‌بیند و آنجا فقط دکمهٔ
+   * شریک‌شدن هست — نام‌بردنِ دکمه‌ای که هرگز نمی‌بیند یعنی وعدهٔ توخالی.
+   */
+  const coversClass = creditSec >= 90 * 60;
+  const how = groupBuy && !coversClass
+    ? `وقتی صوتو فرستادی و سکه‌ت کم اومد، «${GROUP_BTN_LABEL}» رو بزن تا هزینه بین بچه‌های کلاس برابر تقسیم بشه.`
     : `وقتی صوتو فرستادی، «${CONFIRM_BTN.share}» رو بزن؛ هر کی جزوه رو بگیره سهمش میاد تو حساب تو.`;
   return (
     `یه کلاس کامل معمولاً نود دقیقه‌ست، و لازم نیست کل هزینه‌شو تنها بدی 📚\n\n` +

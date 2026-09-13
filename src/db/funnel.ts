@@ -93,11 +93,21 @@ export function track(userId: number | null, name: string, source: string | null
   }
 }
 
-/** `/start` را ثبت می‌کند و منبعِ اولین ورود را، اگر هنوز نداشت. */
+/**
+ * `/start` را ثبت می‌کند و منبعِ ورود را — **فقط برای حسابِ تازه**.
+ *
+ * کاربرانی که پیش از این قابلیت آمده بودند منبعی ندارند. اگر شرطِ تازگی
+ * نبود، کاربرِ قدیمی که فردا روی آگهی بزند به حسابِ آن آگهی نوشته می‌شد و
+ * آگهی اعتبارِ کسی را می‌گرفت که از قبل مشتری بود. یک ساعت جا برای کسی است
+ * که اول پیامی داده و بعد روی لینک زده.
+ */
 export function recordStart(userId: number, payload: string): string {
   const source = sourceFromStartPayload(payload);
   try {
-    db.prepare(`INSERT OR IGNORE INTO user_sources (user_id, source) VALUES (?, ?)`).run(userId, source);
+    db.prepare(
+      `INSERT OR IGNORE INTO user_sources (user_id, source)
+       SELECT tg_id, ? FROM users WHERE tg_id = ? AND created_at >= datetime('now', '-1 hour')`,
+    ).run(source, userId);
   } catch {
     /* همان قاعدهٔ `track` */
   }

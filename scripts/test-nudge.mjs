@@ -12,6 +12,7 @@ process.env.BOT_TOKEN ||= "x";
 
 const { db, upsertUser, createSession } = await import("../src/db/index.ts");
 const N = await import("../src/jobs/nudge.ts");
+const strings0 = await import("../src/bot/strings.ts");
 
 let failures = 0;
 function check(label, actual, expected) {
@@ -103,18 +104,25 @@ check("مرحلهٔ دوم زودتر از ۲۴ ساعت پس از اول نمی
 // DAY: ۸۰ ساعت، LATE: ۱۳۰ ساعت — و FRESH که ۱۰ ساعته بود حالا ۶۰ ساعته است
 const later = new Date(NOON.getTime() + 50 * 3_600_000);
 const d2 = N.dueNudges(later).map((d) => `${d.userId}:${d.stage}`).sort();
-check("بعد از ۵۰ ساعت: DAY و LATE مرحلهٔ دوم، FRESH مرحلهٔ اول", d2, [`${FRESH}:1`, `${DAY}:2`, `${LATE}:2`].sort());
+// LATE ربات را بلاک کرده بود (delivered=0)، پس مرحلهٔ دوم به او نمی‌رسد.
+check("بعد از ۵۰ ساعت: DAY مرحلهٔ دوم، FRESH مرحلهٔ اول، بلاک‌شده نه", d2, [`${FRESH}:1`, `${DAY}:2`].sort());
 
 // کسی که بین دو مرحله صوت فرستاده، مرحلهٔ دوم نمی‌گیرد
 createSession("nd_day_sent", DAY, null);
-check(
-  "فرستاد ← مرحلهٔ دوم نمی‌گیرد",
-  N.dueNudges(later).map((d) => d.userId).sort(),
-  [FRESH, LATE].sort(),
-);
+check("فرستاد ← مرحلهٔ دوم نمی‌گیرد", N.dueNudges(later).map((d) => d.userId), [FRESH]);
+
+// صندلیِ خرید گروهی هم یعنی محصول به او رسیده
+const SEAT = 7_000_008;
+user(SEAT, 30);
+db.prepare(`INSERT INTO group_buys (session_id, owner_id, seats, seat_sec, cost_sec, origin, status, expires_at)
+            VALUES ('nd_other', ?, 5, 1080, 5400, 'bot', 'open', datetime('now', '+1 day'))`).run(7_000_099);
+db.prepare(`INSERT INTO group_buy_seats (session_id, tg_id, role, reserved_sec) VALUES ('nd_other', ?, 'member', 1080)`).run(SEAT);
+check("صندلی گروهی ← یادآوری نمی‌گیرد", N.dueNudges(NOON).some((d) => d.userId === SEAT), false);
 
 // ─── متن‌ها ──────────────────────────────────────────────────────────────────
-check("مرحلهٔ دوم با خرید گروهی", N.nudgeMessage(2, 0, true).includes(N.GROUP_BTN_LABEL), true);
+check("مرحلهٔ دوم با خرید گروهی و سکهٔ کم", N.nudgeMessage(2, 0, true).includes(N.GROUP_BTN_LABEL), true);
+check("سکهٔ کافی ← دکمهٔ گروهی را نام نمی‌برد", N.nudgeMessage(2, 120 * 60, true).includes(N.GROUP_BTN_LABEL), false);
+check("سکهٔ کافی ← دکمهٔ شریک‌شدن", N.nudgeMessage(2, 120 * 60, true).includes(strings0.CONFIRM_BTN.share), true);
 check("مرحلهٔ دوم بی خرید گروهی", N.nudgeMessage(2, 0, false).includes("شریک"), true);
 
 // برچسبِ خرید گروهی باید همانی باشد که کاربر روی دکمه می‌بیند
