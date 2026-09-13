@@ -38,12 +38,15 @@ import {
 import { grant } from "../billing/ledger.js";
 import { ZibalError, zibalConfigured, zibalRequest, zibalVerify } from "../billing/zibal.js";
 import {
-  awaitingCreditSessions, claimTopupPaid, createTopup, getTopup, getTopupByTrackId, getUser,
+  awaitingCreditSessions, claimTopupPaid, createTopup, getSession, getTopup, getTopupByTrackId, getUser,
+  pendingWebUploadId, takePendingJoin,
   openTopup, setTopupStatus, setTopupTrackId, type TopupRow,
 } from "../db/index.js";
 import { uid } from "./identity.js";
 import { notifyAdmins, notifyUser } from "./notify.js";
 import { APP_NAME } from "./menu.js";
+import { isMember } from "../billing/sharing.js";
+import * as S from "./strings.js";
 
 const orderId = () => randomBytes(4).toString("hex");
 
@@ -251,20 +254,41 @@ export async function settleTopup(
 async function creditTopup(t: TopupRow): Promise<void> {
   grant(t.tg_id, coinsToSec(t.coins), "topup");
   const balance = getUser(t.tg_id)?.credit_sec ?? 0;
+  const head =
+    `🪙 <b>${fmtCoins(t.coins)}</b> به حسابت اضافه شد!\n\n` + `موجودی جدیدت: <b>${fmtBalance(balance)}</b>\n\n`;
 
+  /**
+   * بعد از شارژ، کاربر را به **همان کاری** برگردان که برایش شارژ کرد.
+   *
+   * سه حالت، به این ترتیب: فایلی که در خودِ ربات فرستاده و سکه کم آورده؛ جزوهٔ
+   * هم‌کلاسی که خواسته بود بردارد؛ فایلی که از صفحهٔ آپلود فرستاده. پیش از این
+   * فقط حالتِ اول دیده می‌شد و دو نفرِ دیگر «صوت کلاستو بفرست» می‌گرفتند —
+   * کسی که برای جزوهٔ هم‌کلاسی آمده بود، و کسی که فایلش همان‌جا منتظر بود.
+   */
   const waiting = awaitingCreditSessions(t.tg_id);
   const enough = waiting.find((s) => balance >= Math.round(s.original_ms / 1000));
-  await notifyUser(
-    t.tg_id,
-    `🪙 <b>${fmtCoins(t.coins)}</b> به حسابت اضافه شد!\n\n` +
-      `موجودی جدیدت: <b>${fmtBalance(balance)}</b>\n\n` +
-      (enough
-        ? `<b>فایلی که فرستاده بودی هنوز اینجاست.</b> بزن تا ادامه بدم 👇`
-        : "صوت کلاستو بفرست 🎧"),
-    enough
-      ? { reply_markup: new InlineKeyboard().text("▶️ ادامهٔ همون فایل", `resume:${enough.id}`) }
-      : {},
-  );
+  if (enough) {
+    await notifyUser(t.tg_id, head + `<b>فایلی که فرستاده بودی هنوز اینجاست.</b> بزن تا ادامه بدم 👇`, {
+      reply_markup: new InlineKeyboard().text("▶️ ادامهٔ همون فایل", `resume:${enough.id}`),
+    });
+    return;
+  }
+
+  const wantedId = takePendingJoin(t.tg_id);
+  const wanted = wantedId ? getSession(wantedId) : null;
+  if (wanted && wanted.status === "done" && !isMember(wanted.id, t.tg_id)) {
+    await notifyUser(t.tg_id, head + S.PENDING_JOIN_AFTER_TOPUP, {
+      reply_markup: new InlineKeyboard().text(S.PENDING_JOIN_BTN, `jdo:${wanted.id}`),
+    });
+    return;
+  }
+
+  if (pendingWebUploadId(t.tg_id)) {
+    await notifyUser(t.tg_id, head + S.PENDING_WEB_UPLOAD_AFTER_TOPUP, {});
+    return;
+  }
+
+  await notifyUser(t.tg_id, head + "صوت کلاستو بفرست 🎧", {});
 }
 
 // ─── کارت‌به‌کارت ───────────────────────────────────────────────────────────

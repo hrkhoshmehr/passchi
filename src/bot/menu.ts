@@ -14,7 +14,7 @@ import { InlineKeyboard, Keyboard } from "grammy";
 import { config } from "../config.js";
 import type { Platform } from "../db/identity.js";
 import {
-  PACKAGES, RATE_LINE, classesFor, coinsAsMinutes, fmtCoins, fmtToman, shareBack, type CoinPackage,
+  PACKAGES, RATE_LINE, COINS_PER_MINUTE, fmtCoins, fmtToman, shareBack,
 } from "../billing/coins.js";
 import { toFaDigits } from "../util/time.js";
 
@@ -215,25 +215,26 @@ export function supportKeyboard(platform: Platform = "telegram"): InlineKeyboard
 /**
  * دکمه‌ها با **عنوان** شروع می‌شوند، نه با عدد سکه.
  *
- * «یک جلسه — ۱۳۰ هزار» جوابِ «کدام را بخرم؟» است؛ «۱۰۰ سکه — ۱۳۰ هزار»
+ * «۱ کلاس — ۱۳۰ هزار» جوابِ «کدام را بخرم؟» است؛ «۱۰۰ سکه — ۱۳۰ هزار»
  * کاربر را وامی‌دارد اول حساب کند صد سکه چند کلاس می‌شود.
  */
 export function packagesKeyboard(): InlineKeyboard {
   const kb = new InlineKeyboard();
   for (const p of PACKAGES) {
-    kb.text(`${p.title} · ${fmtCoins(p.coins)} — ${fmtToman(p.price)}`, `buy:${p.id}`).row();
+    // عدد سکه روی دکمه نمی‌آید: پیامِ بالا می‌گویدش و دکمهٔ بلند روی گوشی بریده می‌شود.
+    kb.text(`${p.title} — ${fmtToman(p.price)}`, `buy:${p.id}`).row();
   }
   return kb;
 }
 
-/** «۱۶ کلاس ۹۰ دقیقه‌ای» یا برای پکیج کوچک، معادل دقیقه‌ای. */
-export function packageWorth(p: CoinPackage): string {
-  const classes = classesFor(p.coins);
-  return classes >= 1 ? `${toFaDigits(classes)} کلاس ۹۰ دقیقه‌ای` : coinsAsMinutes(p.coins);
-}
 
 export function packagesMessage(): string {
-  const out = ["<b>🪙 شارژ حساب</b>", "", `<b>${RATE_LINE}.</b>`, ""];
+  const out = [
+    "<b>🪙 شارژ حساب</b>",
+    "",
+    `<b>${RATE_LINE}.</b> یه کلاس ۹۰ دقیقه‌ای ${fmtCoins(90 * COINS_PER_MINUTE)} می‌خواد. سکه‌ها تاریخ انقضا ندارن.`,
+    "",
+  ];
   for (const p of PACKAGES) {
     out.push(
       `<b>${p.title}</b> — ${fmtCoins(p.coins)} · ${fmtToman(p.price)}`,
@@ -242,9 +243,9 @@ export function packagesMessage(): string {
     );
   }
   out.push(
-    `💰 <b>لازم نیست خرج کلاس رو تنها بدی.</b> بعد از هر تحلیل یه دکمه ` +
-      `می‌بینی که جزوه رو برای بچه‌های کلاس می‌فرسته. سهم هر هم‌کلاسی ثابته و برمی‌گرده به حسابت، ` +
-      `تا نصفِ هزینه — بعدش هم‌کلاسی‌های بعدی رایگان برش می‌دارن.`,
+    `💰 <b>لازم نیست خرج کلاس رو تنها بدی.</b> موقع فرستادن صوت یا بعد از تحویل، ` +
+      `«👥 با بچه‌های کلاس شریک می‌شم» رو بزن. هر کی با لینک جزوه رو بگیره یه سهم کوچیک می‌ده ` +
+      `که میاد تو حساب تو، تا نصف هزینه. بعدش برای بقیه مجانیه.`,
     "",
     "پکیجت رو از دکمه‌های پایین انتخاب کن.",
   );

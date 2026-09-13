@@ -8,7 +8,7 @@ import { audioExt } from "../audio/container.js";
 import { fmtDuration, toFaDigits } from "../util/time.js";
 import { costCoins, fmtBalance, fmtCoins, fmtCost, shareBack } from "../billing/coins.js";
 import {
-  getCourse, getSession, sessionReport, setMemberDelivery, updateSession, type SessionRow,
+  getCourse, getSession, rememberPendingJoin, sessionReport, setMemberDelivery, updateSession, type SessionRow,
 } from "../db/index.js";
 import { moreKeyboard, reportReplyTo } from "./deliver.js";
 import { InsufficientCredit } from "../billing/ledger.js";
@@ -410,9 +410,10 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
        * چیزی که ندیده. کسری هم در خودِ متن گفته می‌شود، چون تفاضلِ دو عدد را
        * کسی وسط تصمیم‌گرفتن حساب نمی‌کند.
        */
+      rememberPendingJoin(tgId, sessionId);
       return {
         ok: false,
-        message: S.lowBalanceMessage(e.needed, e.balance),
+        message: S.lowBalanceMessage(e.needed, e.balance) + "\n\n" + S.JOIN_RETURN_HINT,
         keyboard: new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup"),
       };
     }

@@ -230,6 +230,12 @@ CREATE TABLE IF NOT EXISTS coin_transfer_claims (
   claimed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_transfers_from ON coin_transfers(from_id, created_at DESC);
+-- آخرین جزوه‌ای که کاربر خواست بردارد و سکه کم آورد؛ بعد از شارژ همان پیشنهاد می‌شود.
+CREATE TABLE IF NOT EXISTS pending_joins (
+  tg_id      INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 
@@ -461,6 +467,42 @@ export function awaitingCreditSessions(tgId: number): SessionRow[] {
         ORDER BY created_at DESC LIMIT 5`,
     )
     .all(tgId) as unknown as SessionRow[];
+}
+
+/**
+ * جزوهٔ هم‌کلاسی که کاربر خواست بردارد و سکه کم آورد.
+ *
+ * بعد از شارژ، ربات به‌جای «صوت کلاستو بفرست» همان جزوه را پیشنهاد می‌دهد؛
+ * کسی که برای برداشتنِ جزوه شارژ کرده، دنبالِ آپلود نیامده. فقط آخرین خواسته
+ * نگه داشته می‌شود و با یک بار پیشنهاد پاک می‌شود.
+ */
+export function rememberPendingJoin(tgId: number, sessionId: string): void {
+  db.prepare(
+    `INSERT INTO pending_joins (tg_id, session_id) VALUES (?, ?)
+     ON CONFLICT(tg_id) DO UPDATE SET session_id = excluded.session_id, created_at = datetime('now')`,
+  ).run(tgId, sessionId);
+}
+
+export function takePendingJoin(tgId: number, maxAgeDays = 7): string | null {
+  const row = db
+    .prepare(`SELECT session_id FROM pending_joins WHERE tg_id = ? AND created_at > datetime('now', ?)`)
+    .get(tgId, `-${maxAgeDays} days`) as unknown as { session_id: string } | undefined;
+  db.prepare(`DELETE FROM pending_joins WHERE tg_id = ?`).run(tgId);
+  return row?.session_id ?? null;
+}
+
+/** تازه‌ترین آپلودِ مینی‌اپ که هنوز تأیید نشده — همان ملاکِ `GET /api/uploads/pending`. */
+export function pendingWebUploadId(tgId: number): string | null {
+  const row = db
+    .prepare(
+      `SELECT s.id AS id, s.original_file AS file FROM sessions s
+        WHERE s.tg_id = ? AND s.status = 'queued' AND s.download_route = 'web'
+          AND s.original_file IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM credit_ledger x WHERE x.session_id = s.id)
+        ORDER BY s.created_at DESC LIMIT 1`,
+    )
+    .get(tgId) as unknown as { id: string; file: string } | undefined;
+  return row && fs.existsSync(row.file) ? row.id : null;
 }
 
 export function getSession(id: string): SessionRow | null {
