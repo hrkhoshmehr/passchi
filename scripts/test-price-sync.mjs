@@ -22,7 +22,7 @@
  */
 import fs from "node:fs";
 
-const { PACKAGES, COST_PER_COIN_TOMAN } = await import("../src/billing/coins.ts");
+const { PACKAGES, MIN_MARGIN, packageMargin } = await import("../src/billing/coins.ts");
 
 const html = fs.readFileSync("public/index.html", "utf8").split("\r\n").join("\n");
 
@@ -47,8 +47,10 @@ const staticBlock = html.slice(html.indexOf('<div class="prices"'), html.indexOf
 const coinsOnPage = [...staticBlock.matchAll(/class="price-coins num">([^<$]+)</g)].map((m) => faToNum(m[1]));
 const tomanOnPage = [...staticBlock.matchAll(/class="price-toman num">([^<$]+)</g)].map((m) => faToNum(m[1]));
 
-check("سه کارت قیمت در صفحه هست", coinsOnPage.length === 3, String(coinsOnPage.length));
-check("سه مبلغ در صفحه هست", tomanOnPage.length === 3, String(tomanOnPage.length));
+// تعداد از خودِ `PACKAGES` می‌آید نه عددِ سفت‌شده: وقتی پکیج چهارم آمد، صفحه‌ای
+// که هنوز سه کارت دارد باید قرمز شود، نه اینکه کسی «۳» را دستی عوض کند.
+check(`${PACKAGES.length} کارت قیمت در صفحه هست`, coinsOnPage.length === PACKAGES.length, String(coinsOnPage.length));
+check(`${PACKAGES.length} مبلغ در صفحه هست`, tomanOnPage.length === PACKAGES.length, String(tomanOnPage.length));
 
 for (const [i, p] of PACKAGES.entries()) {
   check(
@@ -65,10 +67,10 @@ for (const [i, p] of PACKAGES.entries()) {
 
 // ─── حاشیه ──────────────────────────────────────────────────────────────────
 //
-// همان کفی که `coins.ts` در توضیحش قول داده: هر پکیج دست‌کم دو برابر هزینه.
-const MIN_MARGIN = 2;
+// همان کفی که `coins.ts` در توضیحش قول داده: هر پکیج دست‌کم دو برابر هزینه —
+// **پس از کارمزد درگاه**، چون آن بخش از مبلغ هیچ‌وقت به دست ما نمی‌رسد.
 for (const p of PACKAGES) {
-  const margin = p.price / p.coins / COST_PER_COIN_TOMAN;
+  const margin = packageMargin(p);
   check(
     `پکیج ${p.coins} سکه‌ای بالای کف ×${MIN_MARGIN} است`,
     margin >= MIN_MARGIN - 0.005, // گردکردن مبلغ روی هزار، خطای ناچیز می‌سازد

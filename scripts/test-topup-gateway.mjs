@@ -10,6 +10,8 @@
  *   دوباره نمی‌کند.
  * • انصراف در درگاه (`success=0`) سفارش را می‌بندد؛ «بررسی پرداخت» از ربات
  *   سفارشِ پرداخت‌نشده را باز نگه می‌دارد.
+ * • سفارشی که پیش از تغییر قیمت باز شده، پس از آن با **سکه و مبلغِ ذخیره‌شده
+ *   روی ردیف** تسویه می‌شود، نه با `PACKAGES` امروز.
  *
  * اجرا: DATA_DIR=./data/tmp-gw node --import tsx scripts/test-topup-gateway.mjs
  */
@@ -21,6 +23,12 @@ process.env.BOT_TOKEN ||= "x";
 let verifyResult = 202;
 let nextTrack = 5000;
 const calls = [];
+/**
+ * مبلغی که هر trackId با آن ساخته شد — درگاه واقعی هم همین را در verify
+ * برمی‌گرداند. عددِ سفت‌شده (قبلاً ۱۱۸۰۰۰۰ ریال) با اولین تغییر قیمت از
+ * واقعیت جدا می‌شد و مسیر «اختلاف مبلغ» را بی‌صدا روی هر تسویه روشن می‌کرد.
+ */
+const amountOf = new Map();
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
   calls.push({ url: String(url), body });
@@ -28,12 +36,13 @@ globalThis.fetch = async (url, init) => {
   if (String(url).endsWith("/v1/request")) {
     if (body.merchant !== "zibal") return reply({ result: 102, message: "merchant not found" });
     if (!body.callbackUrl?.startsWith("https://")) return reply({ result: 106 });
-    return reply({ result: 100, message: "success", trackId: ++nextTrack });
+    amountOf.set(++nextTrack, body.amount);
+    return reply({ result: 100, message: "success", trackId: nextTrack });
   }
   if (String(url).endsWith("/v1/verify")) {
     // تأخیر کوچک تا دو تسویهٔ همزمان واقعاً هم‌پوشان باشند
     await new Promise((r) => setTimeout(r, 20));
-    if (verifyResult === 100) return reply({ result: 100, amount: body.amount ?? 1180000, refNumber: 777, status: 1 });
+    if (verifyResult === 100) return reply({ result: 100, amount: amountOf.get(body.trackId), refNumber: 777, status: 1 });
     return reply({ result: verifyResult, message: "x" });
   }
   throw new Error("unexpected " + url);
@@ -42,6 +51,7 @@ globalThis.fetch = async (url, init) => {
 const { upsertUser, getUser, getTopup } = await import("../src/db/index.ts");
 const { beginTopup, settleTopup, cancelTopup, gatewayConfigured } = await import("../src/bot/topup.ts");
 const { balanceCoins, findPackage } = await import("../src/billing/coins.ts");
+const { zibalVerify } = await import("../src/billing/zibal.ts");
 
 let bad = 0;
 const check = (label, ok, extra = "") => {
@@ -99,6 +109,33 @@ check("سفارش بسته دیگر تسویه نمی‌شود، حتی با ver
 const o3 = await beginTopup(TG, "p3");
 check("انصراف کاربر روی سفارش درگاهی", cancelTopup(o3.id, TG) && getTopup(o3.id).status === "rejected");
 check("انصراف با شناسهٔ غلط رد می‌شود", cancelTopup(o.id, 1) === false);
+
+// ── سفارشِ بازمانده از قیمت قبلی ─────────────────────────────────────────────
+//
+// کاربر پرداخت را پیش از استقرار باز کرده و بعد از آن پرداخت می‌کند. اگر
+// واریز از `PACKAGES` امروز خوانده می‌شد، یا سکهٔ اشتباه می‌گرفت یا (با
+// مقایسهٔ سخت مبلغ) پولش می‌رفت و سکه نمی‌آمد.
+{
+  const before = bal();
+  const o4 = await beginTopup(TG, "p1");
+  const stored = getTopup(o4.id);
+  const pkg = findPackage("p1");
+  const saved = { coins: pkg.coins, price: pkg.price };
+  // «استقرار»: همان شناسه، سکه و قیمتِ دیگر
+  pkg.coins = saved.coins + 7;
+  pkg.price = saved.price + 12_000;
+  try {
+    verifyResult = 100;
+    const v = await zibalVerify(stored.track_id);
+    check("درگاه مبلغِ زمانِ ساخت را برمی‌گرداند، نه قیمت امروز", v.amountToman === stored.price_toman, `${v.amountToman} · ${stored.price_toman}`);
+    const r4 = await settleTopup({ trackId: stored.track_id });
+    check("سفارش قدیمی پس از تغییر قیمت واریز می‌شود", r4.outcome === "credited", r4.outcome);
+    check("سکهٔ ذخیره‌شده روی ردیف واریز شد، نه سکهٔ پکیج امروز", bal() === before + stored.coins, `${bal()} (انتظار ${before + stored.coins})`);
+    check("قیمت روی ردیف همان قیمت زمانِ ساخت ماند", getTopup(o4.id).price_toman === saved.price, String(getTopup(o4.id).price_toman));
+  } finally {
+    Object.assign(pkg, saved);
+  }
+}
 
 // ── سفارش ناشناس ─────────────────────────────────────────────────────────────
 r = await settleTopup({ trackId: "424242" });

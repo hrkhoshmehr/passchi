@@ -165,7 +165,11 @@ section { padding: 78px 0; }
 
 /* ─── قیمت ──────────────────────────────────────────────────────────────── */
 
-.prices { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+/* چهار پکیج: چهارتایی، دوتایی، تکی — نه auto-fit، که بین ۷۰۰ و ۱۰۰۰ پیکسل
+   سه‌تایی می‌چید و کارت چهارم تنها زیرشان می‌ماند */
+.prices { display: grid; gap: 18px; grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 1000px) { .prices { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .prices { grid-template-columns: 1fr; } }
 .price { text-align: center; position: relative; display: flex; flex-direction: column; }
 .price.featured { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft), var(--shadow); }
 .price-tag {
@@ -397,9 +401,17 @@ footer {
         scripts/test-price-sync.mjs همین را می‌سنجد.
       -->
       <article class="card price">
+        <h3>سکهٔ کم</h3>
+        <div class="price-coins num">۵۰</div>
+        <div class="price-toman num">۶۹٬۰۰۰ تومان</div>
+        <p class="price-worth">۵۰ دقیقه صوت</p>
+        <p class="price-blurb">برای سهمت از جلسهٔ هم‌کلاسی، فرستادن سکه به بچه‌های کلاس، یا یه کلاس کوتاه (تا ۵۰ دقیقه). برای کلاس ۹۰ دقیقه‌ای کم میاد.</p>
+        <a class="btn btn-ghost btn-block" href="/app">انتخاب</a>
+      </article>
+      <article class="card price">
         <h3>یک جلسه</h3>
         <div class="price-coins num">۱۰۰</div>
-        <div class="price-toman num">۱۱۸٬۰۰۰ تومان</div>
+        <div class="price-toman num">۱۳۰٬۰۰۰ تومان</div>
         <p class="price-worth">۱ کلاس ۹۰ دقیقه‌ای</p>
         <p class="price-blurb">برای اینکه امتحانش کنی — یک کلاس ۹۰ دقیقه‌ای، با کمی اضافه.</p>
         <a class="btn btn-ghost btn-block" href="/app">انتخاب</a>
@@ -408,7 +420,7 @@ footer {
         <span class="pill price-tag">پیشنهاد</span>
         <h3>یک ماه</h3>
         <div class="price-coins num">۳۶۰</div>
-        <div class="price-toman num">۳۸۹٬۰۰۰ تومان</div>
+        <div class="price-toman num">۴۳۰٬۰۰۰ تومان</div>
         <p class="price-worth">۴ کلاس ۹۰ دقیقه‌ای</p>
         <p class="price-blurb">چهار جلسهٔ ۹۰ دقیقه‌ای — یک درسِ هفتگی تا آخر ماه.</p>
         <a class="btn btn-primary btn-block" href="/app">انتخاب</a>
@@ -416,7 +428,7 @@ footer {
       <article class="card price">
         <h3>کل ترم</h3>
         <div class="price-coins num">۱٬۴۴۰</div>
-        <div class="price-toman num">۱٬۴۴۰٬۰۰۰ تومان</div>
+        <div class="price-toman num">۱٬۵۹۰٬۰۰۰ تومان</div>
         <p class="price-worth">۱۶ کلاس ۹۰ دقیقه‌ای</p>
         <p class="price-blurb">۱۶ جلسه — یک درس تا آخر ترم. با بچه‌های کلاس شریک شید: یک نفر بخره، هر جلسه رو بفرسته و جزوه رو تو گروه درس بذاره.</p>
         <a class="btn btn-ghost btn-block" href="/app">انتخاب</a>

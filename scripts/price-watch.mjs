@@ -12,12 +12,11 @@
  * اجرا: node scripts/price-watch.mjs [--notify]
  */
 import {
-  COINS_PER_MINUTE, COST_PER_COIN_TOMAN, LLM_COST_PER_HOUR_USD, MODEL_PRICE_BASELINE, PACKAGES,
-  STT_COST_PER_HOUR_USD, USD_TOMAN,
+  COINS_PER_MINUTE, COST_PER_COIN_TOMAN, LLM_COST_PER_HOUR_USD, MIN_MARGIN, MODEL_PRICE_BASELINE, PACKAGES,
+  STT_COST_PER_HOUR_USD, USD_TOMAN, gatewayFeeToman, packageMargin,
 } from "../src/billing/coins.ts";
 import { config } from "../src/config.ts";
 
-const MIN_MARGIN = 2.0;
 const fa = (n) => Math.round(n).toLocaleString("fa-IR");
 const models = config.OPENROUTER_MODEL.split(",").map((m) => m.trim()).filter(Boolean);
 
@@ -70,18 +69,24 @@ console.log(`  هزینهٔ هر سکه: ${coinCostNow.toFixed(1)} تومان (�
 
 let worst = Infinity;
 for (const p of PACKAGES) {
-  const margin = p.price / p.coins / coinCostNow;
+  const margin = packageMargin(p, coinCostNow);
   worst = Math.min(worst, margin);
   console.log(`  پکیج ${String(p.coins).padStart(5)} · حاشیه ×${margin.toFixed(2)}${margin < MIN_MARGIN ? "  ⚠️" : ""}`);
 }
 
-/** مدل چند برابر گران‌تر شود تا حاشیه به کف برسد. */
-const worstPkg = PACKAGES.reduce((a, b) => (a.price / a.coins < b.price / b.coins ? a : b));
-const maxCoinCost = worstPkg.price / worstPkg.coins / MIN_MARGIN;
+/**
+ * مدل چند برابر گران‌تر شود تا حاشیه به کف برسد.
+ *
+ * «بدترین پکیج» با درآمدِ **خالص** هر سکه سنجیده می‌شود، نه مبلغ برچسب:
+ * کارمزد درگاه روی پکیج‌ها یکسان نیست و می‌تواند ترتیبشان را عوض کند.
+ */
+const netPerCoin = (p) => (p.price - gatewayFeeToman(p.price)) / p.coins;
+const worstPkg = PACKAGES.reduce((a, b) => (netPerCoin(a) < netPerCoin(b) ? a : b));
+const maxCoinCost = netPerCoin(worstPkg) / MIN_MARGIN;
 const maxHour = (maxCoinCost / USD_TOMAN) * COINS_PER_HOUR;
 const headroom = (maxHour - STT_COST_PER_HOUR_USD) / LLM_COST_PER_HOUR_USD;
 
-const breakEvenHour = (worstPkg.price / worstPkg.coins / USD_TOMAN) * COINS_PER_HOUR;
+const breakEvenHour = (netPerCoin(worstPkg) / USD_TOMAN) * COINS_PER_HOUR;
 const breakEven = (breakEvenHour - STT_COST_PER_HOUR_USD) / LLM_COST_PER_HOUR_USD;
 
 console.log(`\nتا کف حاشیهٔ ×${MIN_MARGIN}، قیمت مدل می‌تواند تا ×${headroom.toFixed(1)} گران شود.`);
