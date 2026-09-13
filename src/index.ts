@@ -70,7 +70,11 @@ await publishProfile(bot.api);
 
 // آدرس ربات‌ها یک بار پرسیده می‌شود؛ سایت و مینی‌اپ از همین می‌خوانند تا
 // دکمهٔ «باز کردن در تلگرام / بله» هرگز به چت اشتباه نبرد.
-await resolveBotLinks(bot.api, baleBot?.api ?? null);
+//
+// ⚠️ بی `await`: ۲۰۲۶-۰۹-۱۴ بله از سرور در دسترس نبود (اتصال در SYN-SENT ماند)
+// و همین یک `await` راه‌اندازی را نگه داشت — تلگرام هم هیچ پیامی نمی‌گرفت چون
+// `bot.start()` پایینِ فایل اصلاً اجرا نشد. قطعیِ یک سکو نباید سکوی دیگر را بخواباند.
+void resolveBotLinks(bot.api, baleBot?.api ?? null);
 
 void cleanupOldAudio();
 
@@ -143,7 +147,8 @@ logger.info(
     ...(recovered ? { recovered } : {}),
     // بایگانی بی‌صدا شکست می‌خورد، پس دست‌کم موقع بالاآمدن معلوم باشد روشن است یا نه
     archive: archiveStatus(),
-    bale: await baleStatus(),
+    // وضعیت بله در خطِ جدای «وضعیت بله» می‌آید؛ منتظرش ماندن تلگرام را نگه می‌داشت.
+    bale: baleBot ? "در حال بررسی…" : "خاموش",
     web: config.WEB_ENABLED ? `پورت ${config.WEB_PORT}` : "خاموش",
     // یادآوری و خرید گروهی هر دو بی‌صدا خاموش می‌مانند اگر متغیرشان روی سرور نباشد.
     nudges: config.NUDGES ? "روشن" : "خاموش",
@@ -163,6 +168,15 @@ logger.info(
   },
   `${APP_NAME} در حال اجراست`,
 );
+
+// همان آزمونِ زندهٔ بله، در پس‌زمینه؛ اگر بله قطع باشد اینجا «پاسخ نمی‌دهد» می‌آید
+// و تلگرام در همین حال کار می‌کند.
+if (baleBot) {
+  void baleStatus().then((bale) => {
+    const log = bale.startsWith("روشن") ? logger.info.bind(logger) : logger.warn.bind(logger);
+    log({ bale }, "وضعیت بله");
+  });
+}
 
 /**
  * تور نجات پروسه.

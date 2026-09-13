@@ -73,6 +73,7 @@ const tests = [
   "free-file",
   "pay-file",
   "start-flow",
+  "boot-order",
 ];
 
 const tmpRoot = path.join("data", `tmp-test-${process.pid}`);

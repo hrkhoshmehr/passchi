@@ -20,14 +20,21 @@ export interface BotLinks {
 
 const links: BotLinks = { telegram: null, bale: null };
 
-/** در راه‌اندازی صدا زده می‌شود؛ شکستش کشنده نیست. */
+/**
+ * در راه‌اندازی صدا زده می‌شود؛ شکستش کشنده نیست.
+ *
+ * هر سکو جدا پر می‌شود، نه با `Promise.all`: وقتی بله در دسترس نیست، آدرس
+ * تلگرام نباید تا تمام‌شدنِ مهلتِ اتصالِ بله خالی بماند.
+ */
 export async function resolveBotLinks(telegram: Api | null, bale: Api | null): Promise<void> {
-  const [tg, bl] = await Promise.all([
-    telegram?.getMe().catch(() => null) ?? null,
-    bale?.getMe().catch(() => null) ?? null,
+  await Promise.all([
+    telegram?.getMe().then((me) => {
+      if (me.username) links.telegram = `https://t.me/${me.username}`;
+    }).catch(() => {}),
+    bale?.getMe().then((me) => {
+      if (me.username) links.bale = `https://ble.ir/${me.username}`;
+    }).catch(() => {}),
   ]);
-  if (tg?.username) links.telegram = `https://t.me/${tg.username}`;
-  if (bl?.username) links.bale = `https://ble.ir/${bl.username}`;
   logger.debug({ links }, "bot links resolved");
 }
 
