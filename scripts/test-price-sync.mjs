@@ -22,7 +22,7 @@
  */
 import fs from "node:fs";
 
-const { PACKAGES, MIN_MARGIN, packageMargin } = await import("../src/billing/coins.ts");
+const { PACKAGES, MIN_MARGIN, packageMargin, classesFor, COINS_PER_MINUTE } = await import("../src/billing/coins.ts");
 
 const html = fs.readFileSync("public/index.html", "utf8").split("\r\n").join("\n");
 
@@ -85,6 +85,37 @@ for (let i = 1; i < PACKAGES.length; i++) {
   const cur = PACKAGES[i].price / PACKAGES[i].coins;
   check(`پکیج ${PACKAGES[i].coins} سکهٔ ارزان‌تری از قبلی دارد`, cur < prev, `${cur.toFixed(0)} < ${prev.toFixed(0)}`);
 }
+
+// اسمِ پکیج تعدادِ کلاس است. عددِ اسم باید با `classesFor` بخواند، وگرنه روزی که
+// سکه‌های یک پکیج عوض شود، اسمش بی‌صدا دروغ می‌گوید — همان خانوادهٔ باگی که
+// قیمت‌های دستیِ همین صفحه را دو نسل عقب نگه داشته بود.
+for (const p of PACKAGES) {
+  const n = classesFor(p.coins);
+  const m = String(p.title).match(/^([۰-۹]+) کلاس$/);
+  if (n >= 1) {
+    check(`اسم پکیج ${p.coins} سکه‌ای تعداد کلاس درست را می‌گوید`, Boolean(m) && faToNum(m[1]) === n, `«${p.title}» · باید ${n} کلاس باشد`);
+  } else {
+    check(`پکیج ${p.coins} سکه‌ای ادعای کلاس ندارد`, !m, `«${p.title}»`);
+  }
+}
+
+// آزمون‌های بالا فقط عدد و مبلغ را می‌سنجیدند؛ اسم و سطرِ «هر کلاس» هم دستی در
+// HTML تکرار شده‌اند و باید با کد بخوانند. `$` بیرون گذاشته شده تا قالبِ
+// جاوااسکریپتِ همین صفحه (`${esc(p.title)}`) به‌جای کارتِ ایستا شمرده نشود.
+const titlesOnPage = [...staticBlock.matchAll(/<h3>([^<$]+)<\/h3>/g)].map((m) => m[1].trim());
+check(
+  "اسم‌های پکیج در صفحه با کد یکی است",
+  titlesOnPage.join("|") === PACKAGES.map((p) => p.title).join("|"),
+  `صفحه: ${titlesOnPage.join("، ")} · کد: ${PACKAGES.map((p) => p.title).join("، ")}`,
+);
+
+const perClassOnPage = [...staticBlock.matchAll(/class="price-worth">هر کلاس ۹۰ دقیقه‌ای: حدود ([۰-۹٬]+) هزار تومان</g)].map((m) => faToNum(m[1]));
+const classPkgs = PACKAGES.filter((p) => classesFor(p.coins) >= 1);
+check("برای هر پکیجِ کلاسی یک سطرِ «هر کلاس» در صفحه هست", perClassOnPage.length === classPkgs.length, `${perClassOnPage.length} در برابر ${classPkgs.length}`);
+classPkgs.forEach((p, i) => {
+  const want = Math.round((90 * COINS_PER_MINUTE * p.price) / p.coins / 1000);
+  check(`قیمت هر کلاسِ پکیج ${p.coins} سکه‌ای در صفحه درست است`, perClassOnPage[i] === want, `صفحه ${perClassOnPage[i]} · کد ${want}`);
+});
 
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
 process.exit(bad === 0 ? 0 : 1);
