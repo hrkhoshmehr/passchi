@@ -124,10 +124,12 @@ const notify = async (userId, text, extra = {}) => spy.push({ userId, text, extr
 
   const low = lowBalanceKeyboard("ab00").inline_keyboard;
   check(
-    "صفحهٔ سکهٔ کم: دو گزینهٔ هم‌وزن در یک ردیف",
-    low[0].length === 2 && low[0][0].text === S.GROUP_BTN.self && low[0][1].text === S.GROUP_BTN.group,
+    "صفحهٔ سکهٔ کم: «پرداخت همین فایل» بالا، و دو گزینهٔ هم‌وزن در ردیفِ بعد",
+    low[0].length === 1 && low[0][0].callback_data === "pf:ab00" &&
+      low[1].length === 2 && low[1][0].text === S.GROUP_BTN.self && low[1][1].text === S.GROUP_BTN.group,
     low.map((r) => r.map((b) => b.text).join(" + ")).join(" / "),
   );
+  check("پیامِ سکهٔ کم مبلغِ «فقط همین فایل» را می‌گوید", S.lowBalanceGroupMessage(5400, coinsToSec(20)).includes("فقط همین فایل"));
   check("دکمهٔ شریک‌شدنِ پس از تحویل همچنان اینجا نیست", !low.flat().some((b) => b.callback_data.startsWith("spre:")));
   check("جملهٔ دلگرمی زیرِ پیام هست", S.lowBalanceGroupMessage(5400, coinsToSec(20)).includes(S.GROUP_REASSURE));
 }

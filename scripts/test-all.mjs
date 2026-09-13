@@ -16,7 +16,7 @@ import path from "node:path";
 const NEEDS_DB = new Set([
   "gift", "identity", "archive-routing", "interrupted-recovery", "sharing", "share-seat",
   "topup-gateway", "deferred-delivery", "pending-resume", "member-access", "topup-continuation",
-  "group-buy", "funnel", "nudge",
+  "group-buy", "funnel", "nudge", "free-file", "pay-file",
 ]);
 
 const tests = [
@@ -71,6 +71,8 @@ const tests = [
   "topup-gateway",
   "funnel",
   "nudge",
+  "free-file",
+  "pay-file",
 ];
 
 const tmpRoot = path.join("data", `tmp-test-${process.pid}`);
@@ -79,6 +81,9 @@ let failed = 0;
 for (const name of tests) {
   const env = { ...process.env };
   if (NEEDS_DB.has(name)) env.DATA_DIR = path.join(tmpRoot, name);
+  // آزمون‌های قدیمی مسیرِ «فایلِ دوم به بعد» را می‌سنجند؛ پیشنهادِ رایگان جلوی
+  // صفحهٔ تأییدشان می‌نشست. خودِ رایگان آزمونِ جدای خودش را دارد.
+  env.FREE_FIRST_FILE = name === "free-file" ? "true" : "false";
 
   const r = spawnSync(
     process.execPath,

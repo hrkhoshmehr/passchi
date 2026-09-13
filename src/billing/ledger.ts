@@ -28,8 +28,9 @@ export type LedgerReason =
   | "refund"         // برگشت به‌خاطر شکست کار
   | "share_charge"   // سهم کسی که به جلسه پیوسته
   | "share_refund"   // برگشت به اعضای قبلی چون سهم هرکس کمتر شد
-  | "transfer_out"   // سکه‌ای که کاربر برای هم‌کلاسی‌اش فرستاد
-  | "transfer_in";   // سکه‌ای که از هم‌کلاسی رسید
+  | "transfer_out"   // سکه‌ای که کاربر برای هم‌کلاسی‌اش فرستاد (تاریخچه؛ انتقال برداشته شد)
+  | "transfer_in"    // سکه‌ای که از هم‌کلاسی رسید (تاریخچه)
+  | "free_file";     // سکهٔ اولین صوتِ رایگان، به‌اندازهٔ همان فایل
 
 export class InsufficientCredit extends Error {
   readonly shortfall: number;

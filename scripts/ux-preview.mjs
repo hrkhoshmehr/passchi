@@ -182,6 +182,28 @@ line("شارژ");
 show(packagesMessage());
 line("سکهٔ کم");
 show(lowBalanceMessage(90 * 60, coinsToSec(20)));
+line("سکهٔ کم — فایلِ منتظر، با «پرداخت همین فایل»");
+show(lowBalanceMessage(90 * 60, coinsToSec(20), undefined, true));
+console.log("\n[ 💳 پرداخت همین فایل ]\n[ 🪙 شارژ حساب ]\n[ ▶️ ادامه بده ]");
+
+// ── اولین صوتِ رایگان ──────────────────────────────────────────────────────
+{
+  const F = await import("../src/bot/strings.ts");
+  line("فایلِ اول — ۹۰ دقیقه، ۲۰ سکه");
+  show(F.firstFileMessage(90 * 60, coinsToSec(20), { minutes: 120 }));
+  console.log(`\n[ ${F.FILE_BTN.free} ]\n[ ${F.FILE_BTN.pay} ] [ ${F.CONFIRM_BTN.topup} ]`);
+  line("فایلِ اول — ۹۰ دقیقه، سکهٔ کافی");
+  show(F.firstFileMessage(90 * 60, coinsToSec(200), { minutes: 120 }));
+  console.log(`\n[ ${F.FILE_BTN.free} ]\n[ ${F.CONFIRM_BTN.go} ] [ ${F.CONFIRM_BTN.cancel} ]`);
+  line("فایلِ اول — ۱۵۰ دقیقه");
+  show(F.firstFileMessage(150 * 60, 0, { minutes: 120 }));
+  line("رایگان واریز شد");
+  show(F.freeFileGrantedMessage(7200, false));
+  line("رایگان واریز شد — سهمیهٔ هفته پر");
+  show(F.freeFileGrantedMessage(1800, true));
+  line("رایگان — ردها");
+  for (const [k, v] of Object.entries(F.FREE_FILE_REFUSAL)) console.log(`  ${k.padEnd(10)} → ${v}`);
+}
 
 // ── تصمیمِ تقسیم، پیش از خرج‌شدن سکه ────────────────────────────────────────
 line("تأیید هزینه — جایی که تصمیمِ تقسیم هم گرفته می‌شود");
@@ -243,7 +265,16 @@ for (const r of ["unknown", "revoked", "expired", "already", "exhausted"]) {
   const NL = "\n";
   line("خرید گروهی — سکهٔ کم، دو راه");
   show(G.lowBalanceGroupMessage(90 * 60, coinsToSec(20), { people: 5, seatCoins: 18 }, 20));
-  console.log(`${NL}[ ${G.GROUP_BTN.self} ] [ ${G.GROUP_BTN.group} ]${NL}[ ${G.GROUP_BTN.resume} ]`);
+  console.log(`${NL}[ ${G.FILE_BTN.pay} ]${NL}[ ${G.GROUP_BTN.self} ] [ ${G.GROUP_BTN.group} ]${NL}[ ${G.GROUP_BTN.resume} ]`);
+  {
+    const { groupSizeKeyboard, suggestedGroupSize } = await import("../src/bot/group-buy.ts");
+    line("خرید گروهی — فایلِ ۱۳۰ سکه‌ای، ۲۰ سکه موجودی");
+    show(G.lowBalanceGroupMessage(130 * 60, coinsToSec(20), suggestedGroupSize(130 * 60, coinsToSec(20)), 20));
+    line("خرید گروهی — فایلِ ۱۳۰ سکه‌ای، دکمه‌های اندازه");
+    console.log(
+      groupSizeKeyboard("x", 130 * 60, coinsToSec(20)).inline_keyboard.map((r) => r.map((b) => `[ ${b.text} ]`).join(" ")).join(NL),
+    );
+  }
   line("خرید گروهی — چند نفر");
   show(G.groupSizePrompt(5400, GROUP_BUY_HOURS));
   console.log(

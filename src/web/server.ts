@@ -21,6 +21,8 @@ import { isWebEvent, normalizeSource, track } from "../db/funnel.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml, shortId } from "../util/text.js";
 import { beginTopup, gatewayConfigured, settleTopup } from "../bot/topup.js";
+import { claimFreeFile, freeFileOffer, type FreeFileOffer } from "../billing/free-file.js";
+import { fingerprint } from "../stt/cache.js";
 import { APP_NAME } from "../bot/menu.js";
 import {
   createSessionToken, loginFromMiniApp, OtpError, phoneLoginEnabled, purgeExpiredSessions,
@@ -39,7 +41,7 @@ import { startJob } from "../jobs/service.js";
 import { InsufficientCredit } from "../billing/ledger.js";
 import { groupBuyEnabled, openGroup, sendGroupInvite } from "../bot/group-buy.js";
 import { deliveryChannel } from "../bot/notify.js";
-import { GROUP_REFUSAL } from "../bot/strings.js";
+import { FREE_FILE_REFUSAL, GROUP_REFUSAL } from "../bot/strings.js";
 import { unreservedSql } from "../db/index.js";
 import { balanceCoins, costCoins, fmtCoins, PACKAGES, COINS_PER_MINUTE, SHARE_TARGET } from "../billing/coins.js";
 import { setShareEnabled, setShareTarget } from "../billing/sharing.js";
@@ -438,7 +440,9 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
           error: `فایل خیلی بزرگ است. سقف ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))} مگابایت است.`,
         });
       }
-      if (sec > 0 && u.credit_sec < sec) {
+      // اولین صوتِ رایگان هنوز گرفته نشده؟ پیش از آپلود «سکه‌ات کمه» نگو.
+      const free = freeFileOffer(uid);
+      if (sec > 0 && u.credit_sec < sec && !free) {
         return json(res, 402, {
           error: "اعتبارت کم است.",
           needCoins: costCoins(sec),
@@ -449,6 +453,7 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
         ok: true,
         costCoins: sec > 0 ? costCoins(sec) : null,
         haveCoins: balanceCoins(u.credit_sec),
+        freeFile: free,
       });
     }
 
@@ -543,6 +548,7 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
         costCoins: costCoins(sec),
         haveCoins: balanceCoins(u.credit_sec),
         enough: u.credit_sec >= sec,
+        freeFile: freeFileOffer(uid),
       },
     });
   }
@@ -560,7 +566,7 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
      * بدنهٔ خالی هم درست است: نسخهٔ قدیمیِ `app.js` که در وب‌ویوی بله کش شده
      * چیزی نمی‌فرستد و نباید بشکند.
      */
-    const body = await readJson<{ share?: boolean; people?: number }>(req).catch(() => ({}));
+    const body = await readJson<{ share?: boolean; people?: number; free?: boolean }>(req).catch(() => ({}));
     return confirmSession(res, uid, sessionMatch[1]!, body);
   }
 
@@ -1026,7 +1032,7 @@ async function uploadAudio(
   const declaredSec = Math.max(0, Number(url.searchParams.get("duration") ?? 0));
   const courseId = Number(url.searchParams.get("courseId") ?? 0) || null;
 
-  if (declaredSec > 0 && u.credit_sec < declaredSec) {
+  if (declaredSec > 0 && u.credit_sec < declaredSec && !freeFileOffer(userId)) {
     return refuse(req, res, 402, {
       error: "اعتبارت کم است.",
       needCoins: costCoins(declaredSec),
@@ -1117,7 +1123,13 @@ async function uploadAudio(
  * بگیرند، بی‌آنکه به `res` وابسته باشند — tus خودش پاسخ را می‌سازد.
  */
 type UploadResult =
-  | { status: 200; body: { sessionId: string; durationSec: number; costCoins: number; haveCoins: number; enough: boolean } }
+  | {
+      status: 200;
+      body: {
+        sessionId: string; durationSec: number; costCoins: number; haveCoins: number; enough: boolean;
+        freeFile: FreeFileOffer | null;
+      };
+    }
   | { status: 400 | 402; body: { error: string } };
 
 /**
@@ -1176,6 +1188,7 @@ async function finalizeUpload(o: {
       costCoins: costCoins(sec),
       haveCoins: balanceCoins(u.credit_sec),
       enough: u.credit_sec >= sec,
+      freeFile: freeFileOffer(userId),
     },
   };
 }
@@ -1265,7 +1278,7 @@ async function confirmSession(
   res: Res,
   userId: number,
   sessionId: string,
-  share: { share?: boolean; people?: number } = {},
+  share: { share?: boolean; people?: number; free?: boolean } = {},
 ): Promise<void> {
   const s = getSession(sessionId);
   if (!s || s.tg_id !== userId) return json(res, 404, { error: "این جلسه پیدا نشد." });
@@ -1280,6 +1293,19 @@ async function confirmSession(
     sec = Math.round((await probe(dest)).durationMs / 1000);
   } catch {
     return json(res, 400, { error: "مدت این فایل خوانده نشد." });
+  }
+
+  /**
+   * «🎁 اولین صوت رایگان» از مینی‌اپ — همان `claimFreeFile` ربات، با فایلِ
+   * روی دیسک و مدتی که همین حالا سنجیده شد.
+   *
+   * ردشده ⇒ ۴۰۹ با متنِ رد و بی شروع؛ «شروع کن» با سکه همان‌جا هست. واریز شده
+   * ولی فایل از سقف بلندتر ⇒ `startJob` پایین‌تر ۴۰۲ می‌دهد و رایگان در حساب
+   * می‌ماند تا پس از شارژ همان فایل ادامه یابد.
+   */
+  if (share.free) {
+    const claim = claimFreeFile({ tgId: userId, sessionId, fingerprint: await fingerprint(dest), durationSec: sec });
+    if (!claim.ok) return json(res, 409, { error: FREE_FILE_REFUSAL[claim.reason], freeRefused: claim.reason });
   }
 
   /**

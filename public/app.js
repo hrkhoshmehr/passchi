@@ -1529,9 +1529,21 @@ function askConfirm(out, filename, keep = false) {
    * «دوباره بفرست» پیش‌تر درست بود چون راهِ برگشتی نبود. حالا سرور فایل را
    * نگه می‌دارد و `checkPending` هنگامِ برگشت همان را پیشنهاد می‌دهد.
    */
+  /**
+   * اولین صوتِ رایگان — همان `freeFileOffer` ربات، از خودِ پاسخِ آپلود.
+   *
+   * با رایگان، «n سکه کم داری» خبرِ بدی است که درست نیست؛ پس خطا و گزینه‌های
+   * سکهٔ کم نمی‌آیند و خرید گروهی هم نه — فایلِ اول رایگان است.
+   */
+  const free = out.freeFile || null;
+  $("confirm-free").textContent = free ? `🎁 اولین صوت رایگان — تا ${fa(free.minutes)} دقیقه` : "";
+  $("confirm-free").disabled = false;
+  show($("confirm-free"), Boolean(free));
+  show($("confirm-free-note"), Boolean(free));
+
   const short = Math.max(0, out.costCoins - out.haveCoins);
   $("confirm-go").disabled = !out.enough;
-  if (!out.enough) {
+  if (!out.enough && !free) {
     fail(
       $("confirm-err"),
       `${faGroup(short)} سکه کم داری. فایلت همین‌جا می‌مونه — از «🪙 حساب» شارژ کن و برگرد همین صفحه.`,
@@ -1540,9 +1552,39 @@ function askConfirm(out, filename, keep = false) {
   show($("confirm-group-box"), false);
   show($("confirm-group-done"), false);
   show($("confirm-go"), true);
-  void paintLowChoices(out.enough);
+  void paintLowChoices(out.enough || Boolean(free));
   go("confirm");
 }
+
+$("confirm-free").addEventListener("click", async () => {
+  if (!pendingSession) return;
+  const btn = $("confirm-free");
+  btn.disabled = true;
+  fail($("confirm-err"), "");
+  try {
+    await api.call(`/api/sessions/${pendingSession}/confirm`, { method: "POST", body: { free: true } });
+  } catch (err) {
+    btn.disabled = false;
+    const d = err.data || {};
+    if (err.status === 402) {
+      // رایگان واریز شد ولی فایل از سقفش بلندتر است؛ بقیه با سکه.
+      show(btn, false);
+      show($("confirm-free-note"), false);
+      const short = Math.max(0, (d.needCoins ?? 0) - (d.haveCoins ?? 0));
+      fail($("confirm-err"), `رایگانش به حسابت اومد، ولی برای بقیهٔ این فایل ${faGroup(short)} سکه کم داری. از «🪙 حساب» شارژ کن و برگرد همین صفحه؛ فایلت همین‌جا می‌مونه.`);
+    } else if (err.status === 409 && d.freeRefused) {
+      show(btn, false);
+      show($("confirm-free-note"), false);
+      fail($("confirm-err"), d.error);
+    } else {
+      fail($("confirm-err"), friendlyError(err, "general"));
+    }
+    return;
+  }
+  const id = pendingSession;
+  pendingSession = null;
+  handedOff(id);
+});
 
 // ─── خرید گروهی روی صفحهٔ تأیید ──────────────────────────────────────────────
 //

@@ -45,8 +45,10 @@ import {
   MORE_CB, MORE_PART_OF, closingKeyboard, moreKeyboard, reportReplyTo, sendMorePart,
 } from "./deliver.js";
 import {
-  beginTopup, cancelTopup, decide, gatewayConfigured, paymentConfigured, receiveReceipt, settleTopup,
+  beginFileTopup, beginTopup, cancelTopup, decide, gatewayConfigured, paymentConfigured, receiveReceipt, settleTopup,
 } from "./topup.js";
+import { claimFreeFile, freeFileOffer } from "../billing/free-file.js";
+import { fingerprint } from "../stt/cache.js";
 import {
   DEFAULT_GIFT_COINS, claim as claimGiftCode, claimedMessage, describeUser, giftSummary,
   mintGift, refusalMessage,
@@ -1902,20 +1904,46 @@ export function lowBalanceKeyboard(sessionId: string, resumeData = `go:${session
      * خواندنش انتظارِ غلط نیست، خودِ پیشنهاد است. هیچ‌کدام بالای دیگری
      * نمی‌نشیند، چون هیچ‌کدام پیش‌فرض نیست.
      */
+    // «پرداخت همین فایل» بالای هر دو: کوتاه‌ترین راه برای کسی که فقط همین
+    // کلاس را می‌خواهد — نه پکیج می‌خرد نه منتظرِ هم‌کلاسی‌ها می‌ماند.
     return new InlineKeyboard()
+      .text(S.FILE_BTN.pay, `pf:${sessionId}`)
+      .row()
       .text(S.GROUP_BTN.self, "topup")
       .text(S.GROUP_BTN.group, `${GROUP_CB.open}:${sessionId}`)
       .row()
       .text(S.GROUP_BTN.resume, resumeData);
   }
-  return new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup").row().text("▶️ ادامه بده", resumeData);
+  return payFileKeyboard(sessionId, resumeData);
+}
+
+/** سکهٔ کم **بی** خرید گروهی: پرداخت همین فایل، شارژ، و ادامه. */
+function payFileKeyboard(sessionId: string, resumeData = `go:${sessionId}`): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(S.FILE_BTN.pay, `pf:${sessionId}`)
+    .row()
+    .text(S.CONFIRM_BTN.topup, "topup")
+    .row()
+    .text(S.GROUP_BTN.resume, resumeData);
 }
 
 /** متنِ همان صفحه؛ با خرید گروهی برچسبِ شارژ و جملهٔ دلگرمی هم می‌آید. */
 function lowBalanceText(sec: number, balanceSec: number): string {
   return groupBuyEnabled()
     ? S.lowBalanceGroupMessage(sec, balanceSec, suggestedGroupSize(sec, balanceSec), config.FREE_TRIAL_COINS)
-    : S.lowBalanceMessage(sec, balanceSec);
+    : S.lowBalanceMessage(sec, balanceSec, undefined, true);
+}
+
+/**
+ * صفحهٔ فایلِ اول: رایگان بالا، راهِ پولی زیرش، و **بی** خرید گروهی.
+ *
+ * صادر شده تا آزمون همین چیدمان را قفل کند.
+ */
+export function firstFileKeyboard(sessionId: string, enough: boolean): InlineKeyboard {
+  const kb = new InlineKeyboard().text(S.FILE_BTN.free, `ff:${sessionId}`).row();
+  return enough
+    ? kb.text(S.CONFIRM_BTN.go, `go:${sessionId}`).text(S.CONFIRM_BTN.cancel, `nogo:${sessionId}`)
+    : kb.text(S.FILE_BTN.pay, `pf:${sessionId}`).text(S.CONFIRM_BTN.topup, "topup");
 }
 
 /** وضعیتِ شریک‌شدنِ یک جلسه، به شکلی که صفحهٔ تأیید می‌خواهد. */
@@ -1960,6 +1988,14 @@ async function holdBeforeDownload(
     audio_message_id: spec.messageId,
     mode: "full",
   });
+
+  const offer = freeFileOffer(u.tg_id);
+  if (offer) {
+    await reply(ctx, S.firstFileMessage(sec, u.credit_sec, offer), {
+      reply_markup: firstFileKeyboard(sessionId, u.credit_sec >= sec),
+    });
+    return;
+  }
 
   if (u.credit_sec < sec) {
     await reply(
@@ -2088,6 +2124,20 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
    * منتظر مانده است. اینجا هنوز چیزی شروع نشده و پیام «شارژ کن» با دکمه‌اش
    * بی‌اصطکاک‌ترین جایی است که می‌شود گفت.
    */
+  // فایلِ اولِ کسی که رایگانش را نگرفته: پیشنهادِ رایگان به‌جای تأیید یا سکهٔ کم.
+  const offer = effectiveSec > 0 ? freeFileOffer(id) : null;
+  if (offer) {
+    updateSession(sessionId, {
+      status: u.credit_sec < effectiveSec ? "awaiting_credit" : "awaiting_confirm",
+      original_file: audioFile,
+      original_ms: effectiveSec * 1000,
+    });
+    await reply(ctx, S.firstFileMessage(effectiveSec, u.credit_sec, offer), {
+      reply_markup: firstFileKeyboard(sessionId, u.credit_sec >= effectiveSec),
+    });
+    return;
+  }
+
   if (effectiveSec > 0 && u.credit_sec < effectiveSec) {
     /**
      * **فایل دانلود شده و سرجایش است — پس این نباید بن‌بست باشد.**
@@ -2335,7 +2385,7 @@ handlers.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
  * هم دکمهٔ «ادامه بده» صدایش می‌زند و هم مسیر تأیید شارژ — تا کاربری که
  * شارژ کرد اصلاً لازم نباشد دکمه‌ای بزند.
  */
-async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
+async function resumeSession(ctx: Context, sessionId: string, opts: { free?: boolean } = {}): Promise<void> {
   const s = getSession(sessionId);
   const u = touchUser(ctx);
   if (!s || !u || s.tg_id !== u.tg_id) return;
@@ -2364,7 +2414,8 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
   }
 
   let durationSec = Math.max(0, Math.round(s.original_ms / 1000));
-  if (durationSec > 0 && u.credit_sec < durationSec) {
+  // رایگان هنوز واریز نشده — پس از دانلود و با مدتِ واقعی واریز می‌شود.
+  if (!opts.free && durationSec > 0 && u.credit_sec < durationSec) {
     await reply(ctx, lowBalanceText(durationSec, u.credit_sec), {
       reply_markup: lowBalanceKeyboard(sessionId),
     });
@@ -2419,7 +2470,8 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
         updateSession(sessionId, { original_ms: realSec * 1000 });
 
         // گران‌تر از آنچه قول داده بودیم؟ دوباره بپرس، نه اینکه بی‌خبر بگیری.
-        if (costCoins(realSec) > costCoins(durationSec) + 1) {
+        // با رایگان، واریز همین پایین با مدتِ واقعی است؛ دوباره‌پرسیدن لازم نیست.
+        if (!opts.free && costCoins(realSec) > costCoins(durationSec) + 1) {
           if (u.credit_sec < realSec) {
             updateSession(sessionId, { status: "awaiting_credit" });
             // «فرستنده» خودِ دانشجوست؛ عددِ اشتباه را سکو گفته بود نه او.
@@ -2463,6 +2515,39 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
     }
   }
 
+  /**
+   * «🎁 اولین صوت رایگان» — **اینجا** و نه سرِ دکمه.
+   *
+   * فقط حالا فایل روی دیسک است: هشِ محتوا (یک صوت، یک بار رایگان) و مدتِ
+   * واقعی (نه عددی که کلاینت به سکو گفته) هر دو همین‌جا درمی‌آیند. سکه
+   * به‌اندازهٔ فایل واریز می‌شود و بقیه همان مسیرِ همیشگی است.
+   *
+   * ردشده و سکه‌دار؟ صفحهٔ تأیید، نه شروعِ بی‌صدا: کسی که «رایگان» زده نباید
+   * بی آنکه بداند سکه بدهد.
+   */
+  if (opts.free) {
+    const claim = claimFreeFile({
+      tgId: u.tg_id,
+      sessionId,
+      fingerprint: await fingerprint(audioFile!),
+      durationSec,
+    });
+    await reply(ctx, claim.ok ? S.freeFileGrantedMessage(claim.grantedSec, claim.fallback) : S.FREE_FILE_REFUSAL[claim.reason]);
+    const now = getUser(u.tg_id)!;
+    if (durationSec > 0 && now.credit_sec < durationSec) {
+      updateSession(sessionId, { status: "awaiting_credit" });
+      await reply(ctx, S.lowBalanceMessage(durationSec, now.credit_sec, undefined, true), {
+        reply_markup: payFileKeyboard(sessionId),
+      });
+      return;
+    }
+    if (!claim.ok) {
+      updateSession(sessionId, { status: "awaiting_confirm" });
+      await reply(ctx, S.confirmCostMessage(durationSec, now.credit_sec), { reply_markup: confirmKeyboard(sessionId) });
+      return;
+    }
+  }
+
   updateSession(sessionId, { status: "queued", error: null });
   await startJob(ctx, {
     sessionId,
@@ -2491,6 +2576,59 @@ handlers.callbackQuery(/^go:([a-f0-9]+)$/, async (ctx) => {
   await ctx.answerCallbackQuery({ text: "شروع کردم…" });
   await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   await resumeSession(ctx, sessionId);
+});
+
+/**
+ * «🎁 اولین صوت رایگان».
+ *
+ * فقط روی فایلی که هنوز منتظرِ تأیید یا شارژ است؛ وگرنه زدنِ دوبارهٔ دکمه
+ * روی فایلی که کارش شروع شده، همان فایل را از نو راه می‌انداخت. دو بار زدن
+ * پشت‌سرهم را `claimFreeFile` می‌گیرد — دومی «قبلاً گرفتی» می‌شنود.
+ */
+handlers.callbackQuery(/^ff:([a-f0-9]+)$/, async (ctx) => {
+  const s = getSession(ctx.match![1]!);
+  if (!s || s.tg_id !== uid(ctx)) {
+    await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
+    return;
+  }
+  if (s.status !== "awaiting_confirm" && s.status !== "awaiting_credit") {
+    await ctx.answerCallbackQuery({ text: "کار این فایل قبلاً شروع شده." });
+    return;
+  }
+  await ctx.answerCallbackQuery({ text: "🎁 شروع کردم…" });
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+  await resumeSession(ctx, s.id, { free: true });
+});
+
+/**
+ * «💳 پرداخت همین فایل» — سفارشی به‌اندازهٔ کسریِ همین فایل.
+ *
+ * کسری در لحظهٔ زدن حساب می‌شود نه وقتِ ساختنِ دکمه: شاید از آن وقت شارژ کرده
+ * یا سکه‌ای برگشته. اگر دیگر کسری نیست، سفارشِ صفر تومانی ساخته نمی‌شود.
+ */
+handlers.callbackQuery(/^pf:([a-f0-9]+)$/, async (ctx) => {
+  const s = getSession(ctx.match![1]!);
+  const u = touchUser(ctx);
+  if (!s || !u || s.tg_id !== u.tg_id) {
+    await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
+    return;
+  }
+  const short = costCoins(Math.round(s.original_ms / 1000)) - balanceCoins(u.credit_sec);
+  if (short <= 0) {
+    await ctx.answerCallbackQuery({ text: `سکه‌هات کافیه؛ «${S.GROUP_BTN.resume}» رو بزن.`, show_alert: true });
+    return;
+  }
+  let out;
+  try {
+    out = await beginFileTopup(u.tg_id, short);
+  } catch (e) {
+    logger.error({ err: String(e) }, "file topup start failed");
+    await ctx.answerCallbackQuery();
+    await reply(ctx, "درگاه پرداخت الان جواب نمی‌ده 😕 چند دقیقهٔ دیگه دوباره امتحان کن.");
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  await reply(ctx, out.text, { reply_markup: out.keyboard });
 });
 
 /**

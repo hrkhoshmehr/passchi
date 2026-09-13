@@ -4,7 +4,7 @@ import { chunkMessage, escapeHtml } from "../util/text.js";
 import { fmtClockLink, fmtDuration, toFaDigits } from "../util/time.js";
 import {
   balanceCoins, coinsAsMinutesIfUseful, costCoins,
-  fmtBalance, fmtCoins, fmtCost, fmtToman, PACKAGES, RATE_LINE, shareBack, SHARE_TARGET_MIN,
+  fileTopup, fmtBalance, fmtCoins, fmtCost, fmtToman, PACKAGES, RATE_LINE, shareBack, SHARE_TARGET_MIN,
   type CoinPackage,
 } from "../billing/coins.js";
 import { BTN, sharePitch } from "./menu.js";
@@ -990,6 +990,8 @@ export function lowBalanceMessage(
   neededSec: number,
   balanceSec: number,
   topupLabel: string = CONFIRM_BTN.topup,
+  /** فقط برای فایلِ منتظر؛ سهمِ جزوهٔ هم‌کلاسی «پرداخت همین فایل» ندارد */
+  payFile = false,
 ): string {
   const short = Math.max(0, costCoins(neededSec) - balanceCoins(balanceSec));
   const pkg = coveringPackage(short);
@@ -999,6 +1001,7 @@ export function lowBalanceMessage(
     `این کار <b>${fmtCost(neededSec)}</b> می‌خواد و <b>${fmtBalance(balanceSec)}</b> داری؛ ` +
       `<b>${fmtCoins(short)}</b> کم داری.`,
     "",
+    ...(payFile ? [payFileLine(short), ""] : []),
     ...(pkg
       ? [
           `کوچیک‌ترین بسته‌ای که کافیه: <b>${fmtCoins(pkg.coins)}</b>، <b>${fmtToman(pkg.price)}</b>.`,
@@ -1007,6 +1010,76 @@ export function lowBalanceMessage(
       : [`با دکمهٔ «${topupLabel}» شارژ کن.`]),
   ].join("\n");
 }
+
+// ─── پرداخت همین فایل، و اولین صوتِ رایگان ───────────────────────────────────
+
+export const FILE_BTN = {
+  pay: "💳 پرداخت همین فایل",
+  free: "🎁 اولین صوت رایگان",
+} as const;
+
+/**
+ * خطِ «فقط همین فایل» زیرِ سکهٔ کم — مبلغِ دقیق، نه «از فلان تومان».
+ *
+ * اگر کفِ ۳۰ هزار تومانی بیش از کسری سکه بخرد، همین‌جا گفته می‌شود که اضافه
+ * در حساب می‌ماند؛ وگرنه «۳۰ هزار برای ۷ سکه» گران‌فروشی خوانده می‌شود.
+ */
+export function payFileLine(shortCoins: number): string {
+  const t = fileTopup(shortCoins);
+  const extra = t.coins - Math.ceil(shortCoins);
+  return (
+    `💳 <b>فقط همین فایل:</b> ${fmtToman(t.price)}` +
+    (extra > 0 ? `؛ ${fmtCoins(extra)} اضافه‌ش تو حسابت می‌مونه.` : ".")
+  );
+}
+
+/**
+ * صفحهٔ فایلِ اولِ کسی که رایگانش را هنوز نگرفته.
+ *
+ * رایگان **پیشنهاد** است نه پیش‌فرض: کسی که سکه دارد شاید بخواهد آن را برای
+ * کلاسِ بلندتری نگه دارد، پس راهِ پرداخت هم همان‌جا هست. خرید گروهی عمداً
+ * اینجا نیست — فایلِ اول رایگان است و «چند نفر می‌شید» فقط یک سؤالِ اضافه است.
+ */
+export function firstFileMessage(
+  neededSec: number,
+  balanceSec: number,
+  offer: { minutes: number },
+): string {
+  const freeSec = offer.minutes * 60;
+  const lines = [
+    "فایلت رسید ✅",
+    "",
+    `مدت: <b>${toFaDigits(fmtDuration(neededSec * 1000))}</b>`,
+    "",
+    `🎁 <b>اولین صوتت رایگانه</b>، تا ${toFaDigits(offer.minutes)} دقیقه. این هدیه برای هر حساب فقط یه باره.`,
+  ];
+  if (neededSec > freeSec) {
+    lines.push(
+      `این فایل بلندتره: ${toFaDigits(offer.minutes)} دقیقه‌ش رایگانه و برای بقیه‌ش ${fmtCost(neededSec - freeSec)} لازمه.`,
+    );
+  }
+  lines.push(
+    "",
+    balanceSec >= neededSec
+      ? `<i>می‌خوای رایگان رو برای یه کلاس دیگه نگه داری؟ با «${CONFIRM_BTN.go}» همین رو با سکه‌هات (${fmtCost(neededSec)}) بفرست.</i>`
+      : `<i>نمی‌خوای رایگان رو الان خرج کنی؟ «${FILE_BTN.pay}» یا «${CONFIRM_BTN.topup}» هم هست.</i>`,
+  );
+  return lines.join("\n");
+}
+
+export function freeFileGrantedMessage(grantedSec: number, fallback: boolean): string {
+  return (
+    `🎁 <b>${fmtCost(grantedSec)}</b> رایگان برای همین فایل به حسابت اومد.` +
+    (fallback ? "\n<i>سهمیهٔ رایگانِ این هفته پر شده بود، برای همین رایگانش کوتاه‌تره.</i>" : "")
+  );
+}
+
+export const FREE_FILE_REFUSAL: Record<"off" | "used" | "audio_used", string> = {
+  off: "هدیهٔ اولین صوت الان فعال نیست؛ این فایل با سکه‌ست.",
+  used: "اولین صوت رایگانت رو قبلاً گرفتی 🙂 این فایل با سکه‌ست.",
+  audio_used:
+    "همین صوت قبلاً یه بار رایگان پردازش شده. رایگان برای کلاسِ خودته، نه فایلی که دست‌به‌دست شده؛ با سکه می‌تونی بفرستیش.",
+};
 
 /**
  * پیشنهاد پس از اجرای رایگان.
@@ -1195,6 +1268,8 @@ export function lowBalanceGroupMessage(
     "سکه‌هات کم میاد 😅",
     "",
     `این فایل <b>${fmtCost(neededSec)}</b> می‌خواد و <b>${fmtBalance(balanceSec)}</b> داری.`,
+    "",
+    payFileLine(short),
     "",
   ];
   if (suggest) {

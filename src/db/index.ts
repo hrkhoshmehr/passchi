@@ -272,6 +272,20 @@ CREATE TABLE IF NOT EXISTS group_buy_seats (
   joined_at    TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (session_id, tg_id)
 );
+
+-- اولین صوتِ رایگان (billing/free-file.ts): یک سطر برای هر حساب، و هر محتوای
+-- صوت هم فقط یک بار. fingerprint همان هشِ کشِ رونویسی است. سکهٔ واریزی در
+-- credit_ledger با reason = free_file است؛ اینجا فقط دروازه و سقفِ هفتگی.
+CREATE TABLE IF NOT EXISTS free_files (
+  tg_id       INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
+  session_id  TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  granted_sec INTEGER NOT NULL,
+  fallback    INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_free_files_audio ON free_files(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_free_files_at ON free_files(created_at);
 `);
 
 

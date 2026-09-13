@@ -33,7 +33,7 @@ import { logger } from "../util/logger.js";
 import { escapeHtml } from "../util/text.js";
 import { isBale } from "./identity.js";
 import {
-  coinsToSec, findPackage, fmtBalance, fmtCoins, fmtToman, type CoinPackage,
+  coinsToSec, fileTopup, findPackage, fmtBalance, fmtCoins, fmtToman, type CoinPackage,
 } from "../billing/coins.js";
 import { grant } from "../billing/ledger.js";
 import { ZibalError, zibalConfigured, zibalRequest, zibalVerify } from "../billing/zibal.js";
@@ -79,7 +79,25 @@ export interface TopupStart {
 export async function beginTopup(tgId: number, packageId: string): Promise<TopupStart | null> {
   const p = findPackage(packageId);
   if (!p) return null;
+  return beginFor(tgId, p);
+}
 
+/**
+ * «پرداخت همین فایل» — همان دو مسیرِ درگاه و کارت، با سکه و مبلغی که از کسریِ
+ * همین فایل درمی‌آید نه از فهرستِ پکیج‌ها.
+ *
+ * سکه و مبلغ روی ردیفِ سفارش ذخیره می‌شوند و واریز از همان‌جاست (`creditTopup`)،
+ * پس `package_id = "file"` لازم نیست در `PACKAGES` باشد. بعد از واریز، همان
+ * «فایلی که فرستاده بودی هنوز اینجاست» دکمهٔ ادامه را می‌دهد.
+ */
+export async function beginFileTopup(tgId: number, shortCoins: number): Promise<TopupStart> {
+  const t = fileTopup(shortCoins);
+  return beginFor(tgId, { id: FILE_PACKAGE_ID, coins: t.coins, price: t.price, title: "پرداخت همین فایل", blurb: "" });
+}
+
+export const FILE_PACKAGE_ID = "file";
+
+async function beginFor(tgId: number, p: CoinPackage): Promise<TopupStart> {
   if (gatewayConfigured()) {
     try {
       return await beginGateway(tgId, p);
