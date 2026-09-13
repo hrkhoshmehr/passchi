@@ -202,7 +202,7 @@ export function supportKeyboard(platform: Platform = "telegram"): InlineKeyboard
 /**
  * دکمه‌ها با **عنوان** شروع می‌شوند، نه با عدد سکه.
  *
- * «یک جلسه — ۱۱۸ هزار» جوابِ «کدام را بخرم؟» است؛ «۱۰۰ سکه — ۱۱۸ هزار»
+ * «یک جلسه — ۱۳۰ هزار» جوابِ «کدام را بخرم؟» است؛ «۱۰۰ سکه — ۱۳۰ هزار»
  * کاربر را وامی‌دارد اول حساب کند صد سکه چند کلاس می‌شود.
  */
 export function packagesKeyboard(): InlineKeyboard {

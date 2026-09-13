@@ -166,13 +166,26 @@ export interface SettleResult {
  * تنها راهِ واریز سکهٔ درگاهی.
  *
  * `topup` را با شناسهٔ سفارش یا شناسهٔ پیگیری زیبال پیدا می‌کند، از درگاه
- * می‌پرسد، و اگر معتبر بود یک بار واریز می‌کند. با `closeIfUnpaid` سفارشِ
- * پرداخت‌نشده بسته می‌شود — برای بازگشت با `success=0` که یعنی کاربر در
- * درگاه لغو کرده؛ از ربات بسته نمی‌شود چون شاید هنوز در حال پرداخت باشد.
+ * می‌پرسد، و اگر معتبر بود یک بار واریز می‌کند.
+ *
+ * **این تابع هیچ‌وقت سفارش را نمی‌بندد**، و این عمدی است. پیش‌تر گزینهٔ
+ * `closeIfUnpaid` داشت که بازگشت با `success=0` صدایش می‌زد. ولی آدرس بازگشت
+ * بی‌احراز است و `trackId` عددی پشت‌سرهم: هرکسی با شمردنِ trackIdها
+ * می‌توانست سفارشِ بازِ یک غریبه را، پیش از آنکه پرداخت کند، ببندد. آن غریبه
+ * بعد پرداخت می‌کرد، پولش می‌رفت، و نه بازگشت و نه «بررسی پرداخت» سکه‌ای
+ * نمی‌دادند — چون هر دو روی سفارشِ بسته متوقف می‌شوند.
+ *
+ * تسویه ولی بی‌خطر است که بی‌احراز بماند: `verify` مدرک است و
+ * `claimTopupPaid` واریزِ دوباره را می‌گیرد؛ بدترین کارِ یک غریبه این است که
+ * سکهٔ صاحبِ سفارش را زودتر به حساب خودِ صاحبش بریزد.
+ *
+ * بستنِ سفارشِ پرداخت‌نشده فقط از مسیر احرازشده است (`cancelTopup`، دکمهٔ
+ * «انصراف» در ربات). سفارشی که کسی نبندد در `awaiting_payment` می‌ماند؛ این
+ * بی‌ضرر است چون نه به رسید کارت‌به‌کارت می‌چسبد (`openTopup` فقط
+ * `awaiting_receipt` را می‌بیند) و نه جایی به‌عنوان بدهی شمرده می‌شود.
  */
 export async function settleTopup(
   ref: { topupId?: string; trackId?: string },
-  opt: { closeIfUnpaid?: boolean } = {},
 ): Promise<SettleResult> {
   const t = ref.topupId ? getTopup(ref.topupId) : ref.trackId ? getTopupByTrackId(ref.trackId) : null;
   if (!t || !t.track_id) return { outcome: "unknown", topup: null, detail: "این سفارش پیدا نشد." };
@@ -195,7 +208,6 @@ export async function settleTopup(
   }
 
   if (!v.paid) {
-    if (opt.closeIfUnpaid) setTopupStatus(t.id, "rejected");
     logger.info({ topup: t.id, result: v.result, status: v.status }, "zibal: unpaid");
     return { outcome: "unpaid", topup: t, detail: `پرداخت انجام نشد (${v.message}).` };
   }

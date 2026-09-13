@@ -13,7 +13,8 @@
  * دو سناریوی سوءاستفاده جدا مدل می‌شوند، چون دفاعشان فرق می‌کند.
  */
 import {
-  COST_PER_COIN_TOMAN, PACKAGES, REFUND_CAP_PCT, SHARE_TARGET, USD_TOMAN, costCoins, shareBack,
+  COST_PER_COIN_TOMAN, PACKAGES, REFUND_CAP_PCT, SHARE_TARGET, USD_TOMAN, costCoins, gatewayFeeToman,
+  packageMargin, shareBack,
 } from "../src/billing/coins.ts";
 import { config } from "../src/config.ts";
 
@@ -52,7 +53,8 @@ function simulate(pkg, freeRunsPerCycle) {
     coins -= K - refundPerCycle;
     cost += sessionCost + freeRunsPerCycle * freeRunCost;
   }
-  return { cycles, cost, profit: pkg.price - cost };
+  // کارمزد درگاه یک بار، روی خودِ خرید — نه روی هر چرخه.
+  return { cycles, cost, profit: pkg.price - gatewayFeeToman(pkg.price) - cost };
 }
 
 function report(title, freeRuns) {
@@ -97,9 +99,9 @@ for (const p of PACKAGES) {
   );
 }
 
-console.log("\nنرخ بازگشتِ سربه‌سر برای هر پکیج (بدون احتساب لایهٔ رایگان)");
+console.log("\nنرخ بازگشتِ سربه‌سر برای هر پکیج، پس از کارمزد درگاه (بدون احتساب لایهٔ رایگان)");
 for (const p of PACKAGES) {
-  const m = p.price / p.coins / COST_PER_COIN_TOMAN;
+  const m = packageMargin(p);
   console.log(`  پکیج ${String(p.coins).padStart(5)} · حاشیه ×${m.toFixed(2)} ⇒ سقف بازگشت ${Math.round((1 - 1 / m) * 100)}٪`);
 }
 
