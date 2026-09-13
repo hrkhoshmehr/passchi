@@ -9,7 +9,7 @@
  * یا غلط است.
  *
  * حالا آپلود فقط فایل را نگه می‌دارد و مدتِ اندازه‌گیری‌شده با ffmpeg را
- * برمی‌گرداند؛ کسر سکه فقط در `POST /api/sessions/:id/confirm` اتفاق می‌افتد.
+ * برمی‌گرداند؛ کسر پول فقط در `POST /api/sessions/:id/confirm` اتفاق می‌افتد.
  *
  * و وضعیت در **ربات** دنبال می‌شود نه در مینی‌اپ: کاربر صفحه را می‌بندد.
  *
@@ -38,7 +38,7 @@ const uploadFn = server.slice(
 check("تابع confirmSession وجود دارد", server.includes("async function confirmSession"));
 check("آپلود دیگر startJob نمی‌زند", !uploadFn.includes("startJob("));
 check("آپلود مدت را خودش اندازه می‌گیرد", /await probe\(srcFile\)/.test(server));
-check("آپلود قیمت را برمی‌گرداند", /costCoins: costCoins\(sec\)/.test(uploadFn));
+check("آپلود قیمت را برمی‌گرداند", /cost: priceOf\(sec\)/.test(uploadFn));
 check("فایلِ بی‌مدت رد می‌شود", /if \(sec <= 0\)/.test(uploadFn));
 
 const confirmFn = server.slice(
@@ -119,7 +119,7 @@ check("۴۰۱ هم از refuse رد می‌شود", /refuse\(req, res, 401/.test
 
 // و راه‌حل اصلی: پیش از فرستادن بایت‌ها بپرس
 check("مسیر precheck هست", /case "POST \/api\/sessions\/precheck"/.test(server));
-check("precheck اعتبار را می‌سنجد", /sec > 0 && u\.credit_sec < sec/.test(server));
+check("precheck اعتبار را می‌سنجد", /sec > 0 && u\.credit_toman < priceOf\(sec\)/.test(server));
 check("precheck حجم را هم می‌سنجد", /sizeBytes > MAX_UPLOAD_BYTES/.test(server));
 check("اپ پیش از آپلود precheck می‌زند", /api\.call\("\/api\/sessions\/precheck"/.test(js));
 /**
@@ -284,7 +284,7 @@ check("دکمه‌های ربات فقط روی دسکتاپ پنهان می‌�
   const resume = bot.slice(bot.indexOf("async function resumeSession"), bot.indexOf("handlers.callbackQuery(/^resume:"));
   check("پس از دانلود، مدت با probe راستی‌آزمایی می‌شود", /await probe\(audioFile\)/.test(resume));
   check("مبنای رزرو، عددِ خودمان می‌شود", /durationSec = realSec/.test(resume));
-  check("گران‌تر از قیمتِ اعلام‌شده دوباره پرسیده می‌شود", /costCoins\(realSec\) > costCoins\(quotedSec\)/.test(resume));
+  check("گران‌تر از قیمتِ اعلام‌شده دوباره پرسیده می‌شود", /priceOf\(realSec\) > priceOf\(quotedSec\)/.test(resume));
 
   // ── سقفِ فایل‌های تصمیم‌نگرفته ────────────────────────────────────────────
   check("سقفِ جلسه‌های معلق هست", /const MAX_PENDING_SESSIONS = \d+/.test(bot));

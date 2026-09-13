@@ -17,9 +17,9 @@ CREATE TABLE IF NOT EXISTS users (
   name         TEXT,
   username     TEXT,
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-  -- اعتبار بر حسب ثانیهٔ صوت؛ واحد طبیعی چون هزینه با مدت می‌آید نه با حجم
-  credit_sec   INTEGER NOT NULL DEFAULT 0,
-  total_used_sec INTEGER NOT NULL DEFAULT 0
+  -- اعتبار به تومان (تا ۲۰۲۶-۰۹-۱۴ ثانیهٔ صوت؛ مهاجرت پایین‌تر)
+  credit_toman INTEGER NOT NULL DEFAULT 0,
+  total_spent_toman INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS user_flags (
@@ -120,7 +120,7 @@ db.exec(`
 CREATE TABLE IF NOT EXISTS credit_ledger (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   tg_id         INTEGER NOT NULL,
-  delta_sec     INTEGER NOT NULL,
+  delta_toman   INTEGER NOT NULL,
   balance_after INTEGER NOT NULL,
   reason        TEXT NOT NULL,
   session_id    TEXT,
@@ -132,7 +132,9 @@ CREATE INDEX IF NOT EXISTS idx_ledger_user ON credit_ledger(tg_id, id DESC);
 CREATE TABLE IF NOT EXISTS session_members (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   tg_id      INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
-  paid_sec   INTEGER NOT NULL DEFAULT 0,
+  paid_toman INTEGER NOT NULL DEFAULT 0,
+  -- بخشی از سهم که با اعتبارِ هدیه داده شد؛ بودجهٔ هفتگی روی جمعِ همین است
+  gift_toman INTEGER NOT NULL DEFAULT 0,
   role       TEXT NOT NULL,
   joined_at  TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (session_id, tg_id)
@@ -143,7 +145,8 @@ CREATE TABLE IF NOT EXISTS topups (
   id            TEXT PRIMARY KEY,
   tg_id         INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
   package_id    TEXT NOT NULL,
-  coins         INTEGER NOT NULL,
+  -- اعتباری که با واریز می‌آید (قیمت به‌علاوهٔ هدیهٔ پکیج)
+  credit_toman  INTEGER NOT NULL,
   price_toman   INTEGER NOT NULL,
   status        TEXT NOT NULL,            -- awaiting_receipt|pending|approved|rejected
   receipt_file_id TEXT,
@@ -178,7 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_topups_track ON topups(track_id);
 -- هر دو را پوشش می‌دهد: هدیهٔ شخصی یعنی max_uses = 1.
 CREATE TABLE IF NOT EXISTS gifts (
   code        TEXT PRIMARY KEY,
-  coins       INTEGER NOT NULL,
+  toman       INTEGER NOT NULL,
   max_uses    INTEGER NOT NULL DEFAULT 1,
   note        TEXT,
   created_by  INTEGER NOT NULL,
@@ -194,7 +197,7 @@ CREATE TABLE IF NOT EXISTS gifts (
 CREATE TABLE IF NOT EXISTS gift_claims (
   code       TEXT NOT NULL REFERENCES gifts(code) ON DELETE CASCADE,
   tg_id      INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
-  coins      INTEGER NOT NULL,
+  toman      INTEGER NOT NULL,
   claimed_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (code, tg_id)
 );
@@ -280,13 +283,63 @@ CREATE TABLE IF NOT EXISTS free_files (
   tg_id       INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
   session_id  TEXT NOT NULL,
   fingerprint TEXT NOT NULL,
-  granted_sec INTEGER NOT NULL,
+  granted_toman INTEGER NOT NULL,
   fallback    INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_free_files_audio ON free_files(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_free_files_at ON free_files(created_at);
 `);
+
+/**
+ * **مهاجرتِ یک‌بارهٔ واحدِ پول: ثانیه و سکه ← تومان (۲۰۲۶-۰۹-۱۴).**
+ *
+ * ستون‌ها تغییرِ نام می‌دهند و مقدارها در **همان** تراکنش ضرب می‌شوند؛ نشانهٔ
+ * «هنوز مهاجرت نشده» خودِ ستونِ قدیمیِ `users.credit_sec` است، پس دوبار اجرا
+ * نمی‌شود. نرخ همان نرخِ روزِ تبدیل است: هر دقیقه ۱٬۵۰۰ تومان، یعنی هر ثانیه ۲۵
+ * و هر سکه (یک دقیقه) ۱٬۵۰۰.
+ *
+ * `balance_after` هم ضرب می‌شود تا تاریخچهٔ دفتر با موجودیِ تازه بخواند. جدول‌های
+ * بازنشسته (`group_buys`، `coin_transfers`) دست نمی‌خورند؛ فقط خوانده می‌شوند.
+ */
+function columnsOf(table: string): string[] {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as Array<{ name: string }>).map((c) => c.name);
+}
+if (columnsOf("users").includes("credit_sec")) {
+  const PER_SEC = 25;
+  const PER_COIN = 1_500;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(`
+      ALTER TABLE users RENAME COLUMN credit_sec TO credit_toman;
+      ALTER TABLE users RENAME COLUMN total_used_sec TO total_spent_toman;
+      UPDATE users SET credit_toman = credit_toman * ${PER_SEC}, total_spent_toman = total_spent_toman * ${PER_SEC};
+      ALTER TABLE credit_ledger RENAME COLUMN delta_sec TO delta_toman;
+      UPDATE credit_ledger SET delta_toman = delta_toman * ${PER_SEC}, balance_after = balance_after * ${PER_SEC};
+      ALTER TABLE session_members RENAME COLUMN paid_sec TO paid_toman;
+      UPDATE session_members SET paid_toman = paid_toman * ${PER_SEC};
+      ALTER TABLE topups RENAME COLUMN coins TO credit_toman;
+      UPDATE topups SET credit_toman = credit_toman * ${PER_COIN};
+      ALTER TABLE gifts RENAME COLUMN coins TO toman;
+      UPDATE gifts SET toman = toman * ${PER_COIN};
+      ALTER TABLE gift_claims RENAME COLUMN coins TO toman;
+      UPDATE gift_claims SET toman = toman * ${PER_COIN};
+    `);
+    if (columnsOf("free_files").includes("granted_sec")) {
+      db.exec(`
+        ALTER TABLE free_files RENAME COLUMN granted_sec TO granted_toman;
+        UPDATE free_files SET granted_toman = granted_toman * ${PER_SEC};
+      `);
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
+if (!columnsOf("session_members").includes("gift_toman")) {
+  db.exec("ALTER TABLE session_members ADD COLUMN gift_toman INTEGER NOT NULL DEFAULT 0");
+}
 
 
 /**
@@ -336,8 +389,8 @@ export interface UserRow {
   tg_id: number;
   name: string | null;
   username: string | null;
-  credit_sec: number;
-  total_used_sec: number;
+  credit_toman: number;
+  total_spent_toman: number;
 }
 
 export function upsertUser(tgId: number, name: string | null, username: string | null): UserRow {
@@ -369,16 +422,6 @@ export function markFreeRunUsed(tgId: number): void {
     `INSERT INTO user_flags (tg_id, free_used, used_at) VALUES (?, 1, datetime('now'))
      ON CONFLICT(tg_id) DO UPDATE SET free_used = 1, used_at = datetime('now')`,
   ).run(tgId);
-}
-
-export function addCredit(tgId: number, seconds: number): void {
-  db.prepare(`UPDATE users SET credit_sec = credit_sec + ? WHERE tg_id = ?`).run(seconds, tgId);
-}
-
-export function consumeCredit(tgId: number, seconds: number): void {
-  db.prepare(
-    `UPDATE users SET credit_sec = MAX(0, credit_sec - ?), total_used_sec = total_used_sec + ? WHERE tg_id = ?`,
-  ).run(seconds, seconds, tgId);
 }
 
 // ─── courses ─────────────────────────────────────────────────────────────────
@@ -557,7 +600,7 @@ export function takePendingJoin(tgId: number, maxAgeDays = 7): string | null {
  */
 export function unreservedSql(alias: string): string {
   return (
-    `COALESCE((SELECT SUM(x.delta_sec) FROM credit_ledger x WHERE x.session_id = ${alias}.id ` +
+    `COALESCE((SELECT SUM(x.delta_toman) FROM credit_ledger x WHERE x.session_id = ${alias}.id ` +
     `AND x.reason IN ('reserve', 'refund')), 0) >= 0 ` +
     `AND NOT EXISTS (SELECT 1 FROM credit_ledger x WHERE x.session_id = ${alias}.id AND x.reason = 'commit')`
   );
@@ -792,7 +835,7 @@ export interface TopupRow {
   id: string;
   tg_id: number;
   package_id: string;
-  coins: number;
+  credit_toman: number;
   price_toman: number;
   status: TopupStatus;
   receipt_file_id: string | null;
@@ -807,14 +850,14 @@ export function createTopup(
   id: string,
   tgId: number,
   packageId: string,
-  coins: number,
+  creditToman: number,
   priceToman: number,
   status: "awaiting_receipt" | "awaiting_payment" = "awaiting_receipt",
 ): TopupRow {
   db.prepare(
-    `INSERT INTO topups (id, tg_id, package_id, coins, price_toman, status)
+    `INSERT INTO topups (id, tg_id, package_id, credit_toman, price_toman, status)
      VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(id, tgId, packageId, coins, priceToman, status);
+  ).run(id, tgId, packageId, creditToman, priceToman, status);
   return getTopup(id)!;
 }
 
@@ -903,7 +946,7 @@ export function pendingTopups(limit = 20): TopupRow[] {
 
 export interface GiftRow {
   code: string;
-  coins: number;
+  toman: number;
   max_uses: number;
   note: string | null;
   created_by: number;
@@ -914,16 +957,16 @@ export interface GiftRow {
 
 export function createGift(opt: {
   code: string;
-  coins: number;
+  toman: number;
   maxUses: number;
   note?: string | null;
   createdBy: number;
   expiresAt?: string | null;
 }): GiftRow {
   db.prepare(
-    `INSERT INTO gifts (code, coins, max_uses, note, created_by, expires_at)
+    `INSERT INTO gifts (code, toman, max_uses, note, created_by, expires_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(opt.code, opt.coins, opt.maxUses, opt.note ?? null, opt.createdBy, opt.expiresAt ?? null);
+  ).run(opt.code, opt.toman, opt.maxUses, opt.note ?? null, opt.createdBy, opt.expiresAt ?? null);
   return getGift(opt.code)!;
 }
 
@@ -961,7 +1004,7 @@ export function revokeGift(code: string): boolean {
  *
  * `false` یعنی این کد برای این کاربر مصرف نشد؛ صدازننده نباید سکه واریز کند.
  */
-export function claimGift(code: string, tgId: number, coins: number): boolean {
+export function claimGift(code: string, tgId: number, toman: number): boolean {
   db.prepare("BEGIN IMMEDIATE").run();
   try {
     const g = db.prepare(`SELECT * FROM gifts WHERE code = ?`).get(code) as unknown as
@@ -984,7 +1027,7 @@ export function claimGift(code: string, tgId: number, coins: number): boolean {
       db.prepare("ROLLBACK").run();
       return false;
     }
-    db.prepare(`INSERT INTO gift_claims (code, tg_id, coins) VALUES (?, ?, ?)`).run(code, tgId, coins);
+    db.prepare(`INSERT INTO gift_claims (code, tg_id, toman) VALUES (?, ?, ?)`).run(code, tgId, toman);
     db.prepare("COMMIT").run();
     return true;
   } catch {

@@ -7,14 +7,15 @@
  *
  * قیمت زندهٔ OpenRouter را می‌گیرد، هزینهٔ هر ساعت را با آن دوباره حساب
  * می‌کند، و می‌گوید حاشیهٔ هر پکیج کجا می‌رود. با `--notify` نتیجه را در
- * صورت افت حاشیه برای ادمین تلگرام هم می‌فرستد.
+ * صورت افت حاشیه برای ادمین تلگرام هم می‌فرستد. روی سرور هر روز با cron اجرا
+ * می‌شود.
  *
- * اجرا: node scripts/price-watch.mjs [--notify]
+ * اجرا: node --import tsx scripts/price-watch.mjs [--notify]
  */
 import {
-  COINS_PER_MINUTE, COST_PER_COIN_TOMAN, LLM_COST_PER_HOUR_USD, MIN_MARGIN, MODEL_PRICE_BASELINE, PACKAGES,
-  STT_COST_PER_HOUR_USD, USD_TOMAN, gatewayFeeToman, packageMargin,
-} from "../src/billing/coins.ts";
+  COST_PER_MINUTE_TOMAN, LLM_COST_PER_HOUR_USD, MIN_MARGIN, MODEL_PRICE_BASELINE, PACKAGES,
+  STT_COST_PER_HOUR_USD, TOMAN_PER_MINUTE, USD_TOMAN, gatewayFeeToman, packageMargin,
+} from "../src/billing/money.ts";
 import { config } from "../src/config.ts";
 
 const fa = (n) => Math.round(n).toLocaleString("fa-IR");
@@ -29,23 +30,12 @@ if (!res.ok) {
 }
 const { data } = await res.json();
 
-/**
- * نسبت گران‌شدن، محافظه‌کارانه: بیشینهٔ نسبتِ ورودی و خروجی.
- *
- * نسبت واقعی به ترکیب توکن‌های ما بستگی دارد، ولی گرفتنِ بدترینِ دو نسبت،
- * ما را از سمت امن خطا نگه می‌دارد.
- */
+/** نسبت گران‌شدن، محافظه‌کارانه: بیشینهٔ نسبتِ ورودی و خروجی. */
 function ratioOf(m) {
   const inp = Number(m.pricing?.prompt ?? 0) * 1e6;
   const out = Number(m.pricing?.completion ?? 0) * 1e6;
-  return {
-    inp,
-    out,
-    ratio: Math.max(inp / MODEL_PRICE_BASELINE.in, out / MODEL_PRICE_BASELINE.out),
-  };
+  return { inp, out, ratio: Math.max(inp / MODEL_PRICE_BASELINE.in, out / MODEL_PRICE_BASELINE.out) };
 }
-
-const COINS_PER_HOUR = 60 * COINS_PER_MINUTE;
 
 const primaryId = models[0];
 const primary = data.find((m) => m.id === primaryId);
@@ -57,36 +47,31 @@ if (!primary) {
 const { inp, out, ratio } = ratioOf(primary);
 const llmNow = LLM_COST_PER_HOUR_USD * ratio;
 const hourNow = STT_COST_PER_HOUR_USD + llmNow;
-// سومین جای همان باگ: تقسیم بر هفت از دورانِ «هفت سکه در هر دقیقه» مانده
-// بود و هزینهٔ هر سکه را یک‌هفتم نشان می‌داد ⇒ حاشیهٔ ×۱۱٫۸ به‌جای ×۲٫۴.
-const coinCostNow = (hourNow / COINS_PER_HOUR) * USD_TOMAN;
+const minuteCostNow = (hourNow / 60) * USD_TOMAN;
 
 console.log(`مدل اصلی: ${primaryId}`);
 console.log(`  قیمت پایه: ورودی ${MODEL_PRICE_BASELINE.in} · خروجی ${MODEL_PRICE_BASELINE.out}`);
 console.log(`  قیمت امروز: ورودی ${inp.toFixed(3)} · خروجی ${out.toFixed(3)} ⇒ ضریب ×${ratio.toFixed(2)}`);
 console.log(`  هزینهٔ هر ساعت: $${hourNow.toFixed(3)} (پایه $${(STT_COST_PER_HOUR_USD + LLM_COST_PER_HOUR_USD).toFixed(3)})`);
-console.log(`  هزینهٔ هر سکه: ${coinCostNow.toFixed(1)} تومان (پایه ${COST_PER_COIN_TOMAN.toFixed(1)})\n`);
+console.log(`  هزینهٔ هر دقیقه: ${minuteCostNow.toFixed(1)} تومان (پایه ${COST_PER_MINUTE_TOMAN.toFixed(1)})\n`);
 
 let worst = Infinity;
 for (const p of PACKAGES) {
-  const margin = packageMargin(p, coinCostNow);
+  const margin = packageMargin(p, minuteCostNow);
   worst = Math.min(worst, margin);
-  console.log(`  پکیج ${String(p.coins).padStart(5)} · حاشیه ×${margin.toFixed(2)}${margin < MIN_MARGIN ? "  ⚠️" : ""}`);
+  console.log(`  پکیج ${fa(p.price).padStart(9)} تومان · حاشیه ×${margin.toFixed(2)}${margin < MIN_MARGIN ? "  ⚠️" : ""}`);
 }
 
 /**
- * مدل چند برابر گران‌تر شود تا حاشیه به کف برسد.
- *
- * «بدترین پکیج» با درآمدِ **خالص** هر سکه سنجیده می‌شود، نه مبلغ برچسب:
- * کارمزد درگاه روی پکیج‌ها یکسان نیست و می‌تواند ترتیبشان را عوض کند.
+ * مدل چند برابر گران‌تر شود تا حاشیه به کف برسد — با درآمدِ **خالصِ** هر دقیقه
+ * (پس از کارمزد و با احتسابِ هدیهٔ پکیج)، نه مبلغ برچسب.
  */
-const netPerCoin = (p) => (p.price - gatewayFeeToman(p.price)) / p.coins;
-const worstPkg = PACKAGES.reduce((a, b) => (netPerCoin(a) < netPerCoin(b) ? a : b));
-const maxCoinCost = netPerCoin(worstPkg) / MIN_MARGIN;
-const maxHour = (maxCoinCost / USD_TOMAN) * COINS_PER_HOUR;
+const netPerMinute = (p) => (p.price - gatewayFeeToman(p.price)) / (p.credit / TOMAN_PER_MINUTE);
+const worstPkg = PACKAGES.reduce((a, b) => (netPerMinute(a) < netPerMinute(b) ? a : b));
+const maxMinuteCost = netPerMinute(worstPkg) / MIN_MARGIN;
+const maxHour = (maxMinuteCost / USD_TOMAN) * 60;
 const headroom = (maxHour - STT_COST_PER_HOUR_USD) / LLM_COST_PER_HOUR_USD;
-
-const breakEvenHour = (netPerCoin(worstPkg) / USD_TOMAN) * COINS_PER_HOUR;
+const breakEvenHour = (netPerMinute(worstPkg) / USD_TOMAN) * 60;
 const breakEven = (breakEvenHour - STT_COST_PER_HOUR_USD) / LLM_COST_PER_HOUR_USD;
 
 console.log(`\nتا کف حاشیهٔ ×${MIN_MARGIN}، قیمت مدل می‌تواند تا ×${headroom.toFixed(1)} گران شود.`);
@@ -109,9 +94,9 @@ if (!ok && process.argv.includes("--notify") && config.BOT_TOKEN && config.ADMIN
   const text =
     `⚠️ <b>هشدار قیمت مدل</b>\n\n` +
     `<code>${primaryId}</code> حالا ×${ratio.toFixed(2)} قیمت پایه است.\n` +
-    `هزینهٔ هر ساعت صوت: $${hourNow.toFixed(3)} · هر سکه ${fa(coinCostNow)} تومان\n` +
+    `هزینهٔ هر ساعت صوت: $${hourNow.toFixed(3)} · هر دقیقه ${fa(minuteCostNow)} تومان\n` +
     `کمترین حاشیه: ×${worst.toFixed(2)} (کف ×${MIN_MARGIN})\n\n` +
-    `یا مدل را عوض کن، یا <code>PACKAGES</code> را.`;
+    `یا مدل را عوض کن، یا <code>PACKAGES</code> و <code>TOMAN_PER_MINUTE</code> را.`;
   for (const admin of config.ADMIN_IDS) {
     await fetch(`https://api.telegram.org/bot${config.BOT_TOKEN}/sendMessage`, {
       method: "POST",

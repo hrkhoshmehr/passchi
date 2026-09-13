@@ -269,7 +269,7 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
   <header class="top">
     <div class="logo-mark">📓</div>
     <h1>پاسچی</h1>
-    <button class="balance hidden" id="balance" type="button">🪙 <span class="num" id="coins">۰</span></button>
+    <button class="balance hidden" id="balance" type="button">💳 <span class="num" id="coins">۰</span></button>
   </header>
 
   <!-- ─── ورود ─────────────────────────────────────────────────────────── -->
@@ -450,30 +450,24 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
         گرفته و دلیلی برای زدنِ دکمه ندارد؛ اینجا اما دارد به هزینه نگاه
         می‌کند و «نصفش برمی‌گرده» جوابِ همان چیزی است که در ذهنش می‌گذرد.
       -->
+      <!-- فقط وقتی موجودی کافی است و تعدادِ معناداری هست (app.js: `shareCountsFor`) -->
       <label
+        id="confirm-share-row"
         for="confirm-share"
+        class="hidden"
         style="display:flex;align-items:center;gap:9px;margin-top:16px;text-align:right;cursor:pointer"
       >
         <input type="checkbox" id="confirm-share" style="width:18px;height:18px;flex:none" />
-        <span style="font-size:14px">👥 با بچه‌های کلاس شریک می‌شم</span>
+        <span style="font-size:14px">👥 خرید اشتراکی — تو فقط سهم خودت رو می‌دی</span>
       </label>
       <div id="confirm-share-box" class="hidden" style="margin-top:10px;text-align:right">
-        <label class="dim" for="confirm-share-n" style="font-size:13px">فکر می‌کنی چند نفر از بچه‌ها جزوه رو می‌گیرن؟</label>
+        <label class="dim" for="confirm-share-n" style="font-size:13px">لینک رو برای چند نفر می‌فرستی، با خودت؟</label>
+        <!-- گزینه‌ها از app.js، با سهمِ هر تعداد روی خودِ گزینه -->
         <select id="confirm-share-n" style="width:100%;padding:13px 15px;font:inherit;font-size:15px;
                 background:var(--surface);color:var(--text);border:1px solid var(--border-strong);
                 border-radius:var(--radius);margin-top:6px">
-          <option value="5">۵ نفر</option>
-          <option value="10" selected>۱۰ نفر</option>
-          <option value="20">۲۰ نفر</option>
-          <option value="30">۳۰ نفر</option>
         </select>
-        <!--
-          «نفری n سکه» از `app.js` پر می‌شود (همان فرمولِ `shareBack`)؛ اگر
-          هزینه معلوم نباشد، جمله بی‌عدد می‌ماند نه با عددِ ساختگی.
-        -->
-        <p class="dim" id="confirm-share-how" style="margin-top:6px;font-size:12.5px">
-          هر کی با لینک جزوه رو بگیره یه سهم کوچیک می‌ده که میاد تو حساب تو، تا نصف هزینه. بعدش برای بقیه مجانیه.
-        </p>
+        <p class="dim" id="confirm-share-how" style="margin-top:6px;font-size:12.5px"></p>
         <p class="dim" style="margin-top:4px;font-size:12.5px">
           لینکش رو توی چت ربات برات می‌فرستم که بذاری تو گروه کلاس.
         </p>
@@ -551,7 +545,7 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
 <nav class="tabs hidden" id="tabs">
   <div class="tabs-in">
     <button class="tab on" data-go="send" type="button"><span>🎧</span>آپلود صوت</button>
-    <button class="tab" data-go="acct" type="button"><span>🪙</span>حساب</button>
+    <button class="tab" data-go="acct" type="button"><span>💳</span>حساب</button>
   </div>
 </nav>
 

@@ -14,8 +14,8 @@ const { htmlToPlain } = await import("../src/util/text.ts");
 const { WELCOME, HOW_IT_WORKS, packagesMessage } = await import("../src/bot/menu.ts");
 const { HELP, PRIVACY, accountMessage, lowBalanceMessage, upsellMessage, settlementMessage } =
   await import("../src/bot/strings.ts");
-const { claimedMessage, refusalMessage, DEFAULT_GIFT_COINS } = await import("../src/bot/gift.ts");
-const { coinsToSec } = await import("../src/billing/coins.ts");
+const { claimedMessage, refusalMessage, DEFAULT_GIFT_TOMAN } = await import("../src/bot/gift.ts");
+const { priceOf } = await import("../src/billing/money.ts");
 
 let bad = 0;
 function eq(label, actual, expected) {
@@ -48,11 +48,13 @@ const screens = {
   HELP,
   PRIVACY,
   packages: packagesMessage(),
-  account: accountMessage({ creditSec: coinsToSec(20), usedSec: 0, refundedSec: 0, sessionCount: 0 }),
-  lowBalance: lowBalanceMessage(90 * 60, coinsToSec(20)),
+  account: accountMessage({ credit: 20_000, spent: 45_000, refunded: 13_500, sessionCount: 2 }),
+  lowBalance: lowBalanceMessage(priceOf(90 * 60), 20_000),
+  lowBalancePayFile: lowBalanceMessage(priceOf(90 * 60), 20_000, true),
   upsell: upsellMessage(90 * 60),
-  settlement: settlementMessage(90 * 60, coinsToSec(30)),
-  gift: claimedMessage(DEFAULT_GIFT_COINS, coinsToSec(DEFAULT_GIFT_COINS)),
+  settlement: settlementMessage(priceOf(90 * 60), 30_000),
+  settlementShared: settlementMessage(priceOf(90 * 60), 30_000, true, { people: 10 }),
+  gift: claimedMessage(DEFAULT_GIFT_TOMAN, DEFAULT_GIFT_TOMAN),
   refusal: refusalMessage("already"),
 };
 

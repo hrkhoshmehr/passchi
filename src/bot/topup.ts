@@ -33,8 +33,8 @@ import { logger } from "../util/logger.js";
 import { escapeHtml } from "../util/text.js";
 import { isBale } from "./identity.js";
 import {
-  coinsToSec, fileTopup, findPackage, fmtBalance, fmtCoins, fmtToman, type CoinPackage,
-} from "../billing/coins.js";
+  fileTopup, findPackage, fmtToman, priceOf, type CreditPackage,
+} from "../billing/money.js";
 import { grant } from "../billing/ledger.js";
 import { ZibalError, zibalConfigured, zibalRequest, zibalVerify } from "../billing/zibal.js";
 import {
@@ -88,14 +88,14 @@ export async function beginTopup(tgId: number, packageId: string): Promise<Topup
  * پس `package_id = "file"` لازم نیست در `PACKAGES` باشد. بعد از واریز، همان
  * «فایلی که فرستاده بودی هنوز اینجاست» دکمهٔ ادامه را می‌دهد.
  */
-export async function beginFileTopup(tgId: number, shortCoins: number): Promise<TopupStart> {
-  const t = fileTopup(shortCoins);
-  return beginFor(tgId, { id: FILE_PACKAGE_ID, coins: t.coins, price: t.price, title: "پرداخت همین فایل", blurb: "" });
+export async function beginFileTopup(tgId: number, shortToman: number): Promise<TopupStart> {
+  const t = fileTopup(shortToman);
+  return beginFor(tgId, { id: FILE_PACKAGE_ID, credit: t.credit, price: t.price, title: "پرداخت همین فایل", blurb: "" });
 }
 
 export const FILE_PACKAGE_ID = "file";
 
-async function beginFor(tgId: number, p: CoinPackage): Promise<TopupStart> {
+async function beginFor(tgId: number, p: CreditPackage): Promise<TopupStart> {
   if (gatewayConfigured()) {
     try {
       return await beginGateway(tgId, p);
@@ -107,12 +107,12 @@ async function beginFor(tgId: number, p: CoinPackage): Promise<TopupStart> {
   return beginCard(tgId, p);
 }
 
-async function beginGateway(tgId: number, p: CoinPackage): Promise<TopupStart> {
-  const t = createTopup(orderId(), tgId, p.id, p.coins, p.price, "awaiting_payment");
+async function beginGateway(tgId: number, p: CreditPackage): Promise<TopupStart> {
+  const t = createTopup(orderId(), tgId, p.id, p.credit, p.price, "awaiting_payment");
   const { trackId, payUrl } = await zibalRequest({
     amountToman: p.price,
     orderId: t.id,
-    description: `${APP_NAME} — ${p.title} (${fmtCoins(p.coins)})`,
+    description: `${APP_NAME} — ${p.title}`,
   });
   setTopupTrackId(t.id, String(trackId));
 
@@ -120,14 +120,14 @@ async function beginGateway(tgId: number, p: CoinPackage): Promise<TopupStart> {
     id: t.id,
     payUrl,
     text: [
-      `🧾 <b>${escapeHtml(p.title)}</b> — ${fmtCoins(p.coins)}`,
-      `مبلغ: <b>${fmtToman(p.price)}</b>`,
+      `🧾 <b>${escapeHtml(p.title)}</b>`,
+      `مبلغ: <b>${fmtToman(p.price)}</b>` + (p.credit > p.price ? ` · به حسابت میاد: <b>${fmtToman(p.credit)}</b>` : ""),
       "",
       // کاربرِ تلگرام تقریباً همیشه فیلترشکن روشن دارد و درگاهِ بانکیِ ایران آی‌پیِ
       // خارجی را معمولاً رد می‌کند؛ بی این جمله او فقط صفحهٔ خطای بانک را می‌بیند و
       // نمی‌داند چرا.
       "روی «💳 پرداخت» بزن تا صفحهٔ بانک باز شه. اگه فیلترشکن روشنه، اول خاموشش کن؛ درگاه بانک با فیلترشکن معمولاً باز نمیشه.",
-      "پول که رفت، سکه‌ها خودش میاد و همین‌جا خبرت می‌کنم.",
+      "پول که رفت، اعتبارش خودش به حسابت میاد و همین‌جا خبرت می‌کنم.",
       "",
       "<i>پرداخت کردی و خبری نشد؟ «🔄 بررسی پرداخت» رو بزن.</i>",
     ].join("\n"),
@@ -139,13 +139,13 @@ async function beginGateway(tgId: number, p: CoinPackage): Promise<TopupStart> {
   };
 }
 
-function beginCard(tgId: number, p: CoinPackage): TopupStart {
+function beginCard(tgId: number, p: CreditPackage): TopupStart {
   // سفارشِ بازِ قبلی بسته می‌شود: اتصال رسید از روی «آخرین سفارش باز» است و
   // دو سفارشِ همزمان یعنی نصف احتمال اینکه رسید به مبلغ درست بچسبد.
   const stale = openTopup(tgId);
   if (stale) setTopupStatus(stale.id, "rejected", { decidedBy: tgId });
 
-  const t = createTopup(orderId(), tgId, p.id, p.coins, p.price);
+  const t = createTopup(orderId(), tgId, p.id, p.credit, p.price);
   const holder = config.CARD_HOLDER ? `\nبه نام: <b>${escapeHtml(config.CARD_HOLDER)}</b>` : "";
 
   return {
@@ -153,12 +153,12 @@ function beginCard(tgId: number, p: CoinPackage): TopupStart {
     text: [
       `🧾 <b>سفارش</b> <code>${t.id}</code>`,
       "",
-      `${escapeHtml(p.title)} — ${fmtCoins(p.coins)} — مبلغ <b>${fmtToman(p.price)}</b>`,
+      `${escapeHtml(p.title)} — مبلغ <b>${fmtToman(p.price)}</b>`,
       "",
       "مبلغ را به این کارت واریز کن:",
       `<code>${escapeHtml(config.CARD_NUMBER)}</code>${holder}`,
       "",
-      "بعدش <b>عکس رسید</b> را همین‌جا بفرست. تا نیم‌ساعت بررسی می‌شود و سکه‌ها به حسابت می‌آید.",
+      "بعدش <b>عکس رسید</b> را همین‌جا بفرست. تا نیم‌ساعت بررسی می‌شود و اعتبارش به حسابت می‌آید.",
       "",
       "<i>مبلغ را دقیقاً همین‌قدر بفرست — تطبیق رسید با همین عدد انجام می‌شود.</i>",
     ].join("\n"),
@@ -251,14 +251,14 @@ export async function settleTopup(
   }
 
   await creditTopup(t);
-  logger.info({ topup: t.id, tgId: t.tg_id, coins: t.coins, ref: v.refNumber }, "topup paid via zibal");
+  logger.info({ topup: t.id, tgId: t.tg_id, credit: t.credit_toman, ref: v.refNumber }, "topup paid via zibal");
   void notifyAdmins(
     `💳 <b>شارژ آنلاین</b>\n` +
-      `${fmtCoins(t.coins)} — ${fmtToman(t.price_toman)}\n` +
+      `${fmtToman(t.price_toman)} (اعتبار ${fmtToman(t.credit_toman)})\n` +
       `کاربر: ${escapeHtml(getUser(t.tg_id)?.name ?? String(t.tg_id))} — <code>${t.tg_id}</code>\n` +
       `مرجع: <code>${escapeHtml(v.refNumber ?? "—")}</code>`,
   );
-  return { outcome: "credited", topup: getTopup(t.id), detail: `${fmtCoins(t.coins)} به حسابت اضافه شد.` };
+  return { outcome: "credited", topup: getTopup(t.id), detail: `${fmtToman(t.credit_toman)} به حسابت اضافه شد.` };
 }
 
 /**
@@ -270,10 +270,10 @@ export async function settleTopup(
  * در حالی که فایلش سالم روی دیسک بود.
  */
 async function creditTopup(t: TopupRow): Promise<void> {
-  grant(t.tg_id, coinsToSec(t.coins), "topup");
-  const balance = getUser(t.tg_id)?.credit_sec ?? 0;
+  grant(t.tg_id, t.credit_toman, "topup");
+  const balance = getUser(t.tg_id)?.credit_toman ?? 0;
   const head =
-    `🪙 <b>${fmtCoins(t.coins)}</b> به حسابت اضافه شد!\n\n` + `موجودی جدیدت: <b>${fmtBalance(balance)}</b>\n\n`;
+    `💳 <b>${fmtToman(t.credit_toman)}</b> به حسابت اضافه شد!\n\n` + `موجودی جدیدت: <b>${fmtToman(balance)}</b>\n\n`;
 
   /**
    * بعد از شارژ، کاربر را به **همان کاری** برگردان که برایش شارژ کرد.
@@ -284,7 +284,7 @@ async function creditTopup(t: TopupRow): Promise<void> {
    * کسی که برای جزوهٔ هم‌کلاسی آمده بود، و کسی که فایلش همان‌جا منتظر بود.
    */
   const waiting = awaitingCreditSessions(t.tg_id);
-  const enough = waiting.find((s) => balance >= Math.round(s.original_ms / 1000));
+  const enough = waiting.find((s) => balance >= priceOf(Math.round(s.original_ms / 1000)));
   if (enough) {
     await notifyUser(t.tg_id, head + `<b>فایلی که فرستاده بودی هنوز اینجاست.</b> بزن تا ادامه بدم 👇`, {
       reply_markup: new InlineKeyboard().text("▶️ ادامهٔ همون فایل", `resume:${enough.id}`),
@@ -324,7 +324,7 @@ export async function receiveReceipt(ctx: Context, fileId: string): Promise<bool
   setTopupStatus(t.id, "pending", { receiptFileId: fileId });
   await ctx.reply(
     `✅ رسید سفارش <code>${t.id}</code> رسید.\n\n` +
-      `${fmtCoins(t.coins)} به‌محض تأیید به حسابت اضافه می‌شود. خبرش را همین‌جا می‌دهم.`,
+      `${fmtToman(t.credit_toman)} به‌محض تأیید به حسابت اضافه می‌شود. خبرش را همین‌جا می‌دهم.`,
     { parse_mode: "HTML" },
   );
   await notifyAdminsReceipt(ctx.api, { ...t, receipt_file_id: fileId, status: "pending" });
@@ -339,8 +339,8 @@ async function notifyAdminsReceipt(api: Api, t: TopupRow): Promise<void> {
     "",
     `سفارش: <code>${escapeHtml(t.id)}</code>`,
     `کاربر: ${escapeHtml(who || String(t.tg_id))} — <code>${t.tg_id}</code>`,
-    `پکیج: ${fmtCoins(t.coins)} — ${fmtToman(t.price_toman)}`,
-    `موجودی فعلی: ${fmtBalance(u?.credit_sec ?? 0)}`,
+    `مبلغ: ${fmtToman(t.price_toman)} — اعتبار ${fmtToman(t.credit_toman)}`,
+    `موجودی فعلی: ${fmtToman(u?.credit_toman ?? 0)}`,
   ].join("\n");
 
   const kb = new InlineKeyboard()
@@ -401,8 +401,8 @@ export async function decide(
 
   if (approved) {
     await creditTopup(t);
-    logger.info({ topup: topupId, tgId: t.tg_id, coins: t.coins }, "topup approved");
-    return { toast: "تأیید شد و سکه واریز شد.", adminNote: `✅ تأیید شد — ${fmtCoins(t.coins)}` };
+    logger.info({ topup: topupId, tgId: t.tg_id, credit: t.credit_toman }, "topup approved");
+    return { toast: "تأیید شد و اعتبار واریز شد.", adminNote: `✅ تأیید شد — ${fmtToman(t.credit_toman)}` };
   }
 
   await notifyUser(

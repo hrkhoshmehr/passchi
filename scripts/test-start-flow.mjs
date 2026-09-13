@@ -1,9 +1,9 @@
 /**
  * لحظهٔ «شروع کن» — سه باگی که دانشجو دید.
  *
- * ۱) سکه کم و «شروع کن»: صوت **به بایگانی نمی‌رود**، صفحهٔ سکهٔ کم «پرداخت همین
+ * ۱) موجودی کم و «شروع کن»: صوت **به بایگانی نمی‌رود**، صفحهٔ موجودیِ کم «پرداخت همین
  *    فایل» دارد و جلسه منتظرِ شارژ می‌ماند (نه `queued` بی‌صاحب).
- * ۲) سکهٔ کافی: صوت دقیقاً یک بار به بایگانی می‌رود، همان لحظهٔ شروع.
+ * ۲) موجودیِ کافی: صوت دقیقاً یک بار به بایگانی می‌رود، همان لحظهٔ شروع.
  * ۳) پیامِ بلند: دکمه‌ها فقط زیرِ تکهٔ آخر، ریپلای روی همه.
  * ۴) بی‌کلام: پیام می‌گوید چقدر کم شد و بقیه برگشت.
  * ۵) درسِ جلسه پیش از شروع عوض می‌شود، و بعد از شروع نه.
@@ -80,29 +80,29 @@ const mk = (sid, sec) => {
   return sid;
 };
 
-// ─── ۱) سکه کم ───────────────────────────────────────────────────────────────
+// ─── ۱) موجودی کم ───────────────────────────────────────────────────────────────
 {
-  grant(U, 50, "trial"); // ۵۰ ثانیه
+  grant(U, 50, "trial"); // ۵۰ تومان — فایلِ ۱۰۰ ثانیه‌ای ۲٬۵۰۰ تومان است
   const sid = mk("aaaa0000aaaa0001", 100);
   const cs = await press(`go:${sid}`, PID);
-  check("سکه کم: صوت به بایگانی نرفت", archived(cs).length === 0, cs.map((c) => c.method).join(" "));
-  check("سکه کم: «پرداخت همین فایل» روی صفحه", btns(cs).includes(`pf:${sid}`), btns(cs).join(" "));
-  check("سکه کم: جلسه منتظرِ شارژ است (بعد از شارژ پیشنهادِ ادامه می‌آید)", getSession(sid).status === "awaiting_credit", getSession(sid).status);
-  check("سکه کم: هیچ سکه‌ای رزرو نشد", getUser(U).credit_sec === 50, String(getUser(U).credit_sec));
+  check("موجودی کم: صوت به بایگانی نرفت", archived(cs).length === 0, cs.map((c) => c.method).join(" "));
+  check("موجودی کم: «پرداخت همین فایل» روی صفحه", btns(cs).includes(`pf:${sid}`), btns(cs).join(" "));
+  check("موجودی کم: جلسه منتظرِ شارژ است (بعد از شارژ پیشنهادِ ادامه می‌آید)", getSession(sid).status === "awaiting_credit", getSession(sid).status);
+  check("موجودی کم: هیچ پولی رزرو نشد", getUser(U).credit_toman === 50, String(getUser(U).credit_toman));
 }
 
 // ─── ۱ب) مسیری که بررسیِ بالای `resumeSession` را دور می‌زند ────────────────
 //
 // «🎁 اولین صوت رایگان» آن بررسی را عمداً رد می‌کند (رایگان هنوز واریز نشده).
-// اگر رایگان رد شود و سکه کم باشد، فقط بررسیِ **پیش از شروع** جلوی بایگانی و
+// اگر رایگان رد شود و موجودی کم باشد، فقط بررسیِ **پیش از شروع** جلوی بایگانی و
 // بن‌بستِ `reserve` را می‌گیرد — همان بررسی که پیش‌تر نبود.
 {
   const sid = mk("aaaa0000aaaa0004", 100);
   const cs = await press(`ff:${sid}`, PID);
-  check("رایگانِ ردشده و سکهٔ کم: صوت به بایگانی نرفت", archived(cs).length === 0, cs.map((c) => c.method).join(" "));
+  check("رایگانِ ردشده و موجودیِ کم: صوت به بایگانی نرفت", archived(cs).length === 0, cs.map((c) => c.method).join(" "));
   check("… «پرداخت همین فایل» روی صفحه", btns(cs).includes(`pf:${sid}`), btns(cs).join(" "));
   check("… و جلسه منتظرِ شارژ است", getSession(sid).status === "awaiting_credit", getSession(sid).status);
-  check("… و هیچ سکه‌ای رزرو نشد", getUser(U).credit_sec === 50, String(getUser(U).credit_sec));
+  check("… و هیچ پولی رزرو نشد", getUser(U).credit_toman === 50, String(getUser(U).credit_toman));
 }
 
 // ─── ۵) درس، پیش از شروع ─────────────────────────────────────────────────────
@@ -122,12 +122,12 @@ const mk = (sid, sec) => {
   check("بعد از شروع درس عوض نمی‌شود", getSession(sid).course_id === c.id && cs.some((x) => x.payload?.text === S.COURSE_LOCKED));
 }
 
-// ─── ۲) سکهٔ کافی ────────────────────────────────────────────────────────────
+// ─── ۲) موجودیِ کافی ────────────────────────────────────────────────────────────
 {
-  grant(U, 600, "grant");
+  grant(U, 5_000, "grant"); // بیش از ۲٬۵۰۰ تومانِ فایل
   const sid = mk("aaaa0000aaaa0002", 100);
   const cs = await press(`go:${sid}`, PID);
-  check("سکهٔ کافی: صوت دقیقاً یک بار به بایگانی رفت", archived(cs).length === 1, String(archived(cs).length));
+  check("موجودیِ کافی: صوت دقیقاً یک بار به بایگانی رفت", archived(cs).length === 1, String(archived(cs).length));
   check("شناسهٔ پیامِ بایگانی روی جلسه نشست", Boolean(getSession(sid).archive_message_id));
   // فایلِ ساختگی خط لوله را در پیش‌پردازش می‌شکند؛ «دوباره» نباید دوباره بایگانی کند.
   await new Promise((r) => setTimeout(r, 1500));

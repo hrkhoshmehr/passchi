@@ -14,14 +14,14 @@ import { InlineKeyboard, Keyboard } from "grammy";
 import { config } from "../config.js";
 import type { Platform } from "../db/identity.js";
 import {
-  PACKAGES, RATE_LINE, COINS_PER_MINUTE, fmtCoins, fmtToman, shareBack,
-} from "../billing/coins.js";
+  PACKAGES, RATE_LINE, fmtToman, priceOf,
+} from "../billing/money.js";
 import { toFaDigits } from "../util/time.js";
 
 export const BTN = {
   send: "📤 ارسال صوت",
   history: "📚 جلسه‌های من",
-  account: "🪙 حساب و سکه‌ها",
+  account: "💳 حساب و موجودی",
   courses: "📘 درس‌های من",
   how: "❓ چطور کار می‌کنه",
   support: "👤 پشتیبانی",
@@ -60,12 +60,22 @@ export const mainKeyboard = (() => {
 /** برچسب دکمه → کاری که باید انجام شود. برای مسیریابی پیام‌های متنی. */
 export type MenuAction = keyof typeof BTN;
 
+/**
+ * برچسب‌های قدیمی که هنوز روی صفحه‌کلیدِ ماندگارِ کاربران است.
+ *
+ * صفحه‌کلیدِ اصلی تا /start بعدی عوض نمی‌شود؛ بدون این، دکمهٔ «حساب» پس از
+ * رفتنِ سکه در چتِ کاربر بی‌جواب می‌ماند.
+ */
+const LEGACY_LABELS: Record<string, MenuAction> = {
+  "🪙 حساب و سکه‌ها": "account",
+};
+
 export function menuActionOf(text: string): MenuAction | null {
   const t = text.trim();
   for (const [key, label] of Object.entries(BTN)) {
     if (t === label) return key as MenuAction;
   }
-  return null;
+  return LEGACY_LABELS[t] ?? null;
 }
 
 // ─── متن صفحه‌ها ────────────────────────────────────────────────────────────
@@ -99,8 +109,8 @@ export const SLOGAN = `دیگه جزوه ننویس، با ${APP_NAME} درسا�
  */
 export const BOT_HANDLE = "@passchi_bot";
 
-/** هدیهٔ شروع، به سکه — همان چیزی که در اولین دیدار واریز می‌شود. */
-export const TRIAL_COINS = config.FREE_TRIAL_COINS;
+/** هدیهٔ شروع، به تومان — همان چیزی که در اولین دیدار واریز می‌شود. */
+export const TRIAL_TOMAN = config.FREE_TRIAL_TOMAN;
 
 /**
  * پیام خوش‌آمد — گام یکِ تور.
@@ -127,7 +137,8 @@ export const WELCOME = `به ${APP_NAME} خوش اومدی 👋
 📕 <b>فایل جزوه</b> — فقط محتوای درس، مرتب و قابل چاپ
 🕘 <b>کلاس دقیقه‌به‌دقیقه</b> — کجا درس داد، کجا حاشیه رفت
 📄 <b>متن کامل کلاس</b> — کلمه‌به‌کلمه، با دقیقهٔ هر جمله
-${TRIAL_COINS > 0 ? `\nهر سکه یعنی یه دقیقه صوت. 🎁 برای شروع: <b>${toFaDigits(TRIAL_COINS)} سکه هدیه، یعنی ${toFaDigits(TRIAL_COINS)} دقیقه صوت</b>.` : ""}`;
+
+🎁 <b>اولین صوتت رایگانه</b>${TRIAL_TOMAN > 0 ? `، و ${fmtToman(TRIAL_TOMAN)} هم هدیه به حسابت میاد` : ""}.`;
 
 /** دکمهٔ گام بعدیِ تور، زیر پیام خوش‌آمد. */
 export const WELCOME_CB = "demo:recap";
@@ -164,10 +175,10 @@ export const HOW_IT_WORKS = `<b>❓ چطور کار می‌کنه</b>
 آخرش یه جزوهٔ کامل PDF، مرتب و قابل چاپ.
 
 <b>چقدر خرج داره</b>
-هر سکه یه دقیقه صوت. یه کلاس ۹۰ دقیقه‌ای یعنی ۹۰ سکه.
+${RATE_LINE}؛ یه کلاس ۹۰ دقیقه‌ای ${fmtToman(priceOf(90 * 60))}. اولین صوتت رایگانه.
 
 <b>چطور ارزون‌تر می‌شه</b>
-${sharePitch(`سر یه کلاس ۹۰ دقیقه‌ای بین ${toFaDigits(shareBack(5400, 30).seat)} تا ${toFaDigits(shareBack(5400, 5).seat)} سکه`)} بعدش برای بقیه مجانیه. از اون طرف هم اگه هم‌کلاسیت لینک جزوه رو گذاشته، تو همون چند سکه رو می‌دی یا هیچی.
+${sharePitch()} از اون طرف هم اگه هم‌کلاسیت لینک جزوه رو گذاشته، تو فقط یه سهم کوچیک می‌دی یا هیچی.
 
 <b>یه قاعده</b>
 هر نکته‌ای که به‌عنوان حرف استاد نقل می‌کنم، عیناً تو صوت گفته شده. پیداش نکنم، حذفش می‌کنم نه اینکه حدس بزنم.`;
@@ -193,7 +204,7 @@ export function supportMessage(_platform: Platform = "telegram"): string {
   }
   lines.push(
     ...(config.SUPPORT_USERNAME ? [""] : []),
-    `<i>اگه کار یه فایل نشد، سکه‌هات خودکار برگشته؛ موجودیت رو تو «${BTN.account}» ببین.</i>`,
+    `<i>اگه کار یه فایل نشد، پولت خودکار برگشته؛ موجودیت رو تو «${BTN.account}» ببین.</i>`,
   );
   return lines.join("\n");
 }
@@ -212,11 +223,12 @@ export function supportKeyboard(platform: Platform = "telegram"): InlineKeyboard
 
 // ─── حساب و شارژ ────────────────────────────────────────────────────────────
 
-/** «۶۰ سکه — ۸۹٬۰۰۰ تومان»: عنوانِ پکیج خودش تعدادِ سکه است. */
+/** «۱۵۰ هزار تومان · ۱۶۵ هزار اعتبار»: پرداخت و آنچه به حساب می‌آید، روی خودِ دکمه. */
 export function packagesKeyboard(): InlineKeyboard {
   const kb = new InlineKeyboard();
   for (const p of PACKAGES) {
-    kb.text(`${p.title} — ${fmtToman(p.price)}`, `buy:${p.id}`).row();
+    const label = p.credit > p.price ? `${p.title} · ${fmtToman(p.credit)} اعتبار` : p.title;
+    kb.text(label, `buy:${p.id}`).row();
   }
   return kb;
 }
@@ -232,23 +244,22 @@ export function packagesKeyboard(): InlineKeyboard {
  */
 // رشته داخلِ خودِ تابع است نه در یک const: `HOW_IT_WORKS` بالاتر در بارگذاریِ
 // ماژول صدایش می‌زند و const آن لحظه هنوز مقدار ندارد.
-export function sharePitch(seat?: string): string {
-  const s = seat ? ` (${seat})` : "";
+export function sharePitch(): string {
   return (
-    `<b>لازم نیست کل کلاس رو خودت بدی.</b> لینک جلسه رو برای هم‌کلاسی‌هات بفرست؛ ` +
-    `هر کی بیاد سهم خودش رو${s} می‌ده و همون به حساب تو برمی‌گرده، تا نصف هزینه.`
+    `<b>تو فقط سهم خودت رو می‌دی.</b> لینک جلسه رو برای هم‌کلاسی‌هات بفرست؛ ` +
+    `هر کی بیاد سهم خودش رو می‌ده و همون به حساب تو برمی‌گرده.`
   );
 }
 
 export function packagesMessage(): string {
   const out = [
-    "<b>🪙 شارژ حساب</b>",
+    "<b>💳 شارژ حساب</b>",
     "",
-    `<b>${RATE_LINE}.</b> یه ساعت صوت ${fmtCoins(60 * COINS_PER_MINUTE)} می‌خواد. سکه‌ها تاریخ انقضا ندارن.`,
+    `<b>${RATE_LINE}.</b> یه کلاس ۹۰ دقیقه‌ای ${fmtToman(priceOf(90 * 60))}. موجودی تاریخ انقضا نداره.`,
     "",
   ];
   for (const p of PACKAGES) {
-    out.push(`<b>${p.title}</b> — ${fmtToman(p.price)}`, `<i>${p.blurb}</i>`, "");
+    out.push(`<b>${p.title}</b>`, `<i>${p.blurb}</i>`, "");
   }
   out.push(`💰 ${sharePitch()}`, "", "پکیجت رو از دکمه‌های پایین انتخاب کن.");
   return out.join("\n");

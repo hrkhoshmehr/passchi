@@ -16,7 +16,7 @@ process.env.BOT_TOKEN ||= "x";
 const { requestOtp, verifyOtp, phoneLoginEnabled, OtpError } = await import("../src/web/auth.ts");
 const { resolveIdentity, identitiesOf } = await import("../src/db/identity.ts");
 const { grant, currentBalance } = await import("../src/billing/ledger.ts");
-const { coinsToSec, balanceCoins } = await import("../src/billing/coins.ts");
+const { fmtToman } = await import("../src/billing/money.ts");
 
 let bad = 0;
 const check = (label, ok, extra = "") => {
@@ -55,10 +55,10 @@ check("دو حساب جدا ساخته شد", tg.tg_id !== bale.tg_id, `${tg.tg_
 check("شناسهٔ تلگرام همان عدد است", tg.tg_id === Number(SAME));
 check("شناسهٔ بله از فضای داخلی است", bale.tg_id > 2 ** 52);
 
-grant(tg.tg_id, coinsToSec(30), "grant");
-check("سکهٔ تلگرام به بله نشت نکرد", currentBalance(bale.tg_id) === 0,
-  `بله: ${balanceCoins(currentBalance(bale.tg_id))} سکه`);
-check("سکهٔ تلگرام سر جایش است", balanceCoins(currentBalance(tg.tg_id)) === 30);
+grant(tg.tg_id, 30_000, "grant");
+check("اعتبارِ تلگرام به بله نشت نکرد", currentBalance(bale.tg_id) === 0,
+  `بله: ${fmtToman(currentBalance(bale.tg_id))}`);
+check("اعتبارِ تلگرام سر جایش است", currentBalance(tg.tg_id) === 30_000, fmtToman(currentBalance(tg.tg_id)));
 
 // ورود دوباره باید همان حساب را بدهد، نه حساب تازه
 const again = resolveIdentity({ platform: "bale", platformUserId: SAME });

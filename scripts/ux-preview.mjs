@@ -17,8 +17,8 @@ import {
 import {
   DEMO_INTRO, SAMPLE_COURSE, SAMPLE_DURATION_MS, SAMPLE_REPORT, outroMessage,
 } from "../src/bot/demo.ts";
-import { DEFAULT_GIFT_COINS, claimedMessage, refusalMessage } from "../src/bot/gift.ts";
-import { coinsToSec } from "../src/billing/coins.ts";
+import { DEFAULT_GIFT_TOMAN, claimedMessage, refusalMessage } from "../src/bot/gift.ts";
+import { priceOf, shareCountsFor } from "../src/billing/money.ts";
 
 const line = (t) => console.log("\n" + "─".repeat(64) + `  ${t}\n`);
 const show = (t) => console.log(t.replace(/<\/?[a-z][^>]*>/g, ""));
@@ -139,9 +139,9 @@ show(extractedMessage(report));
 line("۳ — بخش‌بندی کلاس (ریپلای صوت)");
 show(timelineMessage(report, true));
 line("۴ — تسویه و پیشنهاد اشتراک");
-show(settlementMessage(5400, 1_800));
+show(settlementMessage(priceOf(5400), 30_000));
 line("۴ب — تسویه، وقتی سرِ تأیید گفته «تقسیم می‌کنم»");
-show(settlementMessage(5400, 1_800, true));
+show(settlementMessage(priceOf(5400), 30_000, true));
 
 line("پایان اجرای رایگان — رونوشت و پیشنهاد");
 show(upsellMessage(5400));
@@ -168,52 +168,57 @@ line("تور نمونه — گام ۴: پایان تور");
 show(outroMessage("SUPPORT_ID"));
 
 line("حساب");
-show(accountMessage({ creditSec: coinsToSec(20), usedSec: 0, refundedSec: 0, sessionCount: 0 }));
+show(accountMessage({ credit: 20_000, spent: 0, refunded: 0, sessionCount: 0 }));
 line("حساب — کاربر فعال");
 show(
   accountMessage({
-    creditSec: coinsToSec(430),
-    usedSec: 90 * 60,
-    refundedSec: 45 * 60,
+    credit: 430_000,
+    spent: priceOf(90 * 60),
+    refunded: priceOf(45 * 60),
     sessionCount: 4,
   }),
 );
 line("شارژ");
 show(packagesMessage());
-line("سکهٔ کم");
-show(lowBalanceMessage(90 * 60, coinsToSec(20)));
-line("سکهٔ کم — فایلِ منتظر، با «پرداخت همین فایل»");
-show(lowBalanceMessage(90 * 60, coinsToSec(20), undefined, true));
-console.log("\n[ 💳 پرداخت همین فایل ]\n[ 🪙 شارژ حساب ]\n[ ▶️ ادامه بده ]");
+line("موجودی کم");
+show(lowBalanceMessage(priceOf(90 * 60), 20_000));
+line("موجودی کم — فایلِ منتظر، با «پرداخت همین فایل»");
+show(lowBalanceMessage(priceOf(90 * 60), 20_000, true));
+console.log("\n[ 💳 پرداخت همین فایل ]\n[ ✖️ بی‌خیال ]");
 
 // ── اولین صوتِ رایگان ──────────────────────────────────────────────────────
+const F = await import("../src/bot/strings.ts");
 {
-  const F = await import("../src/bot/strings.ts");
-  line("فایلِ اول — ۹۰ دقیقه، ۲۰ سکه");
-  show(F.firstFileMessage(90 * 60, coinsToSec(20), { minutes: 120 }));
-  console.log(`\n[ ${F.FILE_BTN.free} ]\n[ ${F.FILE_BTN.pay} ] [ ${F.CONFIRM_BTN.topup} ]`);
-  line("فایلِ اول — ۹۰ دقیقه، سکهٔ کافی");
-  show(F.firstFileMessage(90 * 60, coinsToSec(200), { minutes: 120 }));
+  line("فایلِ اول — ۹۰ دقیقه، ۲۰ هزار تومان موجودی");
+  show(F.firstFileMessage(90 * 60, 20_000, { minutes: 120 }));
+  console.log(`\n[ ${F.FILE_BTN.free} ]\n[ ${F.FILE_BTN.pay} ] [ ${F.CONFIRM_BTN.cancel} ]`);
+  line("فایلِ اول — ۹۰ دقیقه، موجودیِ کافی");
+  show(F.firstFileMessage(90 * 60, 200_000, { minutes: 120 }));
   console.log(`\n[ ${F.FILE_BTN.free} ]\n[ ${F.CONFIRM_BTN.go} ] [ ${F.CONFIRM_BTN.cancel} ]`);
   line("فایلِ اول — ۱۵۰ دقیقه");
   show(F.firstFileMessage(150 * 60, 0, { minutes: 120 }));
   line("رایگان واریز شد");
-  show(F.freeFileGrantedMessage(7200, false));
+  show(F.freeFileGrantedMessage(priceOf(7200), false));
   line("رایگان واریز شد — سهمیهٔ هفته پر");
-  show(F.freeFileGrantedMessage(1800, true));
+  show(F.freeFileGrantedMessage(priceOf(1800), true));
   line("رایگان — ردها");
   for (const [k, v] of Object.entries(F.FREE_FILE_REFUSAL)) console.log(`  ${k.padEnd(10)} → ${v}`);
 }
 
-// ── تصمیمِ تقسیم، پیش از خرج‌شدن سکه ────────────────────────────────────────
+// ── تصمیمِ تقسیم، پیش از خرج‌شدن پول ────────────────────────────────────────
+const CLASS = priceOf(90 * 60);
 line("تأیید هزینه — جایی که تصمیمِ تقسیم هم گرفته می‌شود");
-show(confirmCostMessage(90 * 60, coinsToSec(120)));
-console.log("\n[ ✅ شروع کن ] [ ✖️ بی‌خیال ]\n[ 👥 با هم‌کلاسیا تقسیم می‌کنم ]");
-line("چند نفرید؟");
-show(shareTargetPrompt(90 * 60));
-console.log("\n[ ۵ نفر ] [ ۱۰ نفر ]\n[ ۲۰ نفر ] [ ۳۰ نفر ]");
+show(confirmCostMessage(90 * 60, 200_000));
+console.log(`\n[ ${F.CONFIRM_BTN.go} ] [ ${F.CONFIRM_BTN.cancel} ]\n[ ${F.CONFIRM_BTN.share} ]`);
+line("چند نفرید؟ — با دکمه‌ها");
+show(shareTargetPrompt(CLASS));
+console.log("\n" + shareCountsFor(CLASS).map((n) => `[ ${F.shareCountLabel(n, CLASS)} ]`).join(" "));
+line("فایلِ کوتاه (۵ دقیقه) — دکمهٔ اشتراکی نمی‌آید");
+console.log(`تعدادها: ${JSON.stringify(shareCountsFor(priceOf(5 * 60)))}`);
 line("تقسیم، پیش از پرداخت روشن شد");
-show(sharePreEnabledMessage(90 * 60, 10));
+show(sharePreEnabledMessage(CLASS, 10));
+line("تأیید هزینه، با شریکی روشن (۱۰ نفر)");
+show(confirmCostMessage(90 * 60, 200_000, { people: 10 }));
 line("پشتیبانی");
 show(supportMessage());
 line("راهنما");
@@ -222,39 +227,30 @@ line("حریم خصوصی");
 show(PRIVACY);
 
 line("هدیه — گیرندهٔ تازه");
-show(claimedMessage(DEFAULT_GIFT_COINS, coinsToSec(DEFAULT_GIFT_COINS)));
-line("هدیه — کسی که از قبل سکه داشت");
-show(claimedMessage(20, coinsToSec(50)));
+show(claimedMessage(DEFAULT_GIFT_TOMAN, DEFAULT_GIFT_TOMAN));
+line("هدیه — کسی که از قبل موجودی داشت");
+show(claimedMessage(20_000, 50_000));
 line("هدیه — مقدار بزرگ");
-show(claimedMessage(120, coinsToSec(120)));
-// ── صفحه‌های تازهٔ این دسته: دکمه‌ها هم چاپ می‌شوند، چون بخشی از متن‌اند ────
-const { sendPromptMessage, START_BTN, SHARE_COUNTS, invitationTail } = await import("../src/bot/strings.ts");
-const { shareBack } = await import("../src/billing/coins.ts");
+show(claimedMessage(500_000, 500_000));
+// ── دکمه‌ها هم چاپ می‌شوند، چون بخشی از متن‌اند ────────────────────────────
 const { BTN } = await import("../src/bot/menu.ts");
-const faN = (n) => String(n).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[d]);
 
 line("خوش‌آمد — دکمه‌ها");
-console.log(`[ ${START_BTN.sample} ]\n[ ${START_BTN.send} ]\n[ ${BTN.how} ]`);
+console.log(`[ ${F.START_BTN.sample} ]\n[ ${F.START_BTN.send} ]\n[ ${BTN.how} ]`);
 line("ارسال صوت");
-show(sendPromptMessage("معمولاً تا حدود ۲۰ مگ.", coinsToSec(20)));
-line("تأیید هزینه، با شریکی روشن (۱۰ نفر)");
-show(confirmCostMessage(90 * 60, coinsToSec(120), { people: 10 }));
-line("چند نفر — با دکمه‌ها");
-show(shareTargetPrompt(90 * 60));
-console.log(
-  "\n" +
-    SHARE_COUNTS.map((n) => `[ ${faN(n)} نفر · نفری ${faN(shareBack(5400, n).seat)} سکه ]`).join(" ") +
-    "\n[ ✖️ بی‌خیال ]",
-);
+show(F.sendPromptMessage("معمولاً تا حدود ۲۰ مگ.", 20_000));
 line("پیام پایانی — شریکی خاموش");
-show(settlementMessage(5400, coinsToSec(30), false, { hasArchive: true }));
+show(settlementMessage(CLASS, 30_000, false, { hasArchive: true }));
 line("پیام پایانی — شریکی روشن (۱۰ نفر)");
-show(settlementMessage(5400, coinsToSec(30), true, { people: 10, hasArchive: true }));
+show(settlementMessage(CLASS, 30_000, true, { people: 10, hasArchive: true }));
 line("زیر دعوت — فقط برای فرستنده");
-show(invitationTail({ costSec: 5400, seatCoins: 5, refundedCoins: 0, capReached: false }));
+show(F.invitationTail({ seat: 13_500, refunded: 0, capReached: false }));
+line("زیر دعوت — همه برگشت");
+show(F.invitationTail({ seat: 13_500, refunded: 121_500, capReached: true }));
+line("سهمِ هدیه‌ایِ هفته پر");
+show(F.giftBudgetFullMessage(13_500));
 
 line("هدیه — پیام‌های رد");
 for (const r of ["unknown", "revoked", "expired", "already", "exhausted"]) {
   console.log(`  ${r.padEnd(10)} → ${refusalMessage(r)}`);
 }
-

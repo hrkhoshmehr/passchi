@@ -25,9 +25,9 @@ function check(label, actual, expected) {
 const NOON = new Date("2026-09-20T08:30:00Z");
 const hours = (h) => new Date(NOON.getTime() - h * 3_600_000).toISOString().slice(0, 19).replace("T", " ");
 
-function user(id, ageHours, platform = "telegram", creditSec = 1200) {
+function user(id, ageHours, platform = "telegram", creditToman = 20_000) {
   upsertUser(id, `u${id}`, null);
-  db.prepare(`UPDATE users SET created_at = ?, credit_sec = ? WHERE tg_id = ?`).run(hours(ageHours), creditSec, id);
+  db.prepare(`UPDATE users SET created_at = ?, credit_toman = ? WHERE tg_id = ?`).run(hours(ageHours), creditToman, id);
   db.prepare(
     `INSERT OR IGNORE INTO identities (user_id, platform, platform_user_id) VALUES (?, ?, ?)`,
   ).run(id, platform, String(id));
@@ -52,7 +52,7 @@ user(LATE, 80, "telegram", 0);
 createSession("nd_sent", SENT, null);
 upsertUser(7_000_099, "صاحب جلسه", null); // صاحبِ جلسه‌ای که MEMBER به آن پیوسته — خودش هویتِ ربات ندارد
 createSession("nd_other", 7_000_099, null);
-db.prepare(`INSERT INTO session_members (session_id, tg_id, paid_sec, role) VALUES ('nd_other', ?, 60, 'member')`).run(MEMBER);
+db.prepare(`INSERT INTO session_members (session_id, tg_id, paid_toman, role) VALUES ('nd_other', ?, 1500, 'member')`).run(MEMBER);
 
 // ─── بازهٔ ساعت ──────────────────────────────────────────────────────────────
 check("ساعت تهران ظهر", N.tehranHour(NOON), 12);
@@ -86,8 +86,8 @@ check(
   db.prepare(`SELECT delivered FROM nudges WHERE user_id = ? AND stage = 1`).get(LATE).delivered,
   0,
 );
-check("متن مرحلهٔ اول سکه را می‌گوید", sentLog.find((s) => s.userId === DAY).text.includes("۲۰ سکه"), true);
-check("متن بی‌سکه، سطر هدیه ندارد", sentLog.find((s) => s.userId === LATE).text.includes("سکه‌ت"), false);
+check("متن مرحلهٔ اول هدیه را به تومان می‌گوید", sentLog.find((s) => s.userId === DAY).text.includes("۲۰٬۰۰۰ تومان"), true);
+check("متن بی‌اعتبار، سطر هدیه ندارد", sentLog.find((s) => s.userId === LATE).text.includes("هدیه‌ت"), false);
 check(
   "دکمه‌ها به دست‌کدهای موجود می‌روند",
   sentLog[0].extra.reply_markup.inline_keyboard.map((r) => r[0].callback_data),
@@ -121,7 +121,7 @@ check("صندلی گروهی ← یادآوری نمی‌گیرد", N.dueNudges(
 
 // ─── متن‌ها ──────────────────────────────────────────────────────────────────
 // خرید گروهیِ پیش از پرداخت برداشته شد؛ مرحلهٔ دوم همیشه شریک‌شدن پس از تحویل را می‌گوید.
-check("مرحلهٔ دوم دکمهٔ شریک‌شدن را نام می‌برد", N.nudgeMessage(2, 120 * 60).includes(strings0.CONFIRM_BTN.share), true);
+check("مرحلهٔ دوم دکمهٔ شریک‌شدن را نام می‌برد", N.nudgeMessage(2, 20_000).includes(strings0.CONFIRM_BTN.share), true);
 check("مرحلهٔ دوم از خرید گروهی حرف نمی‌زند", N.nudgeMessage(2, 0).includes("بخریم"), false);
 
 console.log(failures === 0 ? "\nهمه سبز ✅" : `\n${failures} شکست ❌`);

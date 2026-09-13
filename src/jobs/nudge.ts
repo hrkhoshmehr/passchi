@@ -26,7 +26,7 @@ import { db } from "../db/index.js";
 import "../db/funnel.js";
 import { logger } from "../util/logger.js";
 import { toFaDigits } from "../util/time.js";
-import { balanceCoins } from "../billing/coins.js";
+import { fmtToman } from "../billing/money.js";
 import { CONFIRM_BTN, START_BTN } from "../bot/strings.js";
 import { notifyUser } from "../bot/notify.js";
 
@@ -81,13 +81,13 @@ export function dueNudges(now: Date = new Date(), limit = 25): DueNudge[] {
 
   const rows = db
     .prepare(
-      `SELECT u.tg_id AS userId, 1 AS stage, u.credit_sec AS creditSec, u.created_at AS c
+      `SELECT u.tg_id AS userId, 1 AS stage, u.credit_toman AS creditSec, u.created_at AS c
          FROM users u
         WHERE u.created_at <= datetime(?, '-${NUDGE_STAGES[0].afterHours} hours')
           AND NOT EXISTS (SELECT 1 FROM nudges n WHERE n.user_id = u.tg_id AND n.stage = 1)
           AND ${noActivity}
        UNION ALL
-       SELECT u.tg_id, 2, u.credit_sec, u.created_at
+       SELECT u.tg_id, 2, u.credit_toman, u.created_at
          FROM users u
         WHERE u.created_at <= datetime(?, '-${NUDGE_STAGES[1].afterHours} hours')
           -- کسی که پیامِ اول به او نرسید (ربات را بلاک کرده) دومی را هم نمی‌گیرد.
@@ -136,10 +136,9 @@ function markNudge(userId: number, stage: number, delivered: boolean): void {
  */
 export function nudgeMessage(stage: 1 | 2, creditSec: number): string {
   if (stage === 1) {
-    const coins = balanceCoins(creditSec);
     const gift =
-      coins > 0
-        ? `🎁 <b>${toFaDigits(coins)} سکه‌ت</b> هنوز سر جاشه، یعنی ${toFaDigits(coins)} دقیقه صوت.\n`
+      creditSec > 0
+        ? `🎁 <b>${fmtToman(creditSec)} هدیه‌ت</b> هنوز سر جاشه، و اولین صوتت هم رایگانه.\n`
         : "";
     return (
       `سلام 👋 هنوز صوتی برام نفرستادی.\n\n` +

@@ -61,13 +61,13 @@ F.track(B, "demo");
 createSession("fs_a1", A, null);
 updateSession("fs_a1", { status: "done" });
 createSession("fs_b1", B, null); // فرستاد ولی تحویل نشد
-db.prepare(`INSERT INTO session_members (session_id, tg_id, paid_sec, role) VALUES ('fs_a1', ?, 0, 'owner')`).run(A);
-db.prepare(`INSERT INTO session_members (session_id, tg_id, paid_sec, role) VALUES ('fs_a1', ?, 120, 'member')`).run(C);
+db.prepare(`INSERT INTO session_members (session_id, tg_id, paid_toman, role) VALUES ('fs_a1', ?, 0, 'owner')`).run(A);
+db.prepare(`INSERT INTO session_members (session_id, tg_id, paid_toman, role) VALUES ('fs_a1', ?, 3000, 'member')`).run(C);
 db.prepare(
-  `INSERT INTO topups (id, tg_id, package_id, coins, price_toman, status) VALUES ('ft1', ?, 'p1', 100, 130000, 'approved')`,
+  `INSERT INTO topups (id, tg_id, package_id, credit_toman, price_toman, status) VALUES ('ft1', ?, 'p8', 165000, 150000, 'approved')`,
 ).run(A);
 db.prepare(
-  `INSERT INTO topups (id, tg_id, package_id, coins, price_toman, status) VALUES ('ft2', ?, 'p1', 100, 130000, 'rejected')`,
+  `INSERT INTO topups (id, tg_id, package_id, credit_toman, price_toman, status) VALUES ('ft2', ?, 'p8', 165000, 150000, 'rejected')`,
 ).run(B);
 
 // کاربرِ قدیمی بیرون از بازه

@@ -306,8 +306,8 @@ let loc;
     Math.abs((payload.durationSec ?? 0) - WANT_SEC) <= 1,
     `${payload.durationSec} به‌جای ~${WANT_SEC}`,
   );
-  ok("قیمت برگشت", typeof payload.costCoins === "number" && payload.costCoins > 0, String(payload.costCoins));
-  ok("موجودی برگشت", typeof payload.haveCoins === "number", String(payload.haveCoins));
+  ok("قیمت برگشت", typeof payload.cost === "number" && payload.cost > 0, String(payload.cost));
+  ok("موجودی برگشت", typeof payload.have === "number", String(payload.have));
   ok("و کاربرِ پولدار اعتبارِ کافی دارد", payload.enough === true, String(payload.enough));
 
   // ─── ۷) جلسه واقعاً ساخته شد و فایل سرِ جایش است ──────────────────────────
@@ -387,7 +387,7 @@ let loc;
    * بگوید وگرنه کلاینت صفحهٔ تأیید را نشان می‌دهد و کاربر ته خط می‌فهمد.
    */
   ok("ولی `enough` نادرست برمی‌گردد", p.enough === false, String(p.enough));
-  ok("و قیمت بیشتر از موجودی است", (p.costCoins ?? 0) > (p.haveCoins ?? 0), `${p.costCoins} > ${p.haveCoins}`);
+  ok("و قیمت بیشتر از موجودی است", (p.cost ?? 0) > (p.have ?? 0), `${p.cost} > ${p.have}`);
 }
 
 // ─── ۱۱) فایلی که صوت نیست باید رد شود، نه اینکه جلسه بسازد ────────────────

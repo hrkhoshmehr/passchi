@@ -55,7 +55,7 @@ globalThis.fetch = async (url, init) => {
 
 const { upsertUser, getUser, getTopup } = await import("../src/db/index.ts");
 const { beginTopup, settleTopup, cancelTopup, gatewayConfigured } = await import("../src/bot/topup.ts");
-const { balanceCoins, findPackage, fmtCoins, fmtToman } = await import("../src/billing/coins.ts");
+const { findPackage, fmtToman } = await import("../src/billing/money.ts");
 const { createWebServer } = await import("../src/web/server.ts");
 const { resolveBotLinks } = await import("../src/bot/links.ts");
 const { resolveIdentity } = await import("../src/db/identity.ts");
@@ -69,14 +69,14 @@ const check = (label, ok, extra = "") => {
 
 const TG = 9101;
 upsertUser(TG, "آزمون درگاه", "gw");
-const bal = () => balanceCoins(getUser(TG).credit_sec);
+const bal = () => getUser(TG).credit_toman;
 const start = bal();
-const p1 = findPackage("p4");
+const p1 = findPackage("p7");
 
 check("درگاه تنظیم است", gatewayConfigured());
 
 // ── شروع ────────────────────────────────────────────────────────────────────
-const o = await beginTopup(TG, "p4");
+const o = await beginTopup(TG, "p7");
 check("لینک پرداخت ساخته شد", o.payUrl?.startsWith("https://gateway.zibal.ir/start/"), o.payUrl);
 check("مبلغ به ریال رفت", calls[0].body.amount === p1.price * 10, String(calls[0].body.amount));
 check("orderId همان شناسهٔ سفارش است", calls[0].body.orderId === o.id);
@@ -88,7 +88,7 @@ check("track_id ذخیره شد", row.track_id === String(nextTrack), row.track_
 // ── بازگشت جعلی: success=1 ولی درگاه می‌گوید پرداخت نشده ─────────────────────
 verifyResult = 202;
 let r = await settleTopup({ trackId: row.track_id });
-check("بدون verify موفق، سکه‌ای واریز نمی‌شود", r.outcome === "unpaid" && bal() === start, `${r.outcome} · ${bal()}`);
+check("بدون verify موفق، اعتباری واریز نمی‌شود", r.outcome === "unpaid" && bal() === start, `${r.outcome} · ${bal()}`);
 check("«بررسی پرداخت» سفارش را باز نگه می‌دارد", getTopup(o.id).status === "awaiting_payment");
 
 // ── پرداخت واقعی، دو تسویهٔ همزمان ──────────────────────────────────────────
@@ -96,13 +96,13 @@ verifyResult = 100;
 const [a, b] = await Promise.all([settleTopup({ trackId: row.track_id }), settleTopup({ topupId: o.id })]);
 const outcomes = [a.outcome, b.outcome].sort();
 check("از دو تسویهٔ همزمان یکی واریز کرد و یکی «قبلاً»", outcomes.join(",") === "already,credited", outcomes.join(","));
-check("دقیقاً یک بار واریز شد", bal() === start + p1.coins, `${bal()} (انتظار ${start + p1.coins})`);
+check("دقیقاً یک بار واریز شد", bal() === start + p1.credit, `${bal()} (انتظار ${start + p1.credit})`);
 check("شمارهٔ مرجع ذخیره شد", getTopup(o.id).ref_number === "777", getTopup(o.id).ref_number);
 
 // ── تسویهٔ سوم، زیبال ۲۰۱ می‌دهد ──────────────────────────────────────────────
 verifyResult = 201;
 r = await settleTopup({ topupId: o.id });
-check("تسویهٔ دوباره واریز نمی‌کند", r.outcome === "already" && bal() === start + p1.coins, r.outcome);
+check("تسویهٔ دوباره واریز نمی‌کند", r.outcome === "already" && bal() === start + p1.credit, r.outcome);
 
 // ── بازگشتِ بی‌احراز روی سفارشِ یک غریبه ─────────────────────────────────────
 //
@@ -117,20 +117,20 @@ const anon = async (qs) => {
   return { status: res.status, html: await res.text() };
 };
 try {
-  const p2 = findPackage("p5");
-  const o2 = await beginTopup(TG, "p5");
+  const p2 = findPackage("p8");
+  const o2 = await beginTopup(TG, "p8");
   const track2 = getTopup(o2.id).track_id;
   /** هر نشانه‌ای که بگوید این سفارش چیست یا مال کیست. */
   const leaks = (html) =>
-    [p2.title, fmtCoins(p2.coins), fmtToman(p2.price), o2.id, String(TG)].filter((s) => html.includes(s));
+    [p2.title, fmtToman(p2.credit), fmtToman(p2.price), o2.id, String(TG)].filter((s) => html.includes(s));
 
   verifyResult = 202;
   let page = await anon(`trackId=${track2}&success=0&status=3`);
   check("بازگشت بی‌احراز با success=0 سفارشِ پرداخت‌نشده را نمی‌بندد", getTopup(o2.id).status === "awaiting_payment", getTopup(o2.id).status);
-  check("صفحهٔ «پرداخت انجام نشد» پکیج و سکه و شناسه را لو نمی‌دهد", leaks(page.html).length === 0, leaks(page.html).join(" | "));
+  check("صفحهٔ «پرداخت انجام نشد» پکیج و اعتبار و شناسه را لو نمی‌دهد", leaks(page.html).length === 0, leaks(page.html).join(" | "));
 
   page = await anon(`trackId=${track2}&success=1`);
-  check("بازگشتِ جعلی با success=1 هم نمی‌بندد و واریز نمی‌کند", getTopup(o2.id).status === "awaiting_payment" && bal() === start + p1.coins, `${getTopup(o2.id).status} · ${bal()}`);
+  check("بازگشتِ جعلی با success=1 هم نمی‌بندد و واریز نمی‌کند", getTopup(o2.id).status === "awaiting_payment" && bal() === start + p1.credit, `${getTopup(o2.id).status} · ${bal()}`);
 
   // حتی اگر صداکننده‌ای گزینهٔ قدیمی را هنوز بفرستد، دیگر اثری ندارد.
   r = await settleTopup({ trackId: track2 }, { closeIfUnpaid: true });
@@ -140,12 +140,12 @@ try {
   verifyResult = 100;
   page = await anon(`trackId=${track2}&success=1`);
   check("بازگشتِ واقعی پس از پرداخت واریز می‌کند", page.status === 200 && getTopup(o2.id).status === "approved", `${page.status} · ${getTopup(o2.id).status}`);
-  check("دقیقاً سکهٔ همان سفارش واریز شد", bal() === start + p1.coins + p2.coins, `${bal()} (انتظار ${start + p1.coins + p2.coins})`);
-  check("صفحهٔ «پرداخت موفق» هم پکیج و سکه را لو نمی‌دهد", leaks(page.html).length === 0, leaks(page.html).join(" | "));
+  check("دقیقاً اعتبارِ همان سفارش واریز شد", bal() === start + p1.credit + p2.credit, `${bal()} (انتظار ${start + p1.credit + p2.credit})`);
+  check("صفحهٔ «پرداخت موفق» هم پکیج و اعتبار را لو نمی‌دهد", leaks(page.html).length === 0, leaks(page.html).join(" | "));
 
   verifyResult = 201;
   page = await anon(`trackId=${track2}&success=1`);
-  check("بازگشتِ دوباره واریز دوباره نمی‌کند", bal() === start + p1.coins + p2.coins && leaks(page.html).length === 0, String(bal()));
+  check("بازگشتِ دوباره واریز دوباره نمی‌کند", bal() === start + p1.credit + p2.credit && leaks(page.html).length === 0, String(bal()));
 
   // ── راه برگشت: فقط ربات سکوی صاحب سفارش، و بی «بازکردن اپ» ──────────────────
   //
@@ -154,7 +154,7 @@ try {
   const fakeApi = (username) => ({ getMe: async () => ({ username }) });
   await resolveBotLinks(fakeApi("paschi_tg_bot"), fakeApi("paschi_bale_bot"));
   const baleOwner = resolveIdentity({ platform: "bale", platformUserId: "77001", name: "بله‌ای" });
-  const ob = await beginTopup(baleOwner.tg_id, "p4");
+  const ob = await beginTopup(baleOwner.tg_id, "p7");
   verifyResult = 100;
   page = await anon(`trackId=${getTopup(ob.id).track_id}&success=1`);
   check("صفحهٔ بازگشتِ کاربر بله ربات بله را نشان می‌دهد", page.html.includes("ble.ir/paschi_bale_bot"));
@@ -170,7 +170,7 @@ try {
 // ── انصراف از ربات — تنها راهِ بستنِ سفارشِ درگاهی ────────────────────────────
 {
   const before = bal();
-  const o3 = await beginTopup(TG, "p6");
+  const o3 = await beginTopup(TG, "p9");
   check("انصراف کاربر روی سفارش درگاهی", cancelTopup(o3.id, TG) && getTopup(o3.id).status === "rejected");
   check("انصراف با شناسهٔ غلط رد می‌شود", cancelTopup(o.id, 1) === false);
   verifyResult = 100;
@@ -185,12 +185,12 @@ try {
 // مقایسهٔ سخت مبلغ) پولش می‌رفت و سکه نمی‌آمد.
 {
   const before = bal();
-  const o4 = await beginTopup(TG, "p4");
+  const o4 = await beginTopup(TG, "p7");
   const stored = getTopup(o4.id);
-  const pkg = findPackage("p4");
-  const saved = { coins: pkg.coins, price: pkg.price };
-  // «استقرار»: همان شناسه، سکه و قیمتِ دیگر
-  pkg.coins = saved.coins + 7;
+  const pkg = findPackage("p7");
+  const saved = { credit: pkg.credit, price: pkg.price };
+  // «استقرار»: همان شناسه، اعتبار و قیمتِ دیگر
+  pkg.credit = saved.credit + 7_000;
   pkg.price = saved.price + 12_000;
   try {
     verifyResult = 100;
@@ -198,7 +198,7 @@ try {
     check("درگاه مبلغِ زمانِ ساخت را برمی‌گرداند، نه قیمت امروز", v.amountToman === stored.price_toman, `${v.amountToman} · ${stored.price_toman}`);
     const r4 = await settleTopup({ trackId: stored.track_id });
     check("سفارش قدیمی پس از تغییر قیمت واریز می‌شود", r4.outcome === "credited", r4.outcome);
-    check("سکهٔ ذخیره‌شده روی ردیف واریز شد، نه سکهٔ پکیج امروز", bal() === before + stored.coins, `${bal()} (انتظار ${before + stored.coins})`);
+    check("اعتبارِ ذخیره‌شده روی ردیف واریز شد، نه اعتبارِ پکیج امروز", bal() === before + stored.credit_toman, `${bal()} (انتظار ${before + stored.credit_toman})`);
     check("قیمت روی ردیف همان قیمت زمانِ ساخت ماند", getTopup(o4.id).price_toman === saved.price, String(getTopup(o4.id).price_toman));
   } finally {
     Object.assign(pkg, saved);

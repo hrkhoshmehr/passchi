@@ -105,8 +105,8 @@ const aboutGone = notified.filter((x) => !retryOf(x).length);
 check("برای هر جلسهٔ مُرده یک خبر رفت", notified.length === 2, String(notified.length));
 check("خبر به صاحبِ جلسه رفت", notified.every((x) => x.userId === USER));
 check(
-  "خبر می‌گوید کار قطع شد و سکه برگشت",
-  notified.every((x) => x.text.includes("وسط راه قطع شد") && x.text.includes("سکه‌هات کامل برگشت")),
+  "خبر می‌گوید کار قطع شد و پول برگشت",
+  notified.every((x) => x.text.includes("وسط راه قطع شد") && x.text.includes("پولت کامل برگشت")),
 );
 check("جلسه‌ای که فایلش هست دکمهٔ «دوباره» دارد", Boolean(aboutDead));
 check(

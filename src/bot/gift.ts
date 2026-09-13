@@ -1,54 +1,30 @@
 /**
- * کد هدیه — راهِ ادمین برای دادن سکه بدون گرفتن پول.
+ * کد هدیه — راهِ ادمین برای دادنِ اعتبار بدون گرفتن پول، به **تومان**.
  *
  * `/grant` از قبل هست ولی شناسهٔ عددیِ گیرنده را می‌خواهد، و آن شناسه را
- * فقط کسی دارد که *قبلاً* با ربات حرف زده باشد. یعنی دقیقاً برای کاربر تازه
- * — همان کسی که هدیه بیشترین اثر را رویش دارد — کار نمی‌کند.
+ * فقط کسی دارد که *قبلاً* با ربات حرف زده باشد. پس اینجا جهتِ جریان برعکس
+ * است: ادمین یک **لینک** می‌سازد و گیرنده با زدن رویش خودش را معرفی می‌کند.
  *
- * پس اینجا جهتِ جریان برعکس می‌شود: ادمین یک **لینک** می‌سازد و می‌فرستد،
- * و گیرنده با زدن رویش خودش را معرفی می‌کند. نه شناسه‌ای لازم است، نه
- * گیرنده باید از قبل کاربر باشد.
- *
- * لینک، همان مسیرِ `/start` است با پیشوند `g_` — همان الگویی که لینک دعوت
- * جلسه (`j_`) از آن استفاده می‌کند.
+ * لینک، همان مسیرِ `/start` است با پیشوند `g_` — همان الگوی لینک دعوت (`j_`).
  */
 
 import { randomBytes } from "node:crypto";
 import type { Api } from "grammy";
 import { logger } from "../util/logger.js";
 import { toFaDigits } from "../util/time.js";
-import {
-  balanceCoins, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtCoins,
-} from "../billing/coins.js";
-import { COIN_MEANING } from "./strings.js";
+import { RATE_LINE, TOMAN_PER_MINUTE, fmtMinutesFor, fmtToman, priceOf } from "../billing/money.js";
 import { grant } from "../billing/ledger.js";
 import { claimGift, createGift, getGift, giftClaimedBy, giftUses, type GiftRow } from "../db/index.js";
 import { isBale } from "./identity.js";
 import { getUser } from "../db/index.js";
 
-/**
- * پیش‌فرضِ هدیه: بیست سکه.
- *
- * هر سکه یک دقیقه صوت است، پس بیست سکه یعنی بیست دقیقه — کافی برای اینکه
- * گیرنده یک جلسهٔ کوتاه یا نیمی از یک کلاس را واقعاً ببیند، و کم‌تر از آنکه
- * دادنش به چند نفر گران تمام شود.
- */
-export const DEFAULT_GIFT_COINS = 20;
+/** پیش‌فرضِ هدیه: بیست هزار تومان — همان هدیهٔ شروع. */
+export const DEFAULT_GIFT_TOMAN = 20_000;
 
-/**
- * سکهٔ لازم برای یک کلاس کامل — مبنای جمله‌ای که انتظار گیرنده را تنظیم می‌کند.
- *
- * از `costCoins` درمی‌آید نه از عدد ثابت، تا اگر نرخ عوض شد این جمله هم با آن
- * برود. نود دقیقه، همان طولی است که بقیهٔ متن‌ها هم «یک کلاس» می‌نامندش.
- */
-const FULL_CLASS_COINS = costCoins(90 * 60);
+/** قیمتِ یک کلاس کامل ۹۰ دقیقه‌ای — از `priceOf`، تا با نرخ برود. */
+const FULL_CLASS_TOMAN = priceOf(90 * 60);
 
-/**
- * حروفِ کد.
- *
- * `0/O` و `1/I/l` عمداً نیستند: کد گاهی به‌جای کلیک روی لینک، دستی تایپ
- * می‌شود و این جفت‌ها همان‌جایی‌اند که اشتباه می‌شود.
- */
+/** حروفِ کد، بی `0/O` و `1/I/l` که دستی اشتباه تایپ می‌شوند. */
 const ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
 
 function newCode(len = 8): string {
@@ -58,22 +34,10 @@ function newCode(len = 8): string {
   return out;
 }
 
-/**
- * نام کاربری ربات، به تفکیک سکو.
- *
- * کلید، خودِ شیء `Api` است نه یک متغیر ساده: تلگرام و بله دو ربات جدا با دو
- * نام کاربری‌اند، و یک متغیرِ مشترک یعنی هر کدام که زودتر صدا زده شود نامش
- * برای دیگری هم به کار می‌رود — لینکی که به چت اشتباه می‌برد.
- */
+/** نام کاربری ربات، به تفکیکِ شیء `Api` — تلگرام و بله دو ربات‌اند. */
 const usernames = new WeakMap<Api, string>();
 
-/**
- * لینک هدیه روی سکوی همان رباتی که دستور از آن آمده.
- *
- * دامنه هم با سکو عوض می‌شود: `t.me` برای تلگرام و `ble.ir` برای بله. لینکِ
- * `t.me` داخل بله باز نمی‌شود، پس ادمینی که از بله `/gift` می‌زند باید لینکِ
- * بله بگیرد.
- */
+/** لینک هدیه روی سکوی همان رباتی که دستور از آن آمده (`t.me` یا `ble.ir`). */
 export async function giftLink(api: Api, code: string): Promise<string> {
   let username = usernames.get(api);
   if (!username) {
@@ -91,22 +55,19 @@ export interface NewGift {
 
 export async function mintGift(
   api: Api,
-  opt: { coins: number; maxUses: number; note?: string | null; createdBy: number; days?: number | null },
+  opt: { toman: number; maxUses: number; note?: string | null; createdBy: number; days?: number | null },
 ): Promise<NewGift> {
   const expiresAt =
-    opt.days && opt.days > 0
-      ? new Date(Date.now() + opt.days * 86_400_000).toISOString()
-      : null;
+    opt.days && opt.days > 0 ? new Date(Date.now() + opt.days * 86_400_000).toISOString() : null;
 
-  // برخورد کد عملاً ناممکن است ولی نتیجه‌اش — پرت‌شدن روی کلید تکراری — آنقدر
-  // بد است که چند تلاش ارزانش می‌ارزد.
+  // برخورد کد عملاً ناممکن است ولی پرت‌شدن روی کلید تکراری آن‌قدر بد است که چند تلاش بارزد.
   let gift: GiftRow | null = null;
   for (let i = 0; i < 5 && !gift; i++) {
     const code = newCode();
     if (getGift(code)) continue;
     gift = createGift({
       code,
-      coins: opt.coins,
+      toman: opt.toman,
       maxUses: opt.maxUses,
       note: opt.note ?? null,
       createdBy: opt.createdBy,
@@ -115,98 +76,60 @@ export async function mintGift(
   }
   if (!gift) throw new Error("ساخت کد هدیه ناموفق بود.");
 
-  logger.info(
-    { code: gift.code, coins: gift.coins, maxUses: gift.max_uses, by: opt.createdBy },
-    "gift minted",
-  );
+  logger.info({ code: gift.code, toman: gift.toman, maxUses: gift.max_uses, by: opt.createdBy }, "gift minted");
   return { gift, link: await giftLink(api, gift.code) };
 }
 
 export type ClaimOutcome =
-  | { ok: true; coins: number; balanceSec: number }
+  | { ok: true; toman: number; balance: number }
   | { ok: false; reason: "unknown" | "revoked" | "expired" | "already" | "exhausted" };
 
 /**
- * برداشتِ کد توسط گیرنده.
- *
- * ترتیب عمداً «اول ثبتِ برداشت، بعد واریز» است. اگر برعکس بود، شکستِ ثبت پس
- * از واریزِ موفق یعنی سکهٔ داده‌شده بدون سطرِ متناظر — و کدِ یک‌بارمصرفی که
- * باز مانده. این‌طوری بدترین حالت، سطرِ برداشتی است که سکه‌اش نرسیده و در
- * دفتر کل هم اثری ندارد؛ قابلِ دیدن و قابلِ جبران.
+ * برداشتِ کد توسط گیرنده — «اول ثبتِ برداشت، بعد واریز»، تا بدترین حالت
+ * سطرِ برداشتی باشد که پولش نرسیده و قابلِ دیدن و جبران است.
  */
 export function claim(code: string, tgId: number): ClaimOutcome {
   const g = getGift(code);
   if (!g) return { ok: false, reason: "unknown" };
   if (g.revoked) return { ok: false, reason: "revoked" };
-  if (g.expires_at && new Date(g.expires_at).getTime() < Date.now()) {
-    return { ok: false, reason: "expired" };
-  }
+  if (g.expires_at && new Date(g.expires_at).getTime() < Date.now()) return { ok: false, reason: "expired" };
   if (giftClaimedBy(code, tgId)) return { ok: false, reason: "already" };
 
-  if (!claimGift(code, tgId, g.coins)) {
-    // تراکنش رد شد: یا سهمیه در همین لحظه پر شد، یا همین کاربر همزمان دو بار زد.
+  if (!claimGift(code, tgId, g.toman)) {
     return { ok: false, reason: giftClaimedBy(code, tgId) ? "already" : "exhausted" };
   }
 
-  const balanceSec = grant(tgId, coinsToSec(g.coins), "grant");
-  logger.info({ code, tgId, coins: g.coins }, "gift claimed");
-  return { ok: true, coins: g.coins, balanceSec };
+  const balance = grant(tgId, g.toman, "grant");
+  logger.info({ code, tgId, toman: g.toman }, "gift claimed");
+  return { ok: true, toman: g.toman, balance };
 }
 
 /**
  * پیامی که گیرنده پس از برداشتِ موفق می‌بیند.
  *
- * «۲۰ سکه» و «۲۰ دقیقه» با نرخ ۱ یک عددند، پس گفتنِ هر دو در یک نفس کاربر را
- * دنبال تفاوتی می‌فرستد که نیست. یک بار معنیِ سکه گفته می‌شود — و معادل
- * دقیقه‌ای فقط وقتی می‌آید که به ساعت رسیده باشد و واقعاً ترجمه لازم باشد.
- *
- * موجودی هم فقط وقتی نشان داده می‌شود که با خودِ هدیه فرق داشته باشد؛ برای
- * کاربر تازه این دو عدد یکی‌اند و تکرارِ یک عدد در دو خط، پیام را شلوغ می‌کند.
+ * انتظار را همین‌جا تنظیم می‌کند: اگر موجودی به یک کلاس کامل نمی‌رسد، گفته
+ * می‌شود با آن چه می‌شود کرد (صوتِ کوتاه یا سهمِ جزوهٔ هم‌کلاسی)، وگرنه گیرنده
+ * صوت کلاسش را می‌فرستد و تازه آن‌وقت به «موجودیت کافی نیست» می‌خورد.
  */
-export function claimedMessage(coins: number, balanceSec: number): string {
-  const asTime = coinsAsMinutesIfUseful(coins);
-  const balance = balanceCoins(balanceSec);
-
-  // خطوط خالی بین گروه‌ها می‌آیند نه داخلشان، وگرنه هر سطرِ اختیاریِ حذف‌شده
-  // یک خط خالیِ اضافه جا می‌گذارد.
+export function claimedMessage(toman: number, balance: number): string {
   const groups = [
-    [`🎁 <b>${fmtCoins(coins)}</b> به حسابت اضافه شد!`],
+    [`🎁 <b>${fmtToman(toman)}</b> به حسابت اضافه شد!`],
     [
-      // «۲۰ سکه یعنی ۲۰ دقیقه» عدد را دو بار می‌گوید. جملهٔ معنیِ سکه به‌تنهایی
-      // همان را می‌رساند، و برای گیرنده‌ای که تازه با واژهٔ «سکه» روبه‌رو شده
-      // کافی است. معادل ساعتی فقط وقتی می‌آید که خودش خبر تازه باشد.
-      asTime ? `یعنی ${asTime}. <i>${COIN_MEANING}.</i>` : `<i>${COIN_MEANING}.</i>`,
-      ...(balance !== coins ? [`موجودیت: <b>${fmtCoins(balance)}</b>`] : []),
+      `<i>${fmtMinutesFor(toman)} · ${RATE_LINE}.</i>`,
+      ...(balance !== toman ? [`موجودیت: <b>${fmtToman(balance)}</b>`] : []),
     ],
-    // انتظار را همین‌جا تنظیم می‌کند: یک کلاس کامل ۹۰ دقیقه‌ای به اندازهٔ
-    // `FULL_CLASS_COINS` سکه می‌خواهد، پس هدیهٔ کوچک برای *کل* یک کلاس کافی
-    // نیست. اگر اینجا گفته نشود، گیرنده صوت کلاسش را آپلود می‌کند و تازه
-    // آن‌وقت به دیوارِ «سکه‌هات کم میاد» می‌خورد — بدترین لحظهٔ ممکن.
-    //
-    // مبنا **موجودی** است نه خودِ هدیه: کسی که از قبل سکه داشته، آن‌ها را هم
-    // می‌تواند خرج کند و گفتنِ عددِ هدیه به او کمتر از واقعیت نشان می‌دهد.
-    //
-    // ⚠️ جملهٔ قبلی می‌گفت «یا ۲۰ دقیقه از یه کلاس رو» — وعده‌ای که محصول
-    // نمی‌تواند بدهد: فایل یا کامل تحلیل می‌شود یا اصلاً شروع نمی‌شود، و
-    // بخشی از یک فایل را جدا نمی‌کند. حالا فقط آنچه واقعاً ممکن است: صوتی تا
-    // همین چند دقیقه، یا جزوه‌ای که هم‌کلاسی شریک شده و سهمش چند سکه است.
-    ...(balance < FULL_CLASS_COINS
+    ...(balance < FULL_CLASS_TOMAN
       ? [[
-          `با ${fmtCoins(balance)} می‌تونی صوتی تا ${toFaDigits(balance)} دقیقه بفرستی. ` +
-            `یه کلاس کامل ۹۰ دقیقه‌ای ${fmtCoins(FULL_CLASS_COINS)} می‌خواد.`,
-          "با همین سکه‌ها جزوه‌ای رو هم که هم‌کلاسیت شریک شده می‌تونی بگیری.",
+          `با ${fmtToman(balance)} می‌تونی صوتی تا ${toFaDigits(Math.floor(balance / TOMAN_PER_MINUTE))} دقیقه بفرستی. ` +
+            `یه کلاس کامل ۹۰ دقیقه‌ای ${fmtToman(FULL_CLASS_TOMAN)} میشه.`,
+          "با همین موجودی سهمِ جزوه‌ای رو هم که هم‌کلاسیت شریک شده می‌تونی بدی.",
         ]]
       : []),
-    /**
-     * نمونه پیش از آپلود.
-     *
-     * لینکِ هدیه از خوش‌آمد و تورِ نمونه رد می‌شود؛ پس گیرنده هیچ‌وقت ندیده
-     * خروجی چه شکلی است. دکمهٔ نمونه زیرِ همین پیام می‌نشیند (`index.ts`).
-     */
     ["اول نمونهٔ یه کلاس واقعی رو ببین، یا همین حالا صوت کلاستو بفرست 👇"],
   ];
   return groups.map((x) => x.join("\n")).join("\n\n");
 }
+
 const REFUSALS: Record<Exclude<ClaimOutcome, { ok: true }>["reason"], string> = {
   unknown: "این کد هدیه معتبر نیست.",
   revoked: "این کد هدیه باطل شده.",
@@ -219,7 +142,7 @@ export function refusalMessage(reason: Exclude<ClaimOutcome, { ok: true }>["reas
   return REFUSALS[reason];
 }
 
-/** خلاصهٔ یک کد برای ادمین: چند بار برداشته شده و چه کسانی. */
+/** خلاصهٔ یک کد برای ادمین: چند بار برداشته شده. */
 export function giftSummary(g: GiftRow): string {
   const used = giftUses(g.code);
   const state = g.revoked
@@ -230,7 +153,7 @@ export function giftSummary(g: GiftRow): string {
         ? " · <b>تمام</b>"
         : "";
   const uses = g.max_uses === 1 ? "یک‌بارمصرف" : `${toFaDigits(used)} از ${toFaDigits(g.max_uses)}`;
-  return `<code>${g.code}</code> — ${fmtCoins(g.coins)} · ${uses}${state}`;
+  return `<code>${g.code}</code> — ${fmtToman(g.toman)} · ${uses}${state}`;
 }
 
 /** نام گیرنده برای گزارشِ برداشت به ادمین. */

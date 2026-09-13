@@ -26,6 +26,7 @@ import {
 } from "../db/index.js";
 import type { PipelineOutput } from "../pipeline.js";
 import { JobFailure } from "../util/job-failure.js";
+import { priceOf } from "../billing/money.js";
 
 export interface JobSpec {
   sessionId: string;
@@ -54,9 +55,10 @@ export interface JobSpec {
  */
 export function startJob(job: JobSpec): void {
   const free = job.mode === "free_trial";
-  const reservedSec = free ? 0 : job.declaredDurationSec > 0 ? job.declaredDurationSec : 60;
+  // به تومان — همان `priceOf` که صفحهٔ تأیید نشان داد. مدتِ نامعلوم: یک دقیقه، تسویه جبران می‌کند.
+  const reserved = free ? 0 : priceOf(job.declaredDurationSec > 0 ? job.declaredDurationSec : 60);
 
-  if (!free) reserve(job.userId, reservedSec, job.sessionId);
+  if (!free) reserve(job.userId, reserved, job.sessionId);
 
   enqueue(String(job.userId), async (signal) => {
     try {
@@ -76,10 +78,10 @@ export function startJob(job: JobSpec): void {
       if (free) {
         markFreeRunUsed(job.userId);
       } else {
-        // تسویه: فقط تفاوت مدت واقعی و مدت رزروشده جابه‌جا می‌شود
-        const actualSec = Math.round(out.originalDurationMs / 1000);
-        commit(job.userId, reservedSec, actualSec, job.sessionId);
-        registerOwner(job.sessionId, job.userId, actualSec);
+        // تسویه: فقط تفاوتِ مبلغِ واقعی و رزرو جابه‌جا می‌شود
+        const actual = priceOf(Math.round(out.originalDurationMs / 1000));
+        commit(job.userId, reserved, actual, job.sessionId);
+        registerOwner(job.sessionId, job.userId, actual);
       }
 
       await job.onDone?.(out);
@@ -89,12 +91,12 @@ export function startJob(job: JobSpec): void {
       updateSession(job.sessionId, { status: "error", error: message.slice(0, 500) });
       if (!free) {
         // بی‌کلام: همان بخشی که به رونویسی رفت کم می‌شود — چرایی در `jobFailedMessage`.
-        const heardSec =
+        const heard =
           e instanceof JobFailure && e.kind === "no_speech"
-            ? Math.min(reservedSec, Math.round((getSession(job.sessionId)?.billed_ms ?? 0) / 1000))
+            ? Math.min(reserved, priceOf(Math.round((getSession(job.sessionId)?.billed_ms ?? 0) / 1000)))
             : 0;
-        if (heardSec > 0) commit(job.userId, reservedSec, heardSec, job.sessionId);
-        else refund(job.userId, reservedSec, job.sessionId, "کار ناموفق بود");
+        if (heard > 0) commit(job.userId, reserved, heard, job.sessionId);
+        else refund(job.userId, reserved, job.sessionId, "کار ناموفق بود");
       }
       await job.onError?.(message);
     }
@@ -131,14 +133,14 @@ export type Notify = (
 export function recoverInterrupted(notify: Notify = notifyUser): number {
   const dangling = danglingReservations();
   for (const d of dangling) {
-    refund(d.tgId, d.reservedSec, d.sessionId, "سرور وسط پردازش متوقف شد");
+    refund(d.tgId, d.reserved, d.sessionId, "سرور وسط پردازش متوقف شد");
     updateSession(d.sessionId, {
       status: "error",
-      error: "سرور وسط پردازش متوقف شد؛ سکه‌ها برگشت. دوباره بفرست.",
+      error: "سرور وسط پردازش متوقف شد؛ پولت برگشت. دوباره بفرست.",
     });
     logger.warn(
-      { sessionId: d.sessionId, tgId: d.tgId, sec: d.reservedSec },
-      "جلسهٔ نیمه‌کاره جمع شد و سکه برگشت",
+      { sessionId: d.sessionId, tgId: d.tgId, toman: d.reserved },
+      "جلسهٔ نیمه‌کاره جمع شد و پول برگشت",
     );
 
     /**
@@ -195,7 +197,7 @@ export function recoverInterrupted(notify: Notify = notifyUser): number {
   for (const o of orphans) {
     updateSession(o.id, {
       status: "error",
-      error: "پردازش شروع نشد؛ سکه‌ای کم نشده. دوباره بفرست.",
+      error: "پردازش شروع نشد؛ پولی کم نشده. دوباره بفرست.",
     });
     logger.warn({ sessionId: o.id, tgId: o.tgId }, "جلسهٔ بدون رزرو جمع شد");
   }

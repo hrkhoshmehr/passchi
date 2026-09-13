@@ -1,66 +1,52 @@
 /**
- * تقسیم هزینهٔ یک جلسه بین هم‌کلاسی‌ها.
+ * تقسیم هزینهٔ یک جلسه بین هم‌کلاسی‌ها — به تومان.
  *
  * مسئله: یک جلسه یک بار پردازش می‌شود ولی بیست‌وپنج نفر همان درس را دارند.
- * اگر هرکس جدا بفرستد، بیست‌وپنج بار هزینه می‌دهیم برای یک محتوا. اگر فقط
- * یک نفر بفرستد، همان یک نفر تمام هزینه را می‌دهد و بقیه مفت سوار می‌شوند.
  *
- * قاعده: **سهمِ ثابت، تا سقف، بعدش رایگان.** مالک هنگام روشن‌کردن اشتراک
- * می‌گوید تقریباً چند نفر است و از همان‌جا `seat` معلوم می‌شود — هزینه‌ای
- * که هر هم‌کلاسی هنگام برداشتن می‌دهد، ثابت و از پیش معلوم. همان مبلغ به
- * حساب مالک برمی‌گردد، تا جمعِ بازگشت به نصفِ هزینه (`cap`) برسد. از آن
- * به بعد برداشتن **رایگان** است: نه از تازه‌وارد چیزی کم می‌شود، نه پلتفرم
- * مابه‌التفاوت را برمی‌دارد.
+ * قاعده (۲۰۲۶-۰۹-۱۴): **هر کس سهمِ برابرش را می‌دهد، و صاحبِ جلسه فقط سهمِ خودش
+ * را.** صاحب جلسه می‌گوید لینک را برای چند نفر (با خودش) می‌فرستد؛ سهم =
+ * قیمت ÷ همان تعداد (`shareSeat`). هر هم‌کلاسی همان سهم را می‌دهد و همان به
+ * صاحب جلسه برمی‌گردد تا جمعش به «قیمت منهای سهمِ خودش» (`shareCap`) برسد؛
+ * بعد برای بقیه مجانی است.
  *
- * روی یک جلسهٔ ۵۲ سکه‌ای (`cap` = ۲۶):
+ * سه ویژگی که عمدی‌اند:
  *
- *   مالک «۵ نفر» می‌گوید  → هر نفر ۶ سکه، تا جمعاً ۲۶ به مالک برگردد، بعد رایگان
- *   مالک «۱۰ نفر» می‌گوید → هر نفر ۳ سکه، تا جمعاً ۲۶ به مالک برگردد، بعد رایگان
- *
- * کمتر از پنج نفر پذیرفته نمی‌شود؛ چرایش در `SHARE_TARGET_MIN`.
- *
- * سه ویژگی که عمداً این‌طور انتخاب شده‌اند:
- *
- * • **مالک هیچ‌وقت سود نمی‌کند.** بازگشت تا سقفِ نصفِ چیزی است که خودش داده.
- *   اگر بیشتر بود، محصول تبدیل می‌شد به طرحی که مردم برای درآمد واردش می‌شوند
- *   و انگیزه از «جزوهٔ درسم را می‌خواهم» به «عضو جمع کنم» جابه‌جا می‌شد.
- *
- * • **سقف بازگشت، حلقهٔ بی‌انتها را می‌بندد.** بدون آن، مالک پس می‌گیرد،
- *   جلسهٔ بعد را می‌خرد، دوباره پس می‌گیرد — و اگر تازه‌واردها با سکهٔ هدیه
- *   پرداخت کنند، این چرخه بدون ورود هیچ پولی می‌چرخد. چرایش در
- *   `REFUND_CAP_PCT` و اندازه‌گیری‌اش در `scripts/economics.mjs`.
- *
- * • **پلتفرم دست‌کم نصفِ هزینهٔ جلسه را از مالک نگه می‌دارد،** فارغ از تعداد
- *   اعضا؛ و بعد از سقف، از تازه‌واردها چیزی نمی‌گیرد. مابه‌التفاوتِ حاشیهٔ
- *   پکیجِ خریداری‌شدهٔ مالک همان است که هزینهٔ لایهٔ رایگان را می‌پوشاند.
+ * • **صاحب جلسه سود نمی‌کند.** برگشتی هیچ‌وقت از آنچه داده منهای سهمِ خودش
+ *   بیشتر نمی‌شود.
+ * • **سهم و برگشت یک تراکنش‌اند** (`atomic`)؛ مردنِ پروسه میانِ «از تازه‌وارد کم
+ *   شد» و «به صاحب جلسه رسید» نیمه‌کاره نمی‌ماند.
+ * • **هدیه بودجهٔ هفتگی دارد.** سهمی که با اعتبارِ هدیه (نه خریداری‌شده) داده
+ *   می‌شود به‌اعتبارِ واقعیِ صاحب جلسه تبدیل می‌شود؛ ده حسابِ ساختگی بی این سقف
+ *   یعنی ده سهمِ مجانی که هزینه‌اش را ما داده‌ایم. `SHARE_GIFT_TOMAN_PER_WEEK`.
  */
 
 import { db } from "../db/index.js";
+import { config } from "../config.js";
 import { logger } from "../util/logger.js";
-import { SHARE_TARGET, SHARE_TARGET_MIN, coinsToSec, costCoins, shareBack } from "./coins.js";
-import { InsufficientCredit, move } from "./ledger.js";
+import { SHARE_TARGET, priceOf, shareCap, shareSeat } from "./money.js";
+import { InsufficientCredit, atomic, paidCredit } from "./ledger.js";
 
 export interface Member {
   session_id: string;
   tg_id: number;
-  paid_sec: number;
+  paid_toman: number;
+  gift_toman: number;
   role: "owner" | "member";
   joined_at: string;
 }
 
 export interface JoinResult {
-  /** آنچه از تازه‌وارد کسر شد (۰ اگر سقف پر بوده و برداشتن رایگان شده) */
-  chargedSec: number;
-  /** سقفِ بازگشتِ مالک پر بوده و این برداشتن رایگان انجام شد */
+  /** آنچه از تازه‌وارد کسر شد (۰ یعنی مجانی بود) */
+  charged: number;
   free: boolean;
-  /** سهمِ ثابتِ هر نفر در این جلسه */
-  seatSec: number;
+  /** سهمِ هر نفر در این جلسه */
+  seat: number;
   /** شمار هم‌کلاسی‌هایی که تا حالا برداشته‌اند (بدون مالک) */
   memberCount: number;
   /** این برداشتن چقدر به مالک برگرداند */
-  ownerRefundSec: number;
+  ownerRefund: number;
   ownerTgId: number;
-  /** سقفِ بازگشت دقیقاً با همین برداشتن پر شد */
+  /** برگشتیِ مالک دقیقاً با همین برداشتن کامل شد */
   capJustReached: boolean;
 }
 
@@ -78,6 +64,14 @@ export class NotShareable extends Error {
   }
 }
 
+/** بودجهٔ هفتگیِ سهم‌های هدیه‌ای پر شده؛ تازه‌وارد باید با اعتبارِ خریداری‌شده بیاید. */
+export class GiftBudgetExhausted extends Error {
+  constructor(readonly seat: number) {
+    super("gift budget exhausted");
+    this.name = "GiftBudgetExhausted";
+  }
+}
+
 export function members(sessionId: string): Member[] {
   return db
     .prepare(`SELECT * FROM session_members WHERE session_id = ? ORDER BY joined_at`)
@@ -90,47 +84,34 @@ export function isMember(sessionId: string, tgId: number): boolean {
   );
 }
 
-/**
- * فرستنده به‌عنوان مالک ثبت می‌شود، با کل هزینهٔ جلسه به پای خودش.
- *
- * `paid_sec` روی مضربِ دقیقهٔ کامل نشانده می‌شود تا حساب‌وکتابِ بازگشت
- * (که در سکه انجام می‌شود) بی‌گِردکردنِ خطادار سرراست بماند.
- */
-export function registerOwner(sessionId: string, tgId: number, costSec: number): void {
+/** فرستنده به‌عنوان مالک ثبت می‌شود، با آنچه واقعاً برای جلسه داد. */
+export function registerOwner(sessionId: string, tgId: number, paidToman: number): void {
   db.prepare(
-    `INSERT INTO session_members (session_id, tg_id, paid_sec, role) VALUES (?, ?, ?, 'owner')
-     ON CONFLICT(session_id, tg_id) DO UPDATE SET paid_sec = excluded.paid_sec`,
-  ).run(sessionId, tgId, coinsToSec(costCoins(costSec)));
+    `INSERT INTO session_members (session_id, tg_id, paid_toman, role) VALUES (?, ?, ?, 'owner')
+     ON CONFLICT(session_id, tg_id) DO UPDATE SET paid_toman = excluded.paid_toman`,
+  ).run(sessionId, tgId, Math.max(0, Math.round(paidToman)));
 }
 
-/**
- * مالک تعداد تقریبیِ کلاس را انتخاب می‌کند؛ سهمِ ثابتِ هر نفر از همین درمی‌آید.
- *
- * کف روی `SHARE_TARGET_MIN` بسته است و **اینجا** اعمال می‌شود نه در صفحه‌کلید،
- * چون صفحه‌کلید تنها راهِ رسیدن به این تابع نیست: دست‌کدِ دستی، مینی‌اپ و هر
- * مسیر بعدی هم از همین‌جا رد می‌شوند. چراییِ خودِ کف در `SHARE_TARGET_MIN`.
- */
+/** مالک تعدادِ کلاس (با خودش) را انتخاب می‌کند؛ کف دو نفر اینجا بسته است. */
 export function setShareTarget(sessionId: string, people: number): void {
-  db.prepare(`UPDATE sessions SET share_target = ? WHERE id = ?`).run(
-    Math.max(SHARE_TARGET_MIN, Math.round(people)),
-    sessionId,
-  );
+  db.prepare(`UPDATE sessions SET share_target = ? WHERE id = ?`).run(Math.max(2, Math.round(people)), sessionId);
+}
+
+export function setShareEnabled(sessionId: string, enabled: boolean): void {
+  db.prepare(`UPDATE sessions SET share_enabled = ? WHERE id = ?`).run(enabled ? 1 : 0, sessionId);
 }
 
 /**
- * هزینه‌ای که سهم و سقفِ برگشت از آن حساب می‌شود.
+ * قیمتی که سهم‌ها از آن حساب می‌شوند: آنچه مالک بابت جلسه داد.
  *
- * برای جلسهٔ معمولی کلِ هزینه است، چون مالک کلش را داده. برای **خرید
- * گروهی** فقط آنچه مالک خودش داد: او یک سهم داده، و اگر مبنا کلِ جلسه بود
- * هم‌کلاسی‌های دیرآمده تا نصفِ **کل** هزینه به او برمی‌گرداندند — بیش از
- * آنچه پرداخته، یعنی سود. همان سقفِ پنجاه درصد می‌ماند، روی سهمِ خودش.
+ * جلسهٔ رایگانِ اول هم مالکی دارد که «داده» — به‌اندازهٔ اعتبارِ رایگان — پس
+ * همان ملاک است. جلسه‌های قدیمیِ خرید گروهی فقط سهمِ مالک را دارند.
  */
-export function shareBasisSec(s: { id: string; original_ms: number }): number {
-  // خرید گروهیِ پیش از پرداخت برداشته شد؛ جلسه‌های قدیمیِ آن هنوز در جدول‌اند.
+export function shareBasis(s: { id: string; original_ms: number }): number {
   const g = db
     .prepare(`SELECT owner_paid_sec FROM group_buys WHERE session_id = ? AND status = 'done'`)
     .get(s.id) as unknown as { owner_paid_sec: number | null } | undefined;
-  return g?.owner_paid_sec ?? Math.round(s.original_ms / 1000);
+  return priceOf(g?.owner_paid_sec ?? Math.round(s.original_ms / 1000));
 }
 
 interface SessionCost {
@@ -142,22 +123,23 @@ interface SessionCost {
   share_target: number | null;
 }
 
+/** سهم‌های هدیه‌ای این هفته — جلسه‌های پیوستهٔ همهٔ کاربران. */
+function giftThisWeek(): number {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(gift_toman), 0) AS total FROM session_members
+        WHERE role = 'member' AND joined_at > datetime('now', '-7 days')`,
+    )
+    .get() as unknown as { total: number };
+  return Number(row.total);
+}
+
 /**
- * برداشتنِ یک جلسهٔ اشتراکی.
- *
- * سهمِ هر نفر ثابت است (`seat`، از تعدادی که مالک گفته). همان مبلغ از
- * تازه‌وارد کم و به مالک اضافه می‌شود، تا جمعِ بازگشتِ مالک به نصفِ هزینه
- * برسد. از آن به بعد برداشتن رایگان است: نه کسری، نه حرکتی در دفتر کل.
- *
- * همهٔ حرکت‌های اعتبار از دفتر کل رد می‌شوند و بررسی موجودی پیش از هر
- * نوشتنی انجام می‌شود، تا اگر تازه‌وارد اعتبار کافی نداشت هیچ‌چیز نیمه‌کاره
- * نماند.
+ * برداشتنِ یک جلسهٔ اشتراکی — سهم از تازه‌وارد، همان به مالک، یک تراکنش.
  */
 export function joinSession(sessionId: string, tgId: number): JoinResult {
   const s = db
-    .prepare(
-      `SELECT id, tg_id, status, original_ms, share_enabled, share_target FROM sessions WHERE id = ?`,
-    )
+    .prepare(`SELECT id, tg_id, status, original_ms, share_enabled, share_target FROM sessions WHERE id = ?`)
     .get(sessionId) as unknown as SessionCost | undefined;
 
   if (!s) throw new NotShareable("این جلسه پیدا نشد.");
@@ -165,93 +147,73 @@ export function joinSession(sessionId: string, tgId: number): JoinResult {
   if (!s.share_enabled) throw new NotShareable("صاحب این جلسه اشتراک‌گذاری را روشن نکرده است.");
   if (isMember(sessionId, tgId)) throw new AlreadyMember();
 
-  const costSec = shareBasisSec(s);
-  const totalCoins = costCoins(costSec);
-  const { seat: seatCoins, cap: capCoins } = shareBack(costSec, s.share_target ?? SHARE_TARGET);
-  const seatSec = coinsToSec(seatCoins);
+  const cost = shareBasis(s);
+  const people = s.share_target ?? SHARE_TARGET;
+  const seat = shareSeat(cost, people);
+  const cap = shareCap(cost, people);
 
-  const existing = members(sessionId);
-  const owner = existing.find((m) => m.role === "owner");
-  const ownerTgId = owner?.tg_id ?? s.tg_id;
-  const classmates = existing.filter((m) => m.role === "member").length;
+  const out = atomic((m) => {
+    const list = members(sessionId);
+    const owner = list.find((x) => x.role === "owner");
+    const ownerTgId = owner?.tg_id ?? s.tg_id;
+    const classmates = list.filter((x) => x.role === "member").length;
 
-  // چقدر از سقفِ بازگشتِ مالک باقی مانده — از روی آنچه هنوز به پایش نوشته شده
-  const ownerPaidCoins = owner ? costCoins(owner.paid_sec) : totalCoins;
-  const refundedCoins = Math.max(0, totalCoins - ownerPaidCoins);
-  const remainingCoins = Math.max(0, capCoins - refundedCoins);
+    // آنچه تا حالا به مالک برگشته = آنچه هم‌کلاسی‌ها داده‌اند
+    const refunded = list.filter((x) => x.role === "member").reduce((a, x) => a + x.paid_toman, 0);
+    const remaining = owner ? Math.max(0, cap - refunded) : 0;
+    const charge = Math.min(seat, remaining);
 
-  const chargeCoins = remainingCoins <= 0 ? 0 : Math.min(seatCoins, remainingCoins);
-  const chargeSec = coinsToSec(chargeCoins);
-
-  // بررسی موجودی *قبل* از هر نوشتنی — فقط وقتی واقعاً چیزی کسر می‌شود
-  if (chargeCoins > 0) {
-    const bal = db.prepare(`SELECT credit_sec FROM users WHERE tg_id = ?`).get(tgId) as unknown as
-      | { credit_sec: number }
-      | undefined;
-    if (!bal) throw new NotShareable("اول ربات را با /start شروع کن.");
-    if (bal.credit_sec < chargeSec) throw new InsufficientCredit(bal.credit_sec, chargeSec);
-  }
-
-  db.prepare(
-    `INSERT INTO session_members (session_id, tg_id, paid_sec, role) VALUES (?, ?, ?, 'member')`,
-  ).run(sessionId, tgId, chargeSec);
-
-  let ownerRefundSec = 0;
-  let capJustReached = false;
-
-  if (chargeCoins > 0) {
-    move({ tgId, deltaSec: -chargeSec, reason: "share_charge", sessionId, note: "سهمِ هم‌کلاسی" });
-    if (owner) {
-      move({
-        tgId: ownerTgId,
-        deltaSec: chargeSec,
-        reason: "share_refund",
-        sessionId,
-        note: "هم‌کلاسی برداشت",
-      });
-      db.prepare(
-        `UPDATE session_members SET paid_sec = MAX(0, paid_sec - ?) WHERE session_id = ? AND tg_id = ?`,
-      ).run(chargeSec, sessionId, ownerTgId);
-      ownerRefundSec = chargeSec;
-      capJustReached = remainingCoins - chargeCoins <= 0;
+    let gift = 0;
+    if (charge > 0) {
+      const bal = db.prepare(`SELECT credit_toman FROM users WHERE tg_id = ?`).get(tgId) as unknown as
+        | { credit_toman: number }
+        | undefined;
+      if (!bal) throw new NotShareable("اول ربات را با /start شروع کن.");
+      if (bal.credit_toman < charge) throw new InsufficientCredit(bal.credit_toman, charge);
+      gift = Math.max(0, charge - paidCredit(tgId));
+      if (gift > 0 && giftThisWeek() + gift > config.SHARE_GIFT_TOMAN_PER_WEEK) {
+        throw new GiftBudgetExhausted(charge);
+      }
     }
-  }
 
-  const memberCount = classmates + 1;
+    db.prepare(
+      `INSERT INTO session_members (session_id, tg_id, paid_toman, gift_toman, role) VALUES (?, ?, ?, ?, 'member')`,
+    ).run(sessionId, tgId, charge, gift);
+
+    if (charge > 0) {
+      m({ tgId, delta: -charge, reason: "share_charge", sessionId, note: "سهمِ هم‌کلاسی" });
+      m({ tgId: ownerTgId, delta: charge, reason: "share_refund", sessionId, note: "هم‌کلاسی برداشت" });
+    }
+    return { charge, ownerTgId, classmates, capJustReached: charge > 0 && remaining - charge <= 0 };
+  });
+
   logger.info(
-    { sessionId, tgId, chargeCoins, memberCount, free: chargeCoins === 0, capJustReached },
+    { sessionId, tgId, charge: out.charge, members: out.classmates + 1, capJustReached: out.capJustReached },
     "session joined",
   );
   return {
-    chargedSec: chargeSec,
-    free: chargeCoins === 0,
-    seatSec,
-    memberCount,
-    ownerRefundSec,
-    ownerTgId,
-    capJustReached,
+    charged: out.charge,
+    free: out.charge === 0,
+    seat,
+    memberCount: out.classmates + 1,
+    ownerRefund: out.charge,
+    ownerTgId: out.ownerTgId,
+    capJustReached: out.capJustReached,
   };
-}
-
-export function setShareEnabled(sessionId: string, enabled: boolean): void {
-  db.prepare(`UPDATE sessions SET share_enabled = ? WHERE id = ?`).run(enabled ? 1 : 0, sessionId);
 }
 
 export interface ShareStatus {
   enabled: boolean;
   /** شمار هم‌کلاسی‌هایی که برداشته‌اند — بدون مالک */
   memberCount: number;
-  costSec: number;
-  /** سهمِ ثابتِ هر نفر */
-  seatSec: number;
-  /** سقفِ بازگشتِ مالک (نصفِ هزینه) */
-  capSec: number;
+  cost: number;
+  seat: number;
+  /** سقفِ برگشتِ مالک: قیمت منهای سهمِ خودش */
+  cap: number;
   /** آنچه مالک تا حالا پس گرفته */
-  ownerRefundedSec: number;
-  ownerPaidSec: number;
-  /** سقف پر شده — برداشتن‌های بعدی رایگان است */
+  ownerRefunded: number;
+  /** برگشتی کامل شده — برداشتن‌های بعدی مجانی است */
   capReached: boolean;
-  /** تعدادی که مالک گفته */
   target: number;
 }
 
@@ -261,24 +223,20 @@ export function shareStatus(sessionId: string): ShareStatus | null {
     .get(sessionId) as unknown as SessionCost | undefined;
   if (!s) return null;
 
-  const costSec = shareBasisSec(s);
-  const totalCoins = costCoins(costSec);
+  const cost = shareBasis(s);
   const target = s.share_target ?? SHARE_TARGET;
-  const { seat, cap } = shareBack(costSec, target);
+  const cap = shareCap(cost, target);
   const list = members(sessionId);
-  const owner = list.find((m) => m.role === "owner");
-  const ownerPaidSec = owner?.paid_sec ?? coinsToSec(totalCoins);
-  const refundedCoins = Math.max(0, totalCoins - costCoins(ownerPaidSec));
+  const refunded = list.filter((m) => m.role === "member").reduce((a, m) => a + m.paid_toman, 0);
 
   return {
     enabled: Boolean(s.share_enabled),
     memberCount: list.filter((m) => m.role === "member").length,
-    costSec,
-    seatSec: coinsToSec(seat),
-    capSec: coinsToSec(cap),
-    ownerPaidSec,
-    ownerRefundedSec: coinsToSec(refundedCoins),
-    capReached: refundedCoins >= cap,
+    cost,
+    seat: shareSeat(cost, target),
+    cap,
+    ownerRefunded: refunded,
+    capReached: refunded >= cap,
     target,
   };
 }
@@ -287,10 +245,7 @@ export function shareStatus(sessionId: string): ShareStatus | null {
 export function accessibleSessions(tgId: number, limit = 20): string[] {
   return (
     db
-      .prepare(
-        `SELECT session_id FROM session_members WHERE tg_id = ?
-         ORDER BY joined_at DESC LIMIT ?`,
-      )
+      .prepare(`SELECT session_id FROM session_members WHERE tg_id = ? ORDER BY joined_at DESC LIMIT ?`)
       .all(tgId, limit) as unknown as Array<{ session_id: string }>
   ).map((r) => r.session_id);
 }

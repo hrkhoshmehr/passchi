@@ -89,16 +89,13 @@ const faGroup = (n) => fa(Number(n).toLocaleString("en-US")).replace(/,/g, "٬")
 /** بایت به مگابایت، با یک رقم اعشار — واحدی که کاربر روی نوار آپلود می‌فهمد. */
 const mb = (bytes) => (bytes / (1024 * 1024)).toFixed(1);
 
-/**
- * ارزش یک پکیج به زبان کاربر: «۳ کلاس ۹۰ دقیقه‌ای».
- *
- * همان قاعدهٔ ربات — عددِ سکه به‌تنهایی نمی‌گوید چند جلسه می‌شود فرستاد، و آن
- * سؤالی است که کاربر پیش از خرید در ذهن دارد. زیر یک کلاس، به دقیقه می‌افتد.
- */
-function pkgWorth(coins, coinsPerMinute) {
-  const minutes = Math.floor(coins / (coinsPerMinute || 1));
-  const classes = Math.floor(minutes / 90);
-  return classes >= 1 ? `${fa(classes)} کلاس ۹۰ دقیقه‌ای` : `${fa(minutes)} دقیقه صوت`;
+/** «حدود ۱ ساعت و ۵۰ دقیقه صوت» — همان `fmtMinutesFor` ربات، برای کنارِ موجودی و پکیج. */
+function minutesWorth(toman, tomanPerMinute) {
+  const min = Math.floor((Number(toman) || 0) / (tomanPerMinute || 1500));
+  if (min < 60) return `حدود ${fa(min)} دقیقه صوت`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `حدود ${fa(h)} ساعت و ${fa(m)} دقیقه صوت` : `حدود ${fa(h)} ساعت صوت`;
 }
 
 /** میلی‌ثانیه به «۱ ساعت و ۳۴ دقیقه» یا «۴۲ دقیقه» */
@@ -297,15 +294,13 @@ let me = null;
 
 async function loadMe() {
   me = await api.call("/api/me");
-  $("coins").textContent = faGroup(me.coins);
+  $("coins").textContent = faGroup(me.credit);
   /**
-   * معنای موجودی، بالای کادرِ صوت.
-   *
-   * عددِ کنارِ 🪙 به‌تنهایی نمی‌گوید با آن چه می‌شود فرستاد؛ کاربرِ تازه با
-   * ۲۰ سکه نباید یک کلاس ۹۰ دقیقه‌ای انتخاب کند و تازه سرِ تأیید بفهمد.
+   * معنای موجودی، بالای کادرِ صوت — به تومان، با نرخِ هر دقیقه، تا کاربر پیش
+   * از انتخابِ یک کلاسِ ۹۰ دقیقه‌ای بداند کافی است یا نه.
    */
-  const rate = me.coinsPerMinute === 1 ? "هر دقیقه صوت یه سکه" : `هر دقیقه صوت ${fa(me.coinsPerMinute)} سکه`;
-  $("send-meta").textContent = `${faGroup(me.coins)} سکه داری · ${rate} · نتیجه توی چت ربات میاد`;
+  $("send-meta").textContent =
+    `موجودی ${faGroup(me.credit)} تومان · هر دقیقه صوت ${faGroup(me.tomanPerMinute)} تومان · نتیجه توی چت ربات میاد`;
   show($("send-meta"), true);
   return me;
 }
@@ -363,7 +358,7 @@ async function checkPending() {
   const offer = Boolean(pending && pending.sessionId && pending.sessionId !== dismissedPending());
   resumable = offer ? pending : null;
   if (offer) {
-    $("resume-meta").textContent = `${faDuration(pending.durationSec)} · ${faGroup(pending.costCoins)} سکه`;
+    $("resume-meta").textContent = `${faDuration(pending.durationSec)} · ${faGroup(pending.cost)} تومان`;
   }
   show($("resume"), offer);
   return offer;
@@ -1438,9 +1433,9 @@ async function upload(file) {
  * فایلی روی سرور نمانده، پس برخلافِ صفحهٔ تأیید نمی‌شود گفت «فایلت می‌مونه».
  */
 function shortBeforeUpload(d = {}) {
-  const need = d.needCoins ?? 0;
-  const have = d.haveCoins ?? 0;
-  return `این فایل ${faGroup(need)} سکه می‌خواد و ${faGroup(have)} سکه داری. از «🪙 حساب» شارژ کن و بعد دوباره انتخابش کن.`;
+  const need = d.need ?? 0;
+  const have = d.have ?? 0;
+  return `این فایل ${faGroup(need)} تومان می‌خواد و ${faGroup(have)} تومان داری. از «💳 حساب» شارژ کن و بعد دوباره انتخابش کن.`;
 }
 
 /** ناحیهٔ رهاکردن فایل را به حالت اولش برگردان. */
@@ -1473,30 +1468,42 @@ function faDuration(sec) {
 
 let pendingSession = null;
 
-/** هزینهٔ جلسهٔ روی صفحهٔ تأیید، برای حسابِ «نفری n سکه». */
+/** هزینهٔ جلسهٔ روی صفحهٔ تأیید و موجودی، به تومان — برای «نفری n تومان». */
 let confirmCost = 0;
 let confirmHave = 0;
 
 /**
- * سهمِ هر هم‌کلاسی — **همان** `shareBack` در `billing/coins.ts`.
+ * سهمِ هر نفر و تعدادهای معنادار — **همان** `shareSeat` و `shareCountsFor` در
+ * `src/billing/money.ts`.
  *
- * سقفِ بازگشت نصفِ هزینه است و تعداد کفِ پنج دارد. اینجا تکرار شده چون
- * صفحهٔ تأیید پیش از هر درخواستی باید عدد را نشان دهد؛ برای اینکه از سرور
- * عقب نماند، `scripts/test-pending-resume.mjs` این تابع را کنارِ خودِ
- * `shareBack` اجرا و مقایسه می‌کند. صفر یعنی «عددی نداریم» — آن‌وقت جمله
- * بی‌عدد می‌آید، نه با عددِ ساختگی.
+ * اینجا تکرار شده چون صفحهٔ تأیید پیش از هر درخواستی باید عدد را نشان دهد؛
+ * `scripts/test-pending-resume.mjs` این دو را کنارِ نسخهٔ سرور اجرا و مقایسه
+ * می‌کند تا از هم عقب نمانند.
  */
-function shareSeat(costCoins, people) {
-  const cap = Math.floor((Number(costCoins) || 0) * 0.5);
-  if (cap <= 0) return 0;
-  return Math.max(1, Math.ceil(cap / Math.max(5, Math.round(Number(people) || 10))));
+// هر دو تابع خودبسنده‌اند (بی ثابتِ بیرونی)، چون آزمون متنشان را جدا اجرا می‌کند.
+function shareSeat(cost, people) {
+  const n = Math.max(2, Math.round(Number(people) || 10));
+  const seat = Math.ceil((Number(cost) || 0) / n / 500) * 500;
+  return Math.min(Number(cost) || 0, Math.max(5000, seat));
+}
+
+function shareCountsFor(cost) {
+  const out = [];
+  let last = Infinity;
+  for (const n of [2, 3, 5, 10, 20]) {
+    if ((Number(cost) || 0) / n < 5000) break;
+    const seat = shareSeat(cost, n);
+    if (seat >= last) continue;
+    out.push(n);
+    last = seat;
+  }
+  return out;
 }
 
 function paintShareHow() {
   const seat = shareSeat(confirmCost, $("confirm-share-n").value);
-  $("confirm-share-how").textContent = seat
-    ? `هر کی با لینک جزوه رو بگیره یه سهم کوچیک می‌ده (نفری ${fa(seat)} سکه) که میاد تو حساب تو، تا نصف هزینه. بعدش برای بقیه مجانیه.`
-    : "هر کی با لینک جزوه رو بگیره یه سهم کوچیک می‌ده که میاد تو حساب تو، تا نصف هزینه. بعدش برای بقیه مجانیه.";
+  $("confirm-share-how").textContent =
+    `الان کل ${faGroup(confirmCost)} تومان رو تو می‌دی؛ هر کی با لینک بیاد نفری ${faGroup(seat)} تومان می‌ده و همون به حساب تو برمی‌گرده، تا جایی که تو فقط سهم خودت رو داده باشی.`;
 }
 
 /**
@@ -1505,23 +1512,36 @@ function paintShareHow() {
  */
 function askConfirm(out, filename, keep = false) {
   pendingSession = out.sessionId;
-  confirmCost = out.costCoins;
-  confirmHave = out.haveCoins ?? 0;
+  confirmCost = out.cost;
+  confirmHave = out.have ?? 0;
   $("confirm-file").textContent = filename || "";
   $("confirm-dur").textContent = faDuration(out.durationSec);
-  $("confirm-cost").textContent = `${faGroup(out.costCoins)} 🪙`;
-  $("confirm-have").textContent = `${faGroup(out.haveCoins)} 🪙`;
+  $("confirm-cost").textContent = `${faGroup(out.cost)} تومان`;
+  $("confirm-have").textContent = `${faGroup(out.have)} تومان`;
   fail($("confirm-err"), "");
-  // هر فایل تصمیم خودش را دارد؛ تیکِ جلسهٔ قبلی نباید بی‌خبر روی این یکی
-  // بنشیند — این تصمیم دربارهٔ سکه‌های کاربر است.
-  if (!keep) {
+
+  /**
+   * خرید اشتراکی فقط وقتی موجودی کافی است و تعدادِ معناداری هست — همان قاعدهٔ
+   * ربات. تعدادها از `shareCountsFor` پر می‌شوند تا «۳۰ نفر · نفری ۵۰۰ تومان»
+   * روی فایلِ کوتاه نیاید.
+   */
+  const counts = shareCountsFor(out.cost);
+  const select = $("confirm-share-n");
+  const previous = Number(select.value);
+  select.innerHTML = counts
+    .map((n) => `<option value="${n}">${fa(n)} نفر · نفری ${faGroup(shareSeat(out.cost, n))} تومان</option>`)
+    .join("");
+  if (counts.includes(previous)) select.value = String(previous);
+  show($("confirm-share-row"), Boolean(out.enough) && counts.length > 0);
+  // هر فایل تصمیم خودش را دارد؛ تیکِ جلسهٔ قبلی نباید بی‌خبر روی این یکی بنشیند.
+  if (!keep || !out.enough || counts.length === 0) {
     $("confirm-share").checked = false;
     $("confirm-share-box").classList.add("hidden");
   }
   paintShareHow();
 
-  // دکمه خودش می‌گوید سکه کم می‌شود — «تحلیلش کن» این را نمی‌گفت.
-  $("confirm-go").textContent = `شروع کن — ${faGroup(out.costCoins)} سکه کم میشه`;
+  // دکمه خودش می‌گوید چقدر کم می‌شود.
+  $("confirm-go").textContent = `شروع کن — ${faGroup(out.cost)} تومان`;
 
   /**
    * موجودی کم؟ بگو چقدر کم دارد و که **فایل نمی‌رود**.
@@ -1541,16 +1561,24 @@ function askConfirm(out, filename, keep = false) {
   show($("confirm-free"), Boolean(free));
   show($("confirm-free-note"), Boolean(free));
 
-  const short = Math.max(0, out.costCoins - out.haveCoins);
+  const short = Math.max(0, out.cost - out.have);
   $("confirm-go").disabled = !out.enough;
   if (!out.enough && !free) {
-    fail(
-      $("confirm-err"),
-      `${faGroup(short)} سکه کم داری. فایلت همین‌جا می‌مونه — از «🪙 حساب» شارژ کن و برگرد همین صفحه.`,
-    );
+    fail($("confirm-err"), lowOnPage(short));
   }
   show($("confirm-go"), true);
   go("confirm");
+}
+
+/**
+ * موجودیِ کم روی صفحهٔ تأیید — با همان جملهٔ ربات: لازم نیست کلش را خودش بدهد.
+ * فایل روی سرور می‌ماند و `checkPending` هنگامِ برگشت همان را پیشنهاد می‌دهد.
+ */
+function lowOnPage(short) {
+  return (
+    `${faGroup(short)} تومان کم داری. فایلت همین‌جا می‌مونه — از «💳 حساب» شارژ کن (کمترینش ۵۰ هزار تومان) و برگرد همین صفحه. ` +
+    "لازم نیست کل پولش رو خودت بدی: جزوه که آماده شد، لینکش رو برای هم‌کلاسی‌هات بفرست؛ هر کی بیاد سهم خودش رو می‌ده و همون به حساب تو برمی‌گرده."
+  );
 }
 
 $("confirm-free").addEventListener("click", async () => {
@@ -1564,11 +1592,11 @@ $("confirm-free").addEventListener("click", async () => {
     btn.disabled = false;
     const d = err.data || {};
     if (err.status === 402) {
-      // رایگان واریز شد ولی فایل از سقفش بلندتر است؛ بقیه با سکه.
+      // رایگان واریز شد ولی فایل از سقفش بلندتر است؛ بقیه پولی.
       show(btn, false);
       show($("confirm-free-note"), false);
-      const short = Math.max(0, (d.needCoins ?? 0) - (d.haveCoins ?? 0));
-      fail($("confirm-err"), `رایگانش به حسابت اومد، ولی برای بقیهٔ این فایل ${faGroup(short)} سکه کم داری. از «🪙 حساب» شارژ کن و برگرد همین صفحه؛ فایلت همین‌جا می‌مونه.`);
+      const short = Math.max(0, (d.need ?? 0) - (d.have ?? 0));
+      fail($("confirm-err"), `رایگانش به حسابت اومد، ولی برای بقیهٔ این فایل ${faGroup(short)} تومان کم داری. از «💳 حساب» شارژ کن و برگرد همین صفحه؛ فایلت همین‌جا می‌مونه.`);
     } else if (err.status === 409 && d.freeRefused) {
       show(btn, false);
       show($("confirm-free-note"), false);
@@ -1617,11 +1645,7 @@ $("confirm-go").addEventListener("click", async () => {
     btn.disabled = false;
     if (err.status === 402) {
       const d = err.data || {};
-      const short = Math.max(0, (d.needCoins ?? 0) - (d.haveCoins ?? 0));
-      fail(
-        $("confirm-err"),
-        `${faGroup(short)} سکه کم داری. فایلت همین‌جا می‌مونه — از «🪙 حساب» شارژ کن و برگرد همین صفحه.`,
-      );
+      fail($("confirm-err"), lowOnPage(Math.max(0, (d.need ?? 0) - (d.have ?? 0))));
     } else {
       fail($("confirm-err"), friendlyError(err, "general"));
     }
@@ -1722,16 +1746,14 @@ async function loadAccount() {
       <div class="card" style="text-align:center">
         <p class="dim">موجودی</p>
         <div style="font-size:38px;font-weight:800;letter-spacing:-.02em" class="num">
-          ${faGroup(u.coins)}
+          ${faGroup(u.credit)}
         </div>
-        <p class="muted" style="font-size:14px">سکه</p>
-        <p class="dim" style="margin-top:10px">
-          ${u.coinsPerMinute === 1 ? "هر سکه یعنی یه دقیقه صوت" : `هر دقیقه صوت ${fa(u.coinsPerMinute)} سکه`}
-        </p>
+        <p class="muted" style="font-size:14px">تومان · ${minutesWorth(u.credit, u.tomanPerMinute)}</p>
+        <p class="dim" style="margin-top:10px">هر دقیقه صوت ${faGroup(u.tomanPerMinute)} تومان</p>
       </div>
 
       <div>
-        <h3 style="font-size:16px;margin-bottom:8px">🪙 شارژ حساب</h3>
+        <h3 style="font-size:16px;margin-bottom:8px">💳 شارژ حساب</h3>
         <p class="dim" style="margin-bottom:12px">${accountWhere()}</p>
         <div class="stack">
           ${packages
@@ -1740,12 +1762,12 @@ async function loadAccount() {
                 <div style="display:flex;align-items:center;gap:12px">
                   <div>
                     <div class="item-title">
-                      ${esc(p.title)} <span class="dim num">· ${faGroup(p.coins)} سکه</span>
+                      ${esc(p.title)}
                       ${p.featured ? `<span class="badge">پیشنهاد</span>` : ""}
                     </div>
                     <div class="item-meta">
-                      <span class="num">${faGroup(p.price)} تومان</span>
-                      <span class="dim">· ${pkgWorth(p.coins, u.coinsPerMinute)}</span>
+                      <span class="num">اعتبار ${faGroup(p.credit)} تومان</span>
+                      <span class="dim">· ${minutesWorth(p.credit, u.tomanPerMinute)}</span>
                     </div>
                     <div class="dim" style="margin-top:4px;line-height:1.7">${esc(p.blurb)}</div>
                   </div>
@@ -1758,7 +1780,7 @@ async function loadAccount() {
         <p class="dim" id="pkg-note" style="margin-top:12px">
           ${
             gateway
-              ? "روی یه پکیج بزن؛ صفحهٔ بانک باز می‌شه و بعد از پرداخت، سکه‌ها خودکار میاد تو حسابت."
+              ? "روی یه پکیج بزن؛ صفحهٔ بانک باز می‌شه و بعد از پرداخت، اعتبارش خودکار میاد تو حسابت."
               : "برای شارژ برو توی چت ربات — پرداخت همون‌جاست."
           }
         </p>
@@ -1816,7 +1838,7 @@ async function loadAccount() {
  * شارژ کند و در بله آپلود، سکه‌اش را «گم‌شده» می‌بیند.
  */
 function accountWhere() {
-  const tail = "سکه‌های بله و تلگرام از هم جدان — همون‌جایی شارژ کن که فایل می‌فرستی.";
+  const tail = "موجودیِ بله و تلگرام از هم جداست — همون‌جایی شارژ کن که فایل می‌فرستی.";
   if (platformOfSession === "bale") return `این حسابت توی بله‌ست. ${tail}`;
   if (platformOfSession === "telegram") return `این حسابت توی تلگرامه. ${tail}`;
   return tail;

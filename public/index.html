@@ -172,15 +172,15 @@ section { padding: 78px 0; }
 @media (max-width: 560px) { .prices { grid-template-columns: 1fr; } }
 .price { text-align: center; position: relative; display: flex; flex-direction: column; }
 .price.featured { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft), var(--shadow); }
-/* واحدِ کنارِ عددِ سکه: بدونش عددِ درشت کنارِ مبلغ، مثل قیمتِ دوم خوانده می‌شد. */
+/* واحدِ کنارِ مبلغ: بدونش عددِ درشت مثل یک شمارندهٔ بی‌معنی خوانده می‌شد. */
 .price-unit { font-size: .42em; font-weight: 600; color: var(--text-soft); }
 .price-tag {
   position: absolute; inset-block-start: -12px; inset-inline-start: 50%;
   transform: translateX(50%);
 }
 .price h3 { font-size: 15px; color: var(--text-soft); font-weight: 600; }
-.price-coins { font-size: 33px; font-weight: 800; margin: 10px 0 2px; letter-spacing: -.02em; }
-.price-toman { font-size: 19px; font-weight: 700; color: var(--brand-text); }
+.price-credit { font-size: 15px; font-weight: 700; color: var(--brand-text); margin-top: 4px; }
+.price-toman { font-size: 30px; font-weight: 800; margin: 10px 0 2px; letter-spacing: -.02em; }
 .price-worth { color: var(--text-dim); font-size: 13.5px; margin-top: 8px; }
 .price-blurb { color: var(--text-dim); font-size: 13.5px; line-height: 1.8; margin: 6px 0 14px; }
 .price .btn { margin-top: 20px; }
@@ -254,7 +254,7 @@ footer {
   <div class="wrap hero-in">
     <!-- هدیه یک کلاس کامل نیست؛ پیل نباید چنین قولی بدهد. -->
     <!-- متن داخل یک span است: `.pill` فلکس است و هر span جدا یک ستون می‌شد. -->
-    <span class="pill">🎁 <span><span data-trial-coins>۲۰</span> سکه هدیه یعنی <span data-trial-coins>۲۰</span> دقیقه صوت — یه تیکه از کلاس رو بفرست و ببین چی درمیاد</span></span>
+    <span class="pill">🎁 <span>اولین صوتت رایگانه — کلاس خودت رو بفرست و ببین چی درمیاد</span></span>
     <!-- تیتر خودش کلِ شعار برند است. خط جدای «شعار» زیرش برداشته شد چون
          همین جمله را دوباره می‌گفت. -->
     <h1>دیگه سر کلاس جزوه ننویس،<br>با پاسچی <em>درسات رو پاس شو</em></h1>
@@ -399,47 +399,46 @@ footer {
   <div class="wrap">
     <div class="section-head">
       <h2>قیمت</h2>
-      <p><b>هر سکه یعنی یه دقیقه صوت.</b> اولش <span data-trial-coins>۲۰</span> سکه هدیه یعنی <span data-trial-coins>۲۰</span> دقیقه صوت می‌گیری.</p>
+      <p><b>هر دقیقه صوت <span class="num">۱٬۵۰۰</span> تومان</b>؛ یه کلاس ۹۰ دقیقه‌ای <span class="num">۱۳۵٬۰۰۰</span> تومان. اولین صوتت رایگانه و <span data-trial-toman>۲۰٬۰۰۰</span> تومان هم هدیه می‌گیری.</p>
     </div>
     <div class="prices" id="prices">
       <!--
         از /api/packages پر می‌شود؛ این نسخه‌ها فقط اگر جاوااسکریپت نبود می‌مانند.
 
-        ⚠️ این اعداد دستی‌اند و یک بار از قیمت واقعی عقب افتادند: تعدادِ
-        سکه‌ها از دورانِ «هفت سکه در دقیقه» مانده بود و مبلغ‌ها از افزایش
-        قیمت. اگر PACKAGES در billing/coins.ts عوض شد، اینجا هم عوض کن —
+        ⚠️ این اعداد دستی‌اند و یک بار از قیمت واقعی عقب افتادند. اگر PACKAGES
+        در billing/money.ts عوض شد، اینجا هم عوض کن —
         scripts/test-price-sync.mjs همین را می‌سنجد.
       -->
       <article class="card price">
-        <h3>۶۰ سکه</h3>
-        <div class="price-coins num">۶۰<span class="price-unit"> سکه</span></div>
-        <div class="price-toman num">۸۹٬۰۰۰ تومان</div>
-        <p class="price-worth">هر سکه حدود ۱٬۴۸۳ تومان</p>
-        <p class="price-blurb">برای شروع، یا سهمت از چند تا فایل گروهی.</p>
+        <h3>۵۰ هزار تومان</h3>
+        <div class="price-toman num">۵۰٬۰۰۰<span class="price-unit"> تومان</span></div>
+        <div class="price-credit num">اعتبار ۵۰٬۰۰۰ تومان</div>
+        <p class="price-worth">حدود ۳۳ دقیقه صوت</p>
+        <p class="price-blurb">حدود ۳۳ دقیقه صوت. برای شروع، یا سهمت از جزوهٔ هم‌کلاسی.</p>
         <a class="btn btn-ghost btn-block" href="/app">خرید از داخل ربات</a>
       </article>
       <article class="card price featured">
         <span class="pill price-tag">پیشنهاد</span>
-        <h3>۱۸۰ سکه</h3>
-        <div class="price-coins num">۱۸۰<span class="price-unit"> سکه</span></div>
-        <div class="price-toman num">۲۳۹٬۰۰۰ تومان</div>
-        <p class="price-worth">هر سکه حدود ۱٬۳۲۸ تومان</p>
-        <p class="price-blurb">۱۶۰ سکه، به‌علاوهٔ ۲۰ سکه هدیه.</p>
+        <h3>۱۵۰ هزار تومان</h3>
+        <div class="price-toman num">۱۵۰٬۰۰۰<span class="price-unit"> تومان</span></div>
+        <div class="price-credit num">اعتبار ۱۶۵٬۰۰۰ تومان</div>
+        <p class="price-worth">حدود ۱ ساعت و ۵۰ دقیقه صوت</p>
+        <p class="price-blurb">۱۵ هزار تومان هدیه؛ روی هم ۱۶۵ هزار، حدود ۱ ساعت و ۵۰ دقیقه صوت.</p>
         <a class="btn btn-primary btn-block" href="/app">خرید از داخل ربات</a>
       </article>
       <article class="card price">
-        <h3>۶۰۰ سکه</h3>
-        <div class="price-coins num">۶۰۰<span class="price-unit"> سکه</span></div>
-        <div class="price-toman num">۷۲۰٬۰۰۰ تومان</div>
-        <p class="price-worth">هر سکه حدود ۱٬۲۰۰ تومان</p>
-        <p class="price-blurb">۵۲۰ سکه، به‌علاوهٔ ۸۰ سکه هدیه. برای کل ترم.</p>
+        <h3>۴۰۰ هزار تومان</h3>
+        <div class="price-toman num">۴۰۰٬۰۰۰<span class="price-unit"> تومان</span></div>
+        <div class="price-credit num">اعتبار ۴۶۰٬۰۰۰ تومان</div>
+        <p class="price-worth">حدود ۵ ساعت و ۶ دقیقه صوت</p>
+        <p class="price-blurb">۶۰ هزار تومان هدیه؛ روی هم ۴۶۰ هزار، حدود ۵ ساعت و ۶ دقیقه صوت.</p>
         <a class="btn btn-ghost btn-block" href="/app">خرید از داخل ربات</a>
       </article>
     </div>
 
     <div class="split-note">
-      💰 <b>لازم نیست کل کلاس رو خودت بدی.</b>
-      لینک جلسه رو برای هم‌کلاسی‌هات بفرست؛ هر کی بیاد سهم خودش رو می‌ده و همون به حساب تو برمی‌گرده، تا نصف هزینه.
+      💰 <b>تو فقط سهم خودت رو می‌دی.</b>
+      لینک جلسه رو برای هم‌کلاسی‌هات بفرست؛ هر کی بیاد سهم خودش رو می‌ده و همون به حساب تو برمی‌گرده.
       لینکش توی چت ربات میاد که بذاری تو گروه کلاس.
     </div>
   </div>
@@ -461,13 +460,13 @@ footer {
     <details open>
       <summary>چقدر خرج داره؟</summary>
       <p>
-        هر سکه یعنی یه دقیقه صوت، پس یه کلاس ۹۰ دقیقه‌ای ۹۰ سکه‌ست. اولش
-        <b><span data-trial-coins>۲۰</span> سکه هدیه، یعنی <span data-trial-coins>۲۰</span> دقیقه صوت</b> —
-        بسه که یه تیکه از کلاس رو بفرستی و ببینی چی درمیاد.
+        هر دقیقه صوت ۱٬۵۰۰ تومان، پس یه کلاس ۹۰ دقیقه‌ای ۱۳۵ هزار تومانه.
+        <b>اولین صوتت رایگانه</b> و <span data-trial-toman>۲۰٬۰۰۰</span> تومان هم هدیه به حسابت میاد.
+        کمترین شارژ ۵۰ هزار تومانه.
       </p>
       <p>
-        <b>لازم نیست کل کلاس رو خودت بدی.</b> لینک جلسه رو برای هم‌کلاسی‌هات بفرست؛
-        هر کی بیاد سهم خودش رو می‌ده و همون به حساب تو برمی‌گرده، تا نصف هزینه.
+        <b>تو فقط سهم خودت رو می‌دی.</b> لینک جلسه رو برای هم‌کلاسی‌هات بفرست؛
+        هر کی بیاد سهم خودش رو می‌ده و همون به حساب تو برمی‌گرده.
       </p>
     </details>
 
@@ -505,7 +504,7 @@ footer {
         بزرگ.
       </p>
       <p>
-        حساب بله و حساب تلگرامت از هم جدان و سکه‌ها بینشون جابه‌جا نمیشن.
+        حساب بله و حساب تلگرامت از هم جدان و موجودی بینشون جابه‌جا نمیشه.
         همون‌جایی شارژ کن که فایل می‌فرستی.
       </p>
     </details>
@@ -518,7 +517,7 @@ footer {
       </p>
       <p>
         کلاس آنلاین هم مشکلی نداره: <b>فایل ویدیویی</b> رو مستقیم بفرست. از ویدیو
-        فقط صدا برداشته میشه، پس بابت تصویر سکه‌ای نمی‌دی.
+        فقط صدا برداشته میشه، پس بابت تصویر پولی نمی‌دی.
       </p>
       <p>
         <b>لینک</b> فقط وقتی کار می‌کنه که مستقیم به خودِ فایل برسه و بدون ورود
@@ -537,7 +536,7 @@ footer {
   <div class="wrap">
     <div class="card">
       <h2>صوت کلاس امروزت رو بفرست</h2>
-      <p><span data-trial-coins>۲۰</span> سکه هدیه یعنی <span data-trial-coins>۲۰</span> دقیقه صوت — یه تیکه از کلاس رو بفرست و ببین چی درمیاد.<br>دیگه جزوه ننویس، با پاسچی درسات رو پاس شو.</p>
+      <p>اولین صوتت رایگانه — کلاس خودت رو بفرست و ببین چی درمیاد.<br>دیگه جزوه ننویس، با پاسچی درسات رو پاس شو.</p>
       <div class="hero-cta">
         <a class="btn btn-primary" href="/app">🎧 شروع توی بله یا تلگرام</a>
       </div>
@@ -603,7 +602,7 @@ onScroll();
 addEventListener("scroll", onScroll, { passive: true });
 
 /*
- * قیمت‌ها از سرور خوانده می‌شوند تا با `billing/coins.ts` یکی بمانند.
+ * قیمت‌ها از سرور خوانده می‌شوند تا با `billing/money.ts` یکی بمانند.
  * نسخهٔ داخل HTML صرفاً چیزی است که بدون جاوااسکریپت دیده می‌شود؛ اگر
  * درخواست موفق شد، جای خودش را به دادهٔ واقعی می‌دهد.
  */
@@ -613,36 +612,40 @@ const fa = (n) => n.toLocaleString("en-US").replace(/[0-9]/g, d => "۰۱۲۳۴۵
  * عدد هدیهٔ شروع از سرور می‌آید.
  *
  * متن HTML یک مقدار پیش‌فرض دارد تا بدون جاوااسکریپت هم چیزی نوشته باشد،
- * ولی مرجع واقعی `FREE_TRIAL_COINS` است. یک بار صفحه «۱۰۰ سکه» تبلیغ
- * می‌کرد در حالی که ربات ۲۰ می‌داد — کاربر با وعده‌ای می‌آمد که زیرش زده
- * می‌شد. حالا اگر آن مقدار عوض شود، صفحه خودش به‌روز می‌شود.
+ * ولی مرجع واقعی `FREE_TRIAL_TOMAN` است. یک بار صفحه هدیه‌ای تبلیغ می‌کرد
+ * که ربات نمی‌داد — کاربر با وعده‌ای می‌آمد که زیرش زده می‌شد. حالا اگر آن
+ * مقدار عوض شود، صفحه خودش به‌روز می‌شود.
  */
 fetch("/api/config")
   .then(r => r.ok ? r.json() : Promise.reject())
-  .then(({ trialCoins }) => {
-    if (typeof trialCoins !== "number" || trialCoins <= 0) return;
-    for (const el of document.querySelectorAll("[data-trial-coins]")) {
-      el.textContent = fa(trialCoins);
+  .then(({ trialToman }) => {
+    if (typeof trialToman !== "number" || trialToman <= 0) return;
+    for (const el of document.querySelectorAll("[data-trial-toman]")) {
+      el.textContent = fa(trialToman);
     }
   })
   .catch(() => {});
 
 fetch("/api/packages")
   .then(r => r.ok ? r.json() : Promise.reject())
-  .then(({ packages, coinsPerMinute }) => {
+  .then(({ packages, tomanPerMinute }) => {
     if (!Array.isArray(packages) || !packages.length) return;
     const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    // همان `fmtMinutesFor` ربات: چند دقیقه صوت با اعتبارِ این پکیج درمی‌آید.
+    const minutes = (toman) => {
+      const m = Math.floor(toman / (tomanPerMinute || 1500));
+      if (m < 60) return `حدود ${fa(m)} دقیقه صوت`;
+      const h = Math.floor(m / 60), r = m % 60;
+      return r ? `حدود ${fa(h)} ساعت و ${fa(r)} دقیقه صوت` : `حدود ${fa(h)} ساعت صوت`;
+    };
     document.getElementById("prices").innerHTML = packages.map((p) => {
-      // اسمِ پکیج تعدادِ سکه است، نه کلاس — کلاس‌ها طولِ یکسانی ندارند. تفاوتِ
-      // پکیج‌ها با قیمتِ هر سکه دیده می‌شود.
-      const worth = `هر سکه حدود ${fa(Math.round(p.price / p.coins))} تومان`;
       const hot = Boolean(p.featured);
       return `<article class="card price${hot ? " featured" : ""}">
         ${hot ? `<span class="pill price-tag">پیشنهاد</span>` : ""}
         <h3>${esc(p.title)}</h3>
-        <div class="price-coins num">${fa(p.coins)}<span class="price-unit"> سکه</span></div>
-        <div class="price-toman num">${fa(p.price)} تومان</div>
-        <p class="price-worth">${worth}</p>
+        <div class="price-toman num">${fa(p.price)}<span class="price-unit"> تومان</span></div>
+        <div class="price-credit num">اعتبار ${fa(p.credit)} تومان</div>
+        <p class="price-worth">${minutes(p.credit)}</p>
         <p class="price-blurb">${esc(p.blurb)}</p>
         <a class="btn ${hot ? "btn-primary" : "btn-ghost"} btn-block" href="/app">خرید از داخل ربات</a>
       </article>`;

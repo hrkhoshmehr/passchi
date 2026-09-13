@@ -1,116 +1,43 @@
 /**
- * شبیه‌سازی چرخهٔ اقتصادی، نه فقط حاشیهٔ یک فروش.
+ * شبیه‌سازی چرخهٔ اقتصادی شریک‌شدن، نه فقط حاشیهٔ یک فروش — به تومان.
  *
- * حاشیهٔ هر پکیج به‌تنهایی گمراه‌کننده است، چون بازپرداختِ اشتراک سکه‌های
- * خریداری‌شده را به فرستنده برمی‌گرداند و او دوباره خرجشان می‌کند. با نرخ
- * بازگشت r، هر خریدِ یک‌باره در نهایت **۱/(۱−r)** برابرِ خودش پردازش می‌خرد:
- * با r=۰٫۹ یعنی ده برابر، در حالی که حاشیهٔ ما سه برابر است.
+ * قاعدهٔ امروز: صاحب جلسه کلِ قیمت را می‌دهد و هر هم‌کلاسی سهمش را، تا جایی که
+ * صاحب جلسه فقط سهمِ خودش را داده باشد. اگر هم‌کلاسی‌ها واقعی‌اند و با اعتبارِ
+ * **خریداری‌شده** می‌آیند، پولشان واقعاً وارد شده و هیچ زیانی نیست. خطر فقط
+ * حساب‌های ساختگی است که با **هدیه** سهم می‌دهند: پولی وارد نشده ولی اعتبارِ
+ * واقعیِ صاحب جلسه برگشته و دوباره خرج می‌شود.
  *
- * و بازپرداخت از جیب کسانی می‌آید که می‌پیوندند — که اگر حساب تازه باشند،
- * سهمشان را با سکهٔ *هدیه* می‌دهند. یعنی پولی وارد نشده ولی سکهٔ واقعیِ
- * فرستنده برگشته است.
+ * دو دفاع: هدیهٔ شروع برای هر حساب یک بار است، و جمعِ سهم‌های هدیه‌ای در هفته
+ * سقف دارد (`SHARE_GIFT_TOMAN_PER_WEEK`). این اسکریپت بدترین حالتِ هفته را
+ * می‌سنجد: کلِ سقف با حساب‌های ساختگی خرج شود.
  *
- * دو سناریوی سوءاستفاده جدا مدل می‌شوند، چون دفاعشان فرق می‌کند.
+ * اجرا: node --import tsx scripts/economics.mjs
  */
-import {
-  COST_PER_COIN_TOMAN, PACKAGES, REFUND_CAP_PCT, SHARE_TARGET, USD_TOMAN, costCoins, gatewayFeeToman,
-  packageMargin, shareBack,
-} from "../src/billing/coins.ts";
+import { COST_PER_MINUTE_TOMAN, TOMAN_PER_MINUTE, priceOf, shareCap, shareSeat } from "../src/billing/money.ts";
 import { config } from "../src/config.ts";
 
 const fa = (n) => Math.round(n).toLocaleString("fa-IR");
-const CLASS_MIN = 90;
-const K = costCoins(CLASS_MIN * 60); // سکهٔ یک کلاس ۹۰ دقیقه‌ای
-const sessionCost = K * COST_PER_COIN_TOMAN;
-
-/** اجرای رایگانِ یک حساب تازه فقط Soniox خرج دارد — بدون مدل. */
-const SONIOX_HOUR_USD = 0.1;
-// اجرای رایگان حذف شد؛ هزینهٔ کاربر تازه حالا فقط سکهٔ هدیهٔ ثبت‌نام است.
-const freeRunCost = 0;
-
-// سهمِ ثابتِ هر نفر، و آنچه مالک در بهترین حالت (کلاسِ پر) پس می‌گیرد:
-// دقیقاً سقف، چون بعد از آن برداشتن رایگان است و پلتفرم چیزی برنمی‌دارد.
-const { seat: share } = shareBack(CLASS_MIN * 60, SHARE_TARGET);
-const refundPerCycle = Math.floor(K * REFUND_CAP_PCT);
+const cls = priceOf(90 * 60);
+const ourCost = (toman) => (toman / TOMAN_PER_MINUTE) * COST_PER_MINUTE_TOMAN;
 
 console.log("فرض‌ها");
-console.log(`  کلاس ${CLASS_MIN} دقیقه‌ای: ${fa(K)} سکه · هزینهٔ پردازش ${fa(sessionCost)} تومان`);
-console.log(`  هدیهٔ شروع: ${config.FREE_TRIAL_COINS} سکه · سهم هر نفر از این کلاس: ${share} سکه`);
-console.log(`  رونویسی رایگان: حذف شد`);
-console.log(`  سقف بازگشت: ${Math.round(REFUND_CAP_PCT * 100)}٪ ⇒ هر جلسه ${fa(refundPerCycle)} سکه برمی‌گردد\n`);
+console.log(`  کلاس ۹۰ دقیقه‌ای: ${fa(cls)} تومان · هزینهٔ پردازشش برای ما ${fa(ourCost(cls))} تومان`);
+console.log(`  هدیهٔ شروعِ هر حساب: ${fa(config.FREE_TRIAL_TOMAN)} تومان`);
+console.log(`  سقف هفتگیِ سهم‌های هدیه‌ای: ${fa(config.SHARE_GIFT_TOMAN_PER_WEEK)} تومان\n`);
+
+for (const people of [2, 5, 10]) {
+  const seat = shareSeat(cls, people);
+  const cap = shareCap(cls, people);
+  console.log(`${people} نفر: سهم ${fa(seat)} · صاحب جلسه تا ${fa(cap)} پس می‌گیرد و فقط ${fa(cls - cap)} می‌دهد`);
+}
 
 /**
- * چند جلسه با یک خرید می‌شود گرفت، وقتی هر جلسه بخشی از سکه‌ها برمی‌گردد.
- * `freeRunsPerCycle` تعداد حساب‌های تازه‌ای است که علاوه بر پیوستن، سهمیهٔ
- * اجرای رایگانشان را هم می‌سوزانند.
+ * بدترین هفته: کلِ سقفِ هدیه با حساب‌های ساختگی خرج شود. هر تومانِ آن به اعتبارِ
+ * واقعیِ یک صاحب جلسه تبدیل می‌شود و دوباره پردازش می‌خرد — یعنی هزینهٔ ما همان
+ * مقدار دقیقه است، بی درآمد.
  */
-function simulate(pkg, freeRunsPerCycle) {
-  let coins = pkg.coins;
-  let cost = 0;
-  let cycles = 0;
-  while (coins >= K && cycles < 200) {
-    cycles++;
-    coins -= K - refundPerCycle;
-    cost += sessionCost + freeRunsPerCycle * freeRunCost;
-  }
-  // کارمزد درگاه یک بار، روی خودِ خرید — نه روی هر چرخه.
-  return { cycles, cost, profit: pkg.price - gatewayFeeToman(pkg.price) - cost };
-}
-
-function report(title, freeRuns) {
-  console.log(title);
-  let worst = Infinity;
-  for (const p of PACKAGES) {
-    const r = simulate(p, freeRuns);
-    worst = Math.min(worst, r.profit);
-    console.log(
-      `  ${r.profit >= 0 ? "✅" : "❌"} پکیج ${String(p.coins).padStart(5)} ·` +
-        ` ${fa(p.price).padStart(9)} درآمد · ${fa(r.cost).padStart(9)} هزینه ·` +
-        ` ${String(r.cycles).padStart(3)} جلسه ⇒ ${r.profit >= 0 ? "سود" : "زیان"} ${fa(Math.abs(r.profit))} تومان`,
-    );
-  }
-  console.log();
-  return worst;
-}
-
-// سناریوی اصلی: حساب‌های تازه فقط می‌پیوندند. برای فرستنده هیچ سودی ندارد که
-// آن‌ها صوت هم بفرستند، پس همین مسیرِ کم‌اصطکاکِ سوءاستفاده است.
-const a = report(
-  `سناریوی ۱ — فرستنده هر جلسه ${SHARE_TARGET - 1} حساب تازه می‌آورد که فقط می‌پیوندند و هرگز خرید نمی‌کنند`,
-  0,
-);
-
-// سناریوی دوم: همان حساب‌ها سهمیهٔ اجرای رایگانشان را هم می‌سوزانند. این
-// دیگر «سوءاستفاده از بازپرداخت» نیست بلکه سوءاستفاده از لایهٔ رایگان است و
-// دفاعش قیمت‌گذاری نیست — اصطکاکِ شمارهٔ تلفن تلگرام است.
-const b = report(
-  `سناریوی ۲ — همان حساب‌ها اجرای رایگانشان را هم می‌سوزانند (سوءاستفاده از لایهٔ رایگان)`,
-  SHARE_TARGET - 1,
-);
-
-console.log("حالت واقعی — همان ده هم‌کلاسی هر هفته، اجرای رایگان فقط یک بار");
-for (const p of PACKAGES) {
-  const r = simulate(p, 0);
-  const once = (SHARE_TARGET - 1) * freeRunCost;
-  const profit = r.profit - once;
-  console.log(
-    `  ${profit >= 0 ? "✅" : "❌"} پکیج ${String(p.coins).padStart(5)} ⇒ سود ${fa(profit)} تومان` +
-      ` (${r.cycles} جلسه، ${SHARE_TARGET - 1} حساب تازه)`,
-  );
-}
-
-console.log("\nنرخ بازگشتِ سربه‌سر برای هر پکیج، پس از کارمزد درگاه (بدون احتساب لایهٔ رایگان)");
-for (const p of PACKAGES) {
-  const m = packageMargin(p);
-  console.log(`  پکیج ${String(p.coins).padStart(5)} · حاشیه ×${m.toFixed(2)} ⇒ سقف بازگشت ${Math.round((1 - 1 / m) * 100)}٪`);
-}
-
-if (a < 0) {
-  console.error("\n❌ سناریوی ۱ زیان‌ده است — سقف بازگشت باید پایین‌تر بیاید.");
-  process.exit(1);
-}
-console.log(
-  a >= 0 && b >= 0
-    ? "\n✅ هر دو سناریو سودده‌اند."
-    : "\n✅ سناریوی بازپرداخت امن است. سناریوی ۲ زیان‌ده می‌ماند و دفاعش قیمت نیست؛ پایین‌تر در README.",
-);
+const weeklyLeak = ourCost(config.SHARE_GIFT_TOMAN_PER_WEEK);
+console.log(`\nبدترین هفته (همهٔ سقف با حساب ساختگی): هزینهٔ پردازشِ بی‌درآمد ≈ ${fa(weeklyLeak)} تومان`);
+const accounts = Math.ceil(config.SHARE_GIFT_TOMAN_PER_WEEK / Math.max(1, config.FREE_TRIAL_TOMAN));
+console.log(`  برای رسیدن به آن دست‌کم ${fa(accounts)} حسابِ ساختگیِ تازه لازم است (هر کدام یک هدیه).`);
+console.log("\n✅ سقف هفتگی مهارِ این نشتی است؛ اگر لاگ «gift budget» زیاد دیدی، سقف را پایین بیاور.");

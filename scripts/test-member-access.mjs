@@ -14,7 +14,7 @@
  * ۳. **جلسهٔ گرفته‌شده در «📚 جلسه‌های من» دیده می‌شود و باز می‌شود.** پیش‌تر
  *    فهرست فقط مالکیت را می‌دید و تنها راهِ رسیدن به آن تایپِ `/shared` بود.
  *
- * ۴. **صفحهٔ سکهٔ کم دکمهٔ شریک‌شدن ندارد**، و **برچسبِ وضعیت‌ها لاتین ندارند.**
+ * ۴. **صفحهٔ موجودیِ کم دکمهٔ شریک‌شدن ندارد**، و **برچسبِ وضعیت‌ها لاتین ندارند.**
  *
  * اجرا: DATA_DIR=./data/tmp-member npx tsx scripts/test-member-access.mjs
  */
@@ -33,7 +33,7 @@ const {
 const { resolveIdentity } = await import("../src/db/identity.ts");
 const { grant } = await import("../src/billing/ledger.ts");
 const { registerOwner, setShareEnabled, setShareTarget } = await import("../src/billing/sharing.ts");
-const { coinsToSec } = await import("../src/billing/coins.ts");
+const { priceOf } = await import("../src/billing/money.ts");
 const S = await import("../src/bot/strings.ts");
 
 let bad = 0;
@@ -114,7 +114,7 @@ const touch = (name) => {
 const OWNER = resolveIdentity({ platform: "telegram", platformUserId: "7200001", name: "مالک" }).tg_id;
 const MEMBER = resolveIdentity({ platform: "telegram", platformUserId: "7200002", name: "هم‌کلاسی" }).tg_id;
 const STRANGER = resolveIdentity({ platform: "telegram", platformUserId: "7200003", name: "غریبه" }).tg_id;
-grant(MEMBER, coinsToSec(20), "trial");
+grant(MEMBER, 20_000, "trial");
 
 const SESSION = "abcd1234abcd5678";
 const OWNER_AUDIO_MSG = 77;
@@ -144,7 +144,7 @@ updateSession(SESSION, {
   transcript_srt: touch("subs.srt"),
   delivered_chat_id: OWNER, delivered_audio_message_id: OWNER_AUDIO_MSG,
 });
-registerOwner(SESSION, OWNER, 900);
+registerOwner(SESSION, OWNER, priceOf(900));
 setShareTarget(SESSION, 10);
 setShareEnabled(SESSION, true);
 
@@ -158,7 +158,7 @@ check(
   toMember[0]?.method === "sendMessage" && toMember[0].payload.text.includes("گرفتیش"),
   order,
 );
-check("تأیید می‌گوید چند سکه کم شد", /سکه/.test(toMember[0]?.payload.text ?? ""), toMember[0]?.payload.text);
+check("تأیید می‌گوید چند تومان کم شد", /تومان/.test(toMember[0]?.payload.text ?? ""), toMember[0]?.payload.text);
 check(
   "تأیید پیش از صوت آمد",
   toMember.findIndex((x) => x.payload.text?.includes("گرفتیش")) <
@@ -279,7 +279,7 @@ check(
   c.some((x) => x.method === "sendMessage" && x.payload.text === S.HISTORY_EMPTY),
 );
 
-// ─── ۴) وضعیت‌ها و صفحهٔ سکهٔ کم ─────────────────────────────────────────────
+// ─── ۴) وضعیت‌ها و صفحهٔ موجودیِ کم ─────────────────────────────────────────────
 const statuses = [
   "queued", "awaiting_credit", "awaiting_confirm", "preprocess", "stt", "analyze", "pdf",
   "done", "error", "cancelled",
@@ -299,10 +299,10 @@ check("کارتِ جلسهٔ منتظر شارژ وضعیت را فارسی می
 check("و نامِ ستون در آن نیست", !pendingCard.includes("awaiting_credit"));
 
 const lowKb = lowBalanceKeyboard(SESSION).inline_keyboard.flat();
-check("صفحهٔ سکهٔ کم دکمهٔ شارژ دارد", lowKb.some((b) => b.callback_data === "topup"));
-check("صفحهٔ سکهٔ کم دکمهٔ «ادامه» دارد", lowKb.some((b) => b.callback_data === `go:${SESSION}`));
+check("صفحهٔ موجودیِ کم «پرداخت همین فایل» دارد", lowKb.some((b) => b.callback_data === `pf:${SESSION}`));
+check("صفحهٔ موجودیِ کم «بی‌خیال» دارد", lowKb.some((b) => b.callback_data === `nogo:${SESSION}`));
 check(
-  "صفحهٔ سکهٔ کم **دکمهٔ شریک‌شدن ندارد**",
+  "صفحهٔ موجودیِ کم **دکمهٔ شریک‌شدن ندارد**",
   !lowKb.some((b) => b.callback_data.startsWith("spre:") || b.text === S.CONFIRM_BTN.share),
   lowKb.map((b) => b.text).join(" | "),
 );

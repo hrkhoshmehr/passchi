@@ -50,13 +50,12 @@ import {
 import { claimFreeFile, freeFileOffer } from "../billing/free-file.js";
 import { fingerprint } from "../stt/cache.js";
 import {
-  DEFAULT_GIFT_COINS, claim as claimGiftCode, claimedMessage, describeUser, giftSummary,
+  DEFAULT_GIFT_TOMAN, claim as claimGiftCode, claimedMessage, describeUser, giftSummary,
   mintGift, refusalMessage,
 } from "./gift.js";
 import {
-  RATE_LINE, SHARE_TARGET, balanceCoins, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtBalance, fmtCoins,
-  fmtCost, fmtToman,
-} from "../billing/coins.js";
+  RATE_LINE, SHARE_TARGET, TOMAN_PER_MINUTE, fmtMinutesFor, fmtToman, priceOf, shareCountsFor,
+} from "../billing/money.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
   getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, pendingSessions,
@@ -217,8 +216,8 @@ function touchUser(ctx: Context) {
     username: u.username ?? null,
   });
   // هدیهٔ شروع فقط یک بار، هنگام اولین دیدار
-  if (!known && config.FREE_TRIAL_COINS > 0) {
-    grant(row.tg_id, coinsToSec(config.FREE_TRIAL_COINS), "trial");
+  if (!known && config.FREE_TRIAL_TOMAN > 0) {
+    grant(row.tg_id, config.FREE_TRIAL_TOMAN, "trial");
     return getUser(row.tg_id);
   }
   return row;
@@ -286,9 +285,9 @@ async function accountScreen(ctx: Context): Promise<void> {
   await reply(
     ctx,
     S.accountMessage({
-      creditSec: u.credit_sec,
-      usedSec: u.total_used_sec,
-      refundedSec: totalShareRefunds(u.tg_id),
+      credit: u.credit_toman,
+      spent: u.total_spent_toman,
+      refunded: totalShareRefunds(u.tg_id),
       sessionCount: done,
     }),
     { reply_markup: withBack(kb) },
@@ -530,7 +529,7 @@ async function coursesScreen(ctx: Context): Promise<void> {
  * (آپلود روی اینترنت ملی، بدون سقف حجم).
  */
 async function sendPrompt(ctx: Context): Promise<void> {
-  const balanceSec = getUser(uid(ctx))?.credit_sec ?? 0;
+  const balanceSec = getUser(uid(ctx))?.credit_toman ?? 0;
   const kb = new InlineKeyboard();
   if (config.PUBLIC_URL.startsWith("https://")) {
     kb.webApp(BTN.app, `${config.PUBLIC_URL.replace(/\/+$/, "")}/app`);
@@ -602,13 +601,13 @@ handlers.command("start", async (ctx) => {
     }
     // لینکِ هدیه از خوش‌آمد و تورِ نمونه رد می‌شود؛ پس نمونه همین‌جا پیشنهاد
     // می‌شود، پیش از آنکه گیرنده بی‌آنکه خروجی را دیده باشد صوت بفرستد.
-    await reply(ctx, claimedMessage(out.coins, out.balanceSec), {
+    await reply(ctx, claimedMessage(out.toman, out.balance), {
       reply_markup: new InlineKeyboard()
         .text(S.START_BTN.sample, WELCOME_CB)
         .row()
         .text(S.START_BTN.send, "startnow"),
     });
-    await notifyGiftClaimed(ctx, code, id, out.coins);
+    await notifyGiftClaimed(ctx, code, id, out.toman);
     return;
   }
 
@@ -651,7 +650,7 @@ handlers.command("start", async (ctx) => {
       await reply(ctx, `این جلسهٔ خودته؛ از «${BTN.history}» بازش کن.`, { reply_markup: mainKeyboard });
       return;
     }
-    const preview = joinPreview(s, u?.credit_sec ?? 0);
+    const preview = joinPreview(s, u?.credit_toman ?? 0);
     if (!preview) {
       await reply(ctx, "این جلسه الان در دسترس نیست.", { reply_markup: mainKeyboard });
       return;
@@ -934,8 +933,8 @@ handlers.command("grant", async (ctx) => {
   if (!Number.isFinite(t) || !Number.isFinite(coins) || coins <= 0) {
     await reply(
       ctx,
-      "استفاده: <code>/grant &lt;tg_id&gt; &lt;coins&gt;</code>\n\n" +
-        `<i>هر سکه یک دقیقه صوت. برای کسی که هنوز شناسه‌ای ندارد از </i><code>/gift</code><i> استفاده کن.</i>`,
+      "استفاده: <code>/grant &lt;tg_id&gt; &lt;toman&gt;</code>\n\n" +
+        `<i>مبلغ به تومان. برای کسی که هنوز شناسه‌ای ندارد از </i><code>/gift</code><i> استفاده کن.</i>`,
     );
     return;
   }
@@ -943,23 +942,23 @@ handlers.command("grant", async (ctx) => {
     await reply(ctx, "چنین کاربری در پایگاه‌داده نیست. اگر هنوز با ربات حرف نزده، <code>/gift</code> بساز.");
     return;
   }
-  const balance = grant(t, coinsToSec(coins), "grant");
+  const balance = grant(t, coins, "grant");
   await reply(
     ctx,
-    `✅ ${fmtCoins(coins)} به ${escapeHtml(describeUser(t))} اضافه شد.\n\nموجودی جدیدش: <b>${fmtBalance(balance)}</b>`,
+    `✅ ${fmtToman(coins)} به ${escapeHtml(describeUser(t))} اضافه شد.\n\nموجودی جدیدش: <b>${fmtToman(balance)}</b>`,
   );
   await notifyUser(
     t,
-    `🎁 <b>${fmtCoins(coins)}</b> به حسابت اضافه شد!\n\nموجودی‌ات: <b>${fmtBalance(balance)}</b>`,
+    `🎁 <b>${fmtToman(coins)}</b> به حسابت اضافه شد!\n\nموجودی‌ات: <b>${fmtToman(balance)}</b>`,
   ).catch(() => {});
 });
 
 /**
  * ساخت لینک هدیه.
  *
- *   /gift                 →  ${DEFAULT_GIFT_COINS} سکه، یک‌بارمصرف
- *   /gift 50              →  ۵۰ سکه، یک‌بارمصرف
- *   /gift 20 x10          →  ۲۰ سکه برای هرکدام از ۱۰ نفر اول
+ *   /gift                 →  ${DEFAULT_GIFT_TOMAN} تومان، یک‌بارمصرف
+ *   /gift 50000           →  ۵۰ هزار تومان، یک‌بارمصرف
+ *   /gift 20000 x10       →  ۲۰ هزار تومان برای هرکدام از ۱۰ نفر اول
  *   /gift 20 x10 7d       →  همان، با هفت روز مهلت
  *   /gift 20 برای رضا     →  یادداشت، تا بعداً معلوم باشد این کد بابت چه بود
  *
@@ -995,14 +994,14 @@ handlers.command("gift", async (ctx) => {
     else words.push(raw);
   }
 
-  coins ??= DEFAULT_GIFT_COINS;
+  coins ??= DEFAULT_GIFT_TOMAN;
   if (coins <= 0 || maxUses <= 0) {
-    await reply(ctx, "مقدار سکه و ظرفیت باید بیشتر از صفر باشد.");
+    await reply(ctx, "مبلغ و ظرفیت باید بیشتر از صفر باشد.");
     return;
   }
 
   const { gift, link } = await mintGift(ctx.api, {
-    coins,
+    toman: coins,
     maxUses,
     note: words.join(" ") || null,
     createdBy: uid(ctx),
@@ -1011,12 +1010,12 @@ handlers.command("gift", async (ctx) => {
 
   // معادل دقیقه‌ای فقط وقتی می‌آید که به ساعت رسیده باشد؛ «۲۰ سکه — ۲۰ دقیقه»
   // یک عدد را دو بار می‌گوید.
-  const asTime = coinsAsMinutesIfUseful(gift.coins);
+  const asTime = fmtMinutesFor(gift.toman);
 
   // یادداشت با `.filter(Boolean)` حذف نمی‌شود، چون آن خطوطِ خالیِ عمدی را هم
   // با خودش می‌برد و فاصله‌گذاری پیام را به هم می‌ریزد.
   const facts = [
-    asTime ? `${fmtCoins(gift.coins)} — ${asTime}` : fmtCoins(gift.coins),
+    `${fmtToman(gift.toman)} — ${asTime}`,
     gift.max_uses === 1 ? "یک‌بارمصرف" : `برای ${toFaDigits(gift.max_uses)} نفر اول`,
     days ? `مهلت: ${toFaDigits(days)} روز` : "بدون مهلت",
     ...(gift.note ? [`یادداشت: ${escapeHtml(gift.note)}`] : []),
@@ -1054,7 +1053,7 @@ handlers.command("ungift", async (ctx) => {
   await reply(
     ctx,
     revokeGift(code)
-      ? `✅ کد <code>${code}</code> باطل شد.\n\n<i>سکه‌هایی که تا الان برداشته شده سر جایش می‌ماند.</i>`
+      ? `✅ کد <code>${code}</code> باطل شد.\n\n<i>اعتباری که تا الان برداشته شده سر جایش می‌ماند.</i>`
       : "این کد از قبل باطل بود.",
   );
 });
@@ -1082,7 +1081,7 @@ async function notifyGiftClaimed(ctx: Context, code: string, tgId: number, coins
     "",
     `کد: <code>${escapeHtml(code)}</code>`,
     `گیرنده: ${escapeHtml(describeUser(tgId))} — <code>${tgId}</code>`,
-    fmtCoins(coins),
+    fmtToman(coins),
   ].join("\n");
   /**
    * هر ادمین از رباتِ سکوی خودش خبر می‌گیرد.
@@ -1127,7 +1126,7 @@ handlers.command("forget", async (ctx) => {
         `الان ${toFaDigits(rows.length)} جلسه از تو ذخیره است.\n\n` +
         `برای پاک‌کردن همه‌شان — صوت، رونوشت، تحلیل و جزوه — بنویس:\n` +
         `<code>/forget همه</code>\n\n` +
-        `<i>سکه‌هایت دست‌نخورده می‌مانند. جلساتی که اشتراکی کرده‌ای فقط از اشتراک خارج می‌شوند، ` +
+        `<i>موجودی‌ات دست‌نخورده می‌ماند. جلساتی که اشتراکی کرده‌ای فقط از اشتراک خارج می‌شوند، ` +
         `چون پاک‌کردنشان دسترسی کسانی را که بابتشان پرداخت کرده‌اند از بین می‌برد.</i>`,
     );
     return;
@@ -1162,7 +1161,7 @@ handlers.command("forget", async (ctx) => {
     ctx,
     `✅ ${toFaDigits(removed)} جلسه کامل پاک شد` +
       (unshared ? ` و ${toFaDigits(unshared)} جلسهٔ اشتراکی از اشتراک خارج شد.` : ".") +
-      `\n\n<i>سکه‌هایت دست‌نخورده‌اند.</i>`,
+      `\n\n<i>موجودی‌ات دست‌نخورده است.</i>`,
   );
 });
 
@@ -1262,7 +1261,7 @@ handlers.command("pending", async (ctx) => {
     const kb = new InlineKeyboard().text("✅ تأیید", `tok:${t.id}`).text("❌ رد", `trej:${t.id}`);
     const caption =
       `<code>${escapeHtml(t.id)}</code> — ${escapeHtml(u?.name ?? String(t.tg_id))}\n` +
-      `${fmtCoins(t.coins)} · ${fmtToman(t.price_toman)}\n<i>${escapeHtml(t.created_at)}</i>`;
+      `${fmtToman(t.price_toman)} · اعتبار ${fmtToman(t.credit_toman)}\n<i>${escapeHtml(t.created_at)}</i>`;
     if (t.receipt_file_id) {
       await ctx.replyWithPhoto(t.receipt_file_id, { caption, parse_mode: "HTML", reply_markup: kb });
     } else {
@@ -1832,10 +1831,14 @@ function confirmKeyboard(sessionId: string): InlineKeyboard {
     .text(S.CONFIRM_BTN.go, `go:${sessionId}`)
     .text(S.CONFIRM_BTN.cancel, `nogo:${sessionId}`)
     .row();
-  (s?.share_enabled
-    ? kb.text(S.shareOnButton(s.share_target ?? SHARE_TARGET), `spre:${sessionId}`)
-    : kb.text(S.CONFIRM_BTN.share, `spre:${sessionId}`)
-  ).row();
+  // خرید اشتراکی فقط وقتی دست‌کم یک تعدادِ معنادار هست؛ فایلِ چنددقیقه‌ای «نفری ۵۰۰ تومان» نمی‌گیرد.
+  const cost = priceOf(Math.round((s?.original_ms ?? 0) / 1000));
+  if (shareCountsFor(cost).length > 0) {
+    (s?.share_enabled
+      ? kb.text(S.shareOnButton(s.share_target ?? SHARE_TARGET, cost), `spre:${sessionId}`)
+      : kb.text(S.CONFIRM_BTN.share, `spre:${sessionId}`)
+    ).row();
+  }
   return kb.text(courseButtonLabel(s?.course_id ?? null), `crs:${sessionId}`);
 }
 
@@ -1863,23 +1866,25 @@ function courseButtonLabel(courseId: number | null): string {
  *
  * صادر شده تا آزمون همین را قفل کند.
  */
-export function lowBalanceKeyboard(sessionId: string, resumeData = `go:${sessionId}`): InlineKeyboard {
-  return payFileKeyboard(sessionId, resumeData);
+export function lowBalanceKeyboard(sessionId: string, _resumeData?: string): InlineKeyboard {
+  return payFileKeyboard(sessionId);
 }
 
-/** سکهٔ کم **بی** خرید گروهی: پرداخت همین فایل، شارژ، و ادامه. */
-function payFileKeyboard(sessionId: string, resumeData = `go:${sessionId}`): InlineKeyboard {
+/**
+ * موجودیِ کم: **«پرداخت همین فایل» و «بی‌خیال»**. شارژِ حساب عمداً اینجا نیست —
+ * دو دکمهٔ خرید کنارِ هم دانشجو را میان «کدام را بزنم» گیر می‌انداخت؛ شارژ از منوی
+ * حساب همیشه هست، و پس از هر شارژی `creditTopup` «ادامهٔ همون فایل» را پیشنهاد می‌دهد.
+ */
+function payFileKeyboard(sessionId: string, _resumeData?: string): InlineKeyboard {
   return new InlineKeyboard()
     .text(S.FILE_BTN.pay, `pf:${sessionId}`)
     .row()
-    .text(S.CONFIRM_BTN.topup, "topup")
-    .row()
-    .text(S.RESUME_BTN, resumeData);
+    .text(S.CONFIRM_BTN.cancel, `nogo:${sessionId}`);
 }
 
 /** متنِ همان صفحه. */
-function lowBalanceText(sec: number, balanceSec: number): string {
-  return S.lowBalanceMessage(sec, balanceSec, undefined, true);
+function lowBalanceText(sec: number, balance: number): string {
+  return S.lowBalanceMessage(priceOf(sec), balance, true);
 }
 
 /**
@@ -1891,7 +1896,7 @@ export function firstFileKeyboard(sessionId: string, enough: boolean): InlineKey
   const kb = new InlineKeyboard().text(S.FILE_BTN.free, `ff:${sessionId}`).row();
   (enough
     ? kb.text(S.CONFIRM_BTN.go, `go:${sessionId}`).text(S.CONFIRM_BTN.cancel, `nogo:${sessionId}`)
-    : kb.text(S.FILE_BTN.pay, `pf:${sessionId}`).text(S.CONFIRM_BTN.topup, "topup")
+    : kb.text(S.FILE_BTN.pay, `pf:${sessionId}`).text(S.CONFIRM_BTN.cancel, `nogo:${sessionId}`)
   ).row();
   return kb.text(courseButtonLabel(getSession(sessionId)?.course_id ?? null), `crs:${sessionId}`);
 }
@@ -1977,7 +1982,7 @@ async function holdBeforeDownload(
 
   createSession(sessionId, u.tg_id, autoCourseId(u.tg_id));
   updateSession(sessionId, {
-    status: u.credit_sec < sec ? "awaiting_credit" : "awaiting_confirm",
+    status: u.credit_toman < priceOf(sec) ? "awaiting_credit" : "awaiting_confirm",
     original_ms: sec * 1000,
     audio_file_id: spec.fileId,
     audio_chat_id: ctx.chat!.id,
@@ -1987,23 +1992,23 @@ async function holdBeforeDownload(
 
   const offer = freeFileOffer(u.tg_id);
   if (offer) {
-    await reply(ctx, S.firstFileMessage(sec, u.credit_sec, offer), {
-      reply_markup: firstFileKeyboard(sessionId, u.credit_sec >= sec),
+    await reply(ctx, S.firstFileMessage(sec, u.credit_toman, offer), {
+      reply_markup: firstFileKeyboard(sessionId, u.credit_toman >= priceOf(sec)),
     });
     return;
   }
 
-  if (u.credit_sec < sec) {
+  if (u.credit_toman < priceOf(sec)) {
     await reply(
       ctx,
-      lowBalanceText(sec, u.credit_sec) +
+      lowBalanceText(sec, u.credit_toman) +
         "\n\n<i>فایلت همون‌جا تو چت هست — بعد از شارژ همین دکمه رو بزن، لازم نیست دوباره بفرستی.</i>",
       { reply_markup: lowBalanceKeyboard(sessionId) },
     );
     return;
   }
 
-  await reply(ctx, S.confirmCostMessage(sec, u.credit_sec), {
+  await reply(ctx, S.confirmCostMessage(sec, u.credit_toman), {
     reply_markup: confirmKeyboard(sessionId),
   });
 }
@@ -2093,17 +2098,17 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
   const offer = effectiveSec > 0 ? freeFileOffer(id) : null;
   if (offer) {
     updateSession(sessionId, {
-      status: u.credit_sec < effectiveSec ? "awaiting_credit" : "awaiting_confirm",
+      status: u.credit_toman < priceOf(effectiveSec) ? "awaiting_credit" : "awaiting_confirm",
       original_file: audioFile,
       original_ms: effectiveSec * 1000,
     });
-    await reply(ctx, S.firstFileMessage(effectiveSec, u.credit_sec, offer), {
-      reply_markup: firstFileKeyboard(sessionId, u.credit_sec >= effectiveSec),
+    await reply(ctx, S.firstFileMessage(effectiveSec, u.credit_toman, offer), {
+      reply_markup: firstFileKeyboard(sessionId, u.credit_toman >= priceOf(effectiveSec)),
     });
     return;
   }
 
-  if (effectiveSec > 0 && u.credit_sec < effectiveSec) {
+  if (effectiveSec > 0 && u.credit_toman < priceOf(effectiveSec)) {
     /**
      * **فایل دانلود شده و سرجایش است — پس این نباید بن‌بست باشد.**
      *
@@ -2125,7 +2130,7 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
     });
     await reply(
       ctx,
-      lowBalanceText(effectiveSec, u.credit_sec) +
+      lowBalanceText(effectiveSec, u.credit_toman) +
         "\n\n<i>فایلت نگه داشته شد — بعد از شارژ لازم نیست دوباره بفرستی.</i>",
       { reply_markup: lowBalanceKeyboard(sessionId, `resume:${sessionId}`) },
     );
@@ -2159,7 +2164,7 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
       original_file: audioFile,
       original_ms: effectiveSec * 1000,
     });
-    await reply(ctx, S.confirmCostMessage(effectiveSec, u.credit_sec), {
+    await reply(ctx, S.confirmCostMessage(effectiveSec, u.credit_toman), {
       reply_markup: confirmKeyboard(sessionId),
     });
     return;
@@ -2312,10 +2317,10 @@ handlers.callbackQuery(/^full:([a-f0-9]+)$/, async (ctx) => {
   }
 
   const durationSec = Math.round(s.original_ms / 1000);
-  if (u.credit_sec < durationSec) {
+  if (u.credit_toman < priceOf(durationSec)) {
     await ctx.answerCallbackQuery();
-    await reply(ctx, S.lowBalanceMessage(durationSec, u.credit_sec), {
-      reply_markup: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
+    await reply(ctx, S.lowBalanceMessage(priceOf(durationSec), u.credit_toman), {
+      reply_markup: new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup"),
     });
     return;
   }
@@ -2363,10 +2368,10 @@ async function resumeSession(ctx: Context, sessionId: string, opts: { free?: boo
 
   let durationSec = Math.max(0, Math.round(s.original_ms / 1000));
   // رایگان هنوز واریز نشده — پس از دانلود و با مدتِ واقعی واریز می‌شود.
-  if (!opts.free && durationSec > 0 && u.credit_sec < durationSec) {
+  if (!opts.free && durationSec > 0 && u.credit_toman < priceOf(durationSec)) {
     // منتظرِ شارژ، تا پس از شارژ «ادامهٔ همون فایل» پیشنهاد شود (`awaitingCreditSessions`).
     updateSession(sessionId, { status: "awaiting_credit" });
-    await reply(ctx, lowBalanceText(durationSec, u.credit_sec), {
+    await reply(ctx, lowBalanceText(durationSec, u.credit_toman), {
       reply_markup: lowBalanceKeyboard(sessionId, `resume:${sessionId}`),
     });
     return;
@@ -2427,12 +2432,12 @@ async function resumeSession(ctx: Context, sessionId: string, opts: { free?: boo
 
         // گران‌تر از آنچه قول داده بودیم و سکه‌اش را هم دارد؟ دوباره بپرس، بی‌خبر نگیر.
         // با رایگان، واریز همین پایین با مدتِ واقعی است؛ دوباره‌پرسیدن لازم نیست.
-        if (!opts.free && costCoins(realSec) > costCoins(quotedSec) + 1 && u.credit_sec >= realSec) {
+        if (!opts.free && priceOf(realSec) > priceOf(quotedSec) + TOMAN_PER_MINUTE && u.credit_toman >= priceOf(realSec)) {
           updateSession(sessionId, { status: "awaiting_confirm" });
           await reply(
             ctx,
             `این فایل بلندتر از چیزی بود که اول نشون داده شد، پس هزینه‌ش هم بیشتره.\n\n` +
-              S.confirmCostMessage(realSec, u.credit_sec, shareOf(getSession(sessionId))),
+              S.confirmCostMessage(realSec, u.credit_toman, shareOf(getSession(sessionId))),
             { reply_markup: confirmKeyboard(sessionId) },
           );
           return;
@@ -2461,11 +2466,11 @@ async function resumeSession(ctx: Context, sessionId: string, opts: { free?: boo
       fingerprint: await fingerprint(audioFile!),
       durationSec,
     });
-    await reply(ctx, claim.ok ? S.freeFileGrantedMessage(claim.grantedSec, claim.fallback) : S.FREE_FILE_REFUSAL[claim.reason]);
+    await reply(ctx, claim.ok ? S.freeFileGrantedMessage(claim.granted, claim.fallback) : S.FREE_FILE_REFUSAL[claim.reason]);
     const now = getUser(u.tg_id)!;
-    if (!claim.ok && now.credit_sec >= durationSec) {
+    if (!claim.ok && now.credit_toman >= priceOf(durationSec)) {
       updateSession(sessionId, { status: "awaiting_confirm" });
-      await reply(ctx, S.confirmCostMessage(durationSec, now.credit_sec), { reply_markup: confirmKeyboard(sessionId) });
+      await reply(ctx, S.confirmCostMessage(durationSec, now.credit_toman), { reply_markup: confirmKeyboard(sessionId) });
       return;
     }
   }
@@ -2479,11 +2484,11 @@ async function resumeSession(ctx: Context, sessionId: string, opts: { free?: boo
    * شارژ هیچ پیشنهادِ ادامه‌ای نمی‌آمد. و صوت هم پیش از آن به بایگانی رفته بود.
    */
   const payer = getUser(u.tg_id)!;
-  if (durationSec > 0 && payer.credit_sec < durationSec) {
+  if (durationSec > 0 && payer.credit_toman < priceOf(durationSec)) {
     updateSession(sessionId, { status: "awaiting_credit" });
     await reply(
       ctx,
-      opts.free ? S.lowBalanceMessage(durationSec, payer.credit_sec, undefined, true) : lowBalanceText(durationSec, payer.credit_sec),
+      opts.free ? S.lowBalanceMessage(priceOf(durationSec), payer.credit_toman, true) : lowBalanceText(durationSec, payer.credit_toman),
       {
         reply_markup: opts.free
           ? payFileKeyboard(sessionId, `resume:${sessionId}`)
@@ -2587,7 +2592,8 @@ handlers.callbackQuery(/^ff:([a-f0-9]+)$/, async (ctx) => {
  * «💳 پرداخت همین فایل» — سفارشی به‌اندازهٔ کسریِ همین فایل.
  *
  * کسری در لحظهٔ زدن حساب می‌شود نه وقتِ ساختنِ دکمه: شاید از آن وقت شارژ کرده
- * یا سکه‌ای برگشته. اگر دیگر کسری نیست، سفارشِ صفر تومانی ساخته نمی‌شود.
+ * یا پولی برگشته. اگر دیگر کسری نیست، سفارشِ صفر تومانی ساخته نمی‌شود و همان فایل
+ * شروع می‌شود — صفحهٔ موجودیِ کم دکمهٔ «شروع کن» ندارد که بشود به آن ارجاع داد.
  */
 handlers.callbackQuery(/^pf:([a-f0-9]+)$/, async (ctx) => {
   const s = getSession(ctx.match![1]!);
@@ -2596,9 +2602,10 @@ handlers.callbackQuery(/^pf:([a-f0-9]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
     return;
   }
-  const short = costCoins(Math.round(s.original_ms / 1000)) - balanceCoins(u.credit_sec);
+  const short = priceOf(Math.round(s.original_ms / 1000)) - u.credit_toman;
   if (short <= 0) {
-    await ctx.answerCallbackQuery({ text: `سکه‌هات کافیه؛ «${S.RESUME_BTN}» رو بزن.`, show_alert: true });
+    await ctx.answerCallbackQuery({ text: "موجودیت کافیه؛ شروع کردم…" });
+    await resumeSession(ctx, s.id);
     return;
   }
   let out;
@@ -2627,7 +2634,7 @@ handlers.callbackQuery(/^nogo:([a-f0-9]+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   if (!s || s.tg_id !== uid(ctx)) return;
   await ctx.editMessageText(
-    `باشه، شروع نکردم و سکه‌ای کم نشد.\n\n` +
+    `باشه، شروع نکردم و پولی کم نشد.\n\n` +
       `<i>فایلت تا ${toFaDigits(config.KEEP_AUDIO_DAYS)} روز نگه داشته می‌شه — هر وقت خواستی بزن.</i>`,
     {
       parse_mode: "HTML",
@@ -2835,9 +2842,9 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
    */
   // مدتِ واقعی، بی کفِ یک دقیقه: با کف، فایلِ ۴۰ ثانیه‌ای برای کسی که ۵۰ ثانیه
   // اعتبار داشت پس از «شروع کن» رد می‌شد. صفر فقط وقتی مدت را اصلاً نداریم.
-  const reservedSec = job.declaredDurationSec > 0 ? job.declaredDurationSec : 60;
+  const reserved = priceOf(job.declaredDurationSec > 0 ? job.declaredDurationSec : 60);
   try {
-    reserve(userId, reservedSec, sessionId);
+    reserve(userId, reserved, sessionId);
     clearStarting(sessionId);
   } catch (e) {
     clearStarting(sessionId);
@@ -2850,7 +2857,7 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
        */
       updateSession(sessionId, { status: "awaiting_credit" });
       await ctx.api
-        .editMessageText(chatId, progress.message_id, S.lowBalanceMessage(e.needed, e.balance, undefined, true), {
+        .editMessageText(chatId, progress.message_id, S.lowBalanceMessage(e.needed, e.balance, true), {
           parse_mode: "HTML",
           reply_markup: payFileKeyboard(sessionId, `resume:${sessionId}`),
         })
@@ -2885,8 +2892,8 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
 
       // تسویه: فقط تفاوت مدت واقعی و مدتی که رزرو شده بود جابه‌جا می‌شود
       const actualSec = Math.round(out.originalDurationMs / 1000);
-      commit(userId, reservedSec, actualSec, sessionId);
-      registerOwner(sessionId, userId, actualSec);
+      commit(userId, reserved, priceOf(actualSec), sessionId);
+      registerOwner(sessionId, userId, priceOf(actualSec));
       await sendResults(ctx, sessionId, out, course?.name ?? null);
 
       // گزارش جلسهٔ پولی، ریپلایِ صوتِ همان جلسه در کانال بایگانی
@@ -2901,10 +2908,10 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
       // بی‌کلام: همان بخشی که به رونویسی رفت (پس از حذفِ سکوت) کم می‌شود — چرایی در `jobFailedMessage`.
       const heardSec =
         e instanceof JobFailure && e.kind === "no_speech"
-          ? Math.min(reservedSec, Math.round((getSession(sessionId)?.billed_ms ?? 0) / 1000))
+          ? Math.round((getSession(sessionId)?.billed_ms ?? 0) / 1000)
           : 0;
-      if (heardSec > 0) commit(userId, reservedSec, heardSec, sessionId);
-      else refund(userId, reservedSec, sessionId, "کار ناموفق بود");
+      if (heardSec > 0) commit(userId, reserved, Math.min(reserved, priceOf(heardSec)), sessionId);
+      else refund(userId, reserved, sessionId, "کار ناموفق بود");
       const failed = getSession(sessionId);
       if (failed) await archiveFailure(failed, message);
 
@@ -3016,12 +3023,12 @@ export async function sendResults(
    * پایینِ جزوه گم می‌شدند. جزوه بعد از همین پیام می‌آید.
    */
   const u = getUser(uid(ctx));
-  const cost = Math.round(out.originalDurationMs / 1000);
+  const cost = priceOf(Math.round(out.originalDurationMs / 1000));
   // اگر سرِ تأیید «تقسیم می‌کنم» زده بود، دعوت پایین‌تر خودکار می‌آید.
   const shareOn = Boolean(s?.share_enabled);
   const tail =
     u && s
-      ? S.settlementMessage(cost, u.credit_sec, shareOn, {
+      ? S.settlementMessage(cost, u.credit_toman, shareOn, {
           people: s.share_target,
           hasArchive: moreKeyboard(s) !== null,
         })
@@ -3073,10 +3080,10 @@ handlers.callbackQuery(/^spre:([a-f0-9]+)$/, async (ctx) => {
     return;
   }
   await ctx.answerCallbackQuery();
-  const costSec = Math.round(s.original_ms / 1000);
-  await ctx.reply(S.shareTargetPrompt(costSec), {
+  const cost = priceOf(Math.round(s.original_ms / 1000));
+  await ctx.reply(S.shareTargetPrompt(cost), {
     parse_mode: "HTML",
-    reply_markup: shareTargetKeyboard(sessionId, "sontp", costSec),
+    reply_markup: shareTargetKeyboard(sessionId, "sontp", cost),
   });
 });
 
@@ -3116,8 +3123,12 @@ handlers.callbackQuery(/^sontp:([a-f0-9]+):(\d+)$/, async (ctx) => {
   setShareEnabled(sessionId, true);
   await ctx.answerCallbackQuery({ text: "تقسیم روشن شد" });
   await ctx
-    .editMessageText(S.sharePreEnabledMessage(Math.round(s.original_ms / 1000), people), {
+    .editMessageText(S.sharePreEnabledMessage(priceOf(Math.round(s.original_ms / 1000)), people), {
       parse_mode: "HTML",
+      // دکمهٔ شروع همین‌جا، تا دنبالِ پیامِ تأییدِ قبلی نگردد.
+      reply_markup: new InlineKeyboard()
+        .text(S.CONFIRM_BTN.go, `go:${sessionId}`)
+        .text(S.CONFIRM_BTN.cancel, `nogo:${sessionId}`),
     })
     .catch(() => {});
 });
@@ -3130,10 +3141,10 @@ handlers.callbackQuery(/^son:([a-f0-9]+)$/, async (ctx) => {
     return;
   }
   await ctx.answerCallbackQuery();
-  const costSec = Math.round(s.original_ms / 1000);
-  await ctx.reply(S.shareTargetPrompt(costSec), {
+  const cost = priceOf(Math.round(s.original_ms / 1000));
+  await ctx.reply(S.shareTargetPrompt(cost), {
     parse_mode: "HTML",
-    reply_markup: shareTargetKeyboard(sessionId, "sont", costSec),
+    reply_markup: shareTargetKeyboard(sessionId, "sont", cost),
   });
 });
 
@@ -3174,9 +3185,8 @@ async function sendInvitation(ctx: Context, sessionId: string): Promise<void> {
   });
   await ctx.reply(
     S.invitationTail({
-      costSec: Math.round(s.original_ms / 1000),
-      seatCoins: costCoins(st?.seatSec ?? 0),
-      refundedCoins: costCoins(st?.ownerRefundedSec ?? 0),
+      seat: st?.seat ?? 0,
+      refunded: st?.ownerRefunded ?? 0,
       capReached: Boolean(st?.capReached),
     }),
     { parse_mode: "HTML" },
@@ -3217,7 +3227,7 @@ handlers.command("shared", async (ctx) => {
     if (!s) continue;
     const st = shareStatus(id);
     const mine = s.tg_id === uid(ctx) ? "فرستادهٔ خودت" : "پیوسته‌ای";
-    const share = st?.capReached ? "رایگان" : `سهم هرکس ${fmtCost(st?.seatSec ?? 0)}`;
+    const share = st?.capReached ? "رایگان" : `سهم هرکس ${fmtToman(st?.seat ?? 0)}`;
     lines.push(
       `• <b>${escapeHtml(s.title ?? "بدون عنوان")}</b> — ${mine}\n` +
         `  ${toFaDigits(st?.memberCount ?? 0)} نفر برداشتن · ${share}`,

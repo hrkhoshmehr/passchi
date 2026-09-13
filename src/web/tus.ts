@@ -21,7 +21,7 @@ import { FileStore } from "@tus/file-store";
 export type FinalizeResult =
   | {
       status: 200;
-      body: { sessionId: string; durationSec: number; costCoins: number; haveCoins: number; enough: boolean };
+      body: { sessionId: string; durationSec: number; cost: number; have: number; enough: boolean };
     }
   | { status: 400 | 402; body: { error: string } };
 

@@ -30,6 +30,7 @@ import { db } from "../db/index.js";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { atomic } from "./ledger.js";
+import { priceOf } from "./money.js";
 
 export interface FreeFileOffer {
   /** سقفِ رایگانِ همین حالا، به دقیقه */
@@ -41,7 +42,7 @@ export interface FreeFileOffer {
 export type FreeFileRefusal = "off" | "used" | "audio_used";
 
 export type FreeFileClaim =
-  | { ok: true; grantedSec: number; fallback: boolean }
+  | { ok: true; granted: number; fallback: boolean }
   | { ok: false; reason: FreeFileRefusal };
 
 function usedBy(tgId: number): boolean {
@@ -92,22 +93,23 @@ export function claimFreeFile(o: {
     if (audioUsed(o.fingerprint)) return { ok: false, reason: "audio_used" };
 
     const offer = currentOffer();
-    const grantedSec = Math.min(offer.minutes * 60, Math.max(60, Math.round(o.durationSec)));
+    // اعتبار به‌اندازهٔ قیمتِ همین فایل تا سقفِ دقیقه — همان `priceOf` که رزرو می‌کند.
+    const granted = priceOf(Math.min(offer.minutes * 60, Math.max(1, Math.round(o.durationSec))));
     db.prepare(
-      `INSERT INTO free_files (tg_id, session_id, fingerprint, granted_sec, fallback) VALUES (?, ?, ?, ?, ?)`,
-    ).run(o.tgId, o.sessionId, o.fingerprint, grantedSec, offer.fallback ? 1 : 0);
+      `INSERT INTO free_files (tg_id, session_id, fingerprint, granted_toman, fallback) VALUES (?, ?, ?, ?, ?)`,
+    ).run(o.tgId, o.sessionId, o.fingerprint, granted, offer.fallback ? 1 : 0);
     m({
       tgId: o.tgId,
-      deltaSec: grantedSec,
+      delta: granted,
       reason: "free_file",
       sessionId: o.sessionId,
       note: offer.fallback ? "سقف هفتگی پر بود" : null,
     });
-    return { ok: true, grantedSec, fallback: offer.fallback };
+    return { ok: true, granted, fallback: offer.fallback };
   });
 
   if (out.ok) {
-    logger.info({ tgId: o.tgId, sessionId: o.sessionId, sec: out.grantedSec, fallback: out.fallback }, "free file granted");
+    logger.info({ tgId: o.tgId, sessionId: o.sessionId, toman: out.granted, fallback: out.fallback }, "free file granted");
   } else {
     logger.info({ tgId: o.tgId, sessionId: o.sessionId, reason: out.reason }, "free file refused");
   }

@@ -16,8 +16,8 @@
  *    پیام‌هایی مثل «Unexpected token <» و «signal timed out» به کاربر
  *    می‌دادند. `friendlyError` باید برای هر خطای بی‌پاسخِ سرور، فارسی بدهد.
  *
- * ۳. **«نفری n سکه».** صفحهٔ تأیید سهم را پیش از هر درخواستی حساب می‌کند؛ اگر
- *    از `shareBack` عقب بماند، عددی که کاربر به هم‌کلاسی‌ها قول می‌دهد غلط است.
+ * ۳. **«نفری n تومان».** صفحهٔ تأیید سهم را پیش از هر درخواستی حساب می‌کند؛ اگر
+ *    از `shareSeat` سرور عقب بماند، عددی که کاربر به هم‌کلاسی‌ها قول می‌دهد غلط است.
  *
  * اجرا: DATA_DIR=./data/tmp-pending npx tsx scripts/test-pending-resume.mjs
  */
@@ -137,13 +137,14 @@ check("«دوباره بفرست» دیگر به کاربرِ کم‌سکه گف
     );
     return { mod, els };
   };
-  const P = { sessionId: "abc123", durationSec: 5580, costCoins: 93, haveCoins: 20, enough: false };
+  // هزینه و موجودی به تومان، با همان نام‌هایی که سرور می‌فرستد (`cost`، `have`).
+  const P = { sessionId: "abc123", durationSec: 5580, cost: 139_500, have: 20_000, enough: false };
 
   {
     const { mod, els } = make({ pending: P });
     const offered = await mod.checkPending();
     check("فایل منتظر → کارت باز می‌شود", offered === true && els.resume.hidden === false);
-    check("کارت هزینه را می‌گوید", els["resume-meta"].textContent.includes("93"));
+    check("کارت هزینه را می‌گوید", els["resume-meta"].textContent.includes("139500"), els["resume-meta"].textContent);
     check("همان جلسه برای «ادامه بده» نگه داشته می‌شود", mod.resumable?.sessionId === "abc123");
   }
   {
@@ -199,21 +200,36 @@ check("«دوباره بفرست» دیگر به کاربرِ کم‌سکه گف
   check("هیچ err.message خامی روی صفحه نمی‌رود", !/(fail\([^)]*|textContent = |esc\()\s*(err|e)\.message/.test(js));
 }
 
-// ─── ۴. «نفری n سکه» همان shareBack است ─────────────────────────────────────
+// ─── ۴. «نفری n تومان» همان shareSeat سرور است ──────────────────────────────
+//
+// `shareSeat(costToman, people)` در app.js باید خودبسنده باشد (بی ثابتِ بیرونی)
+// چون جدا از بقیهٔ فایل اجرا می‌شود.
 
 {
-  const { shareBack, costCoins } = await import("../src/billing/coins.ts");
-  const shareSeat = new Function(`${grab("shareSeat")}\nreturn shareSeat;`)();
+  const money = await import("../src/billing/money.ts");
+  const appSeat = new Function(`${grab("shareSeat")}\nreturn shareSeat;`)();
   let drift = null;
-  for (const min of [1, 2, 3, 15, 20, 45, 90, 94, 137, 240]) {
-    for (const people of [5, 10, 20, 30, 1, 3]) {
-      const sec = min * 60;
-      const want = shareBack(sec, people).cap > 0 ? shareBack(sec, people).seat : 0;
-      const got = shareSeat(costCoins(sec), people);
-      if (want !== got) drift ??= `${min} دقیقه، ${people} نفر: سرور ${want} · اپ ${got}`;
+  for (const min of [1, 2, 3, 7, 15, 20, 45, 90, 94, 137, 240]) {
+    for (const people of [2, 3, 5, 10, 20, 30, 1]) {
+      const cost = money.priceOf(min * 60);
+      const want = money.shareSeat(cost, people);
+      const got = appSeat(cost, people);
+      if (want !== got) drift ??= `${min} دقیقه (${cost} تومان)، ${people} نفر: سرور ${want} · اپ ${got}`;
     }
   }
-  check("سهمِ صفحهٔ تأیید با shareBack یکی است", drift === null, drift ?? "");
+  check("سهمِ صفحهٔ تأیید با shareSeat سرور یکی است", drift === null, drift ?? "");
+
+  // تعدادهای روی صفحهٔ تأیید هم همان دکمه‌های ربات باشند؛ وگرنه مینی‌اپ «۲۰ نفر ·
+  // نفری ۵۰۰» نشان می‌دهد در حالی که ربات آن را معنادار نمی‌داند.
+  const appCounts = new Function(`${grab("shareSeat")}\n${grab("shareCountsFor")}\nreturn shareCountsFor;`)();
+  let countDrift = null;
+  for (const min of [1, 3, 5, 7, 10, 15, 20, 45, 67, 90, 137, 240]) {
+    const cost = money.priceOf(min * 60);
+    const want = JSON.stringify(money.shareCountsFor(cost));
+    const got = JSON.stringify(appCounts(cost));
+    if (want !== got) countDrift ??= `${min} دقیقه: سرور ${want} · اپ ${got}`;
+  }
+  check("تعدادهای صفحهٔ تأیید با shareCountsFor سرور یکی است", countDrift === null, countDrift ?? "");
 }
 
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);

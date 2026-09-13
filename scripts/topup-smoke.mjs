@@ -10,7 +10,7 @@ process.env.BOT_TOKEN ||= "x";
 
 const { upsertUser, getUser, openTopup, setTopupStatus, pendingTopups } = await import("../src/db/index.ts");
 const { beginTopup, decide } = await import("../src/bot/topup.ts");
-const { balanceCoins } = await import("../src/billing/coins.ts");
+const { balanceCoins } = await import("../src/billing/money.ts");
 
 const TG = 4242;
 upsertUser(TG, "دانشجوی نمونه", "student");

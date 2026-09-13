@@ -1,10 +1,10 @@
 /**
  * اولین صوتِ رایگان — دروازه‌ها، سقف‌ها، و دفتر.
  *
- * ۱) حسابِ تازه پیشنهادِ ۱۲۰ دقیقه می‌گیرد؛ گرفتن سکه‌اش را با سطرِ `free_file` واریز می‌کند.
+ * ۱) حسابِ تازه پیشنهادِ ۱۲۰ دقیقه می‌گیرد؛ گرفتن اعتبارش را با سطرِ `free_file` واریز می‌کند.
  * ۲) همان حساب بار دوم رد می‌شود.
  * ۳) همان **محتوای** صوت با حسابِ دیگر رد می‌شود و سکه‌ای نمی‌گیرد.
- * ۴) فایلِ بلندتر فقط تا سقف؛ فایلِ خیلی کوتاه دست‌کم یک دقیقه (کفِ رزرو).
+ * ۴) فایلِ بلندتر فقط تا سقف؛ فایلِ خیلی کوتاه به قیمتِ خودش (همان که رزرو می‌شود).
  * ۵) سقفِ هفتگی پر ⇒ پیشنهاد ۳۰ دقیقه، نه خاموش؛ ردیف‌های قدیمی‌تر از هفته شمرده نمی‌شوند.
  * ۶) پرچمِ خاموش ⇒ نه پیشنهاد نه گرفتن.
  * ۷) صفحهٔ فایلِ اول: رایگان بالا، بی خرید گروهی.
@@ -24,6 +24,7 @@ const { claimFreeFile, freeFileOffer } = await import("../src/billing/free-file.
 const { config } = await import("../src/config.ts");
 const S = await import("../src/bot/strings.ts");
 const { firstFileKeyboard } = await import("../src/bot/index.ts");
+const { fmtToman, priceOf } = await import("../src/billing/money.ts");
 
 let bad = 0;
 const check = (label, ok, extra = "") => {
@@ -37,42 +38,42 @@ const user = () => {
   upsertUser(id, `f${id}`, null);
   return id;
 };
-const bal = (id) => getUser(id).credit_sec;
+const bal = (id) => getUser(id).credit_toman;
 const rows = (id) => db.prepare(`SELECT * FROM credit_ledger WHERE tg_id = ? AND reason = 'free_file'`).all(id);
 
 // ─── ۱ و ۲) یک بار برای هر حساب ──────────────────────────────────────────────
 const A = user();
 check("حسابِ تازه پیشنهادِ ۱۲۰ دقیقه‌ای می‌گیرد", JSON.stringify(freeFileOffer(A)) === '{"minutes":120,"fallback":false}', JSON.stringify(freeFileOffer(A)));
 let c = claimFreeFile({ tgId: A, sessionId: "s-a1", fingerprint: "fpA", durationSec: 5400 });
-check("فایلِ ۹۰ دقیقه‌ای کامل رایگان شد", c.ok && c.grantedSec === 5400, JSON.stringify(c));
-check("همان‌قدر سکه به حساب آمد", bal(A) === 5400, String(bal(A)));
+check("فایلِ ۹۰ دقیقه‌ای کامل رایگان شد", c.ok && c.granted === priceOf(5400), JSON.stringify(c));
+check("همان‌قدر اعتبار به حساب آمد", bal(A) === priceOf(5400), String(bal(A)));
 check("با سطرِ free_file و شناسهٔ جلسه", rows(A).length === 1 && rows(A)[0].session_id === "s-a1");
 check("دیگر پیشنهادی ندارد", freeFileOffer(A) === null);
 c = claimFreeFile({ tgId: A, sessionId: "s-a2", fingerprint: "fpA2", durationSec: 600 });
 check("بار دوم رد می‌شود: used", !c.ok && c.reason === "used", JSON.stringify(c));
-check("و سکه‌ای اضافه نشد", bal(A) === 5400 && rows(A).length === 1);
+check("و اعتباری اضافه نشد", bal(A) === priceOf(5400) && rows(A).length === 1);
 
 // ─── ۳) یک صوت، یک بار ───────────────────────────────────────────────────────
 const B = user();
 c = claimFreeFile({ tgId: B, sessionId: "s-b1", fingerprint: "fpA", durationSec: 5400 });
 check("همان صوت با حسابِ دیگر رد می‌شود: audio_used", !c.ok && c.reason === "audio_used", JSON.stringify(c));
-check("حسابِ دوم سکه‌ای نگرفت", bal(B) === 0 && rows(B).length === 0);
+check("حسابِ دوم اعتباری نگرفت", bal(B) === 0 && rows(B).length === 0);
 check("ولی رایگانش هنوز برای صوتِ خودش باز است", freeFileOffer(B) !== null);
 
 // ─── ۴) سقف و کف ────────────────────────────────────────────────────────────
 const C = user();
 c = claimFreeFile({ tgId: C, sessionId: "s-c1", fingerprint: "fpC", durationSec: 150 * 60 });
-check("فایلِ ۱۵۰ دقیقه‌ای فقط تا ۱۲۰ دقیقه", c.ok && c.grantedSec === 7200, JSON.stringify(c));
+check("فایلِ ۱۵۰ دقیقه‌ای فقط تا ۱۲۰ دقیقه", c.ok && c.granted === priceOf(7200), JSON.stringify(c));
 const D = user();
 c = claimFreeFile({ tgId: D, sessionId: "s-d1", fingerprint: "fpD", durationSec: 20 });
-check("فایلِ ۲۰ ثانیه‌ای یک دقیقه می‌گیرد (کفِ رزرو)", c.ok && c.grantedSec === 60, JSON.stringify(c));
+check("فایلِ ۲۰ ثانیه‌ای قیمتِ خودش را می‌گیرد — همان که startJob رزرو می‌کند", c.ok && c.granted > 0 && c.granted === priceOf(20), JSON.stringify(c));
 
 // ─── ۵) سقفِ هفتگی ───────────────────────────────────────────────────────────
 // تا اینجا سه رایگان (A، C، D) — سقفِ آزمون سه است.
 const E = user();
 check("سقف پر ⇒ پیشنهادِ ۳۰ دقیقه، نه خاموش", JSON.stringify(freeFileOffer(E)) === '{"minutes":30,"fallback":true}', JSON.stringify(freeFileOffer(E)));
 c = claimFreeFile({ tgId: E, sessionId: "s-e1", fingerprint: "fpE", durationSec: 5400 });
-check("و گرفتنش فقط ۳۰ دقیقه واریز می‌کند", c.ok && c.grantedSec === 1800 && c.fallback, JSON.stringify(c));
+check("و گرفتنش فقط ۳۰ دقیقه واریز می‌کند", c.ok && c.granted === priceOf(1800) && c.fallback, JSON.stringify(c));
 db.prepare(`UPDATE free_files SET created_at = datetime('now', '-8 days')`).run();
 const F = user();
 check("رایگان‌های قدیمی‌تر از یک هفته شمرده نمی‌شوند", JSON.stringify(freeFileOffer(F)) === '{"minutes":120,"fallback":false}', JSON.stringify(freeFileOffer(F)));
@@ -90,22 +91,23 @@ config.FREE_FIRST_FILE = true;
   const poor = firstFileKeyboard("ab01", false).inline_keyboard;
   const all = [...rich.flat(), ...poor.flat()].map((b) => b.callback_data);
   check("رایگان دکمهٔ اولِ ردیفِ اول است", rich[0][0].callback_data === "ff:ab01" && poor[0][0].callback_data === "ff:ab01");
-  check("با سکهٔ کافی: شروع با سکه و بی‌خیال", rich[1].map((b) => b.callback_data).join(" ") === "go:ab01 nogo:ab01", rich[1].map((b) => b.callback_data).join(" "));
-  check("بی سکهٔ کافی: پرداخت همین فایل و شارژ", poor[1].map((b) => b.callback_data).join(" ") === "pf:ab01 topup", poor[1].map((b) => b.callback_data).join(" "));
+  check("با موجودیِ کافی: شروع و بی‌خیال", rich[1].map((b) => b.callback_data).join(" ") === "go:ab01 nogo:ab01", rich[1].map((b) => b.callback_data).join(" "));
+  check("بی موجودیِ کافی: پرداخت همین فایل و بی‌خیال", poor[1].map((b) => b.callback_data).join(" ") === "pf:ab01 nogo:ab01", poor[1].map((b) => b.callback_data).join(" "));
+  check("ردیفِ سوم دکمهٔ درسِ جلسه است", rich[2]?.[0]?.callback_data === "crs:ab01" && poor[2]?.[0]?.callback_data === "crs:ab01");
   check("خرید گروهی روی فایلِ اول نیست", !all.some((d) => d.startsWith("gb")), all.join(" "));
 
   const long = S.firstFileMessage(150 * 60, 0, { minutes: 120 });
-  check("پیامِ فایلِ بلند سهمِ پولی را می‌گوید", long.includes("۳۰ سکه") && long.includes("بقیه"), long);
+  check("پیامِ فایلِ بلند سهمِ پولی را می‌گوید", long.includes(fmtToman(priceOf(150 * 60) - priceOf(120 * 60))) && long.includes("بقیه"), long);
   const short = S.firstFileMessage(60 * 60, 0, { minutes: 120 });
   check("پیامِ فایلِ کوتاه‌تر از سقف چیزی از پول نمی‌گوید", !short.includes("بقیه"));
   check("پیام می‌گوید یک بار برای هر حساب", short.includes("فقط یه باره"));
-  check("پیامِ فال‌بک می‌گوید چرا کوتاه‌تر است", S.freeFileGrantedMessage(1800, true).includes("این هفته"));
+  check("پیامِ فال‌بک می‌گوید چرا کوتاه‌تر است", S.freeFileGrantedMessage(priceOf(1800), true).includes("این هفته"));
 }
 
 // ─── ۹) از دکمه تا دفتر، روی رباتِ جعلی ─────────────────────────────────────
 //
-// فایلِ ۱۵۰ دقیقه‌ای و حسابِ بی‌سکه: رایگان ۱۲۰ دقیقه واریز می‌شود و بقیه
-// «سکه‌ات کمه» با «پرداخت همین فایل» می‌گیرد — پیش از هر `startJob`، پس خط
+// فایلِ ۱۵۰ دقیقه‌ای و حسابِ بی‌اعتبار: رایگانِ ۱۲۰ دقیقه واریز می‌شود و بقیه
+// «موجودیت کافی نیست» با «پرداخت همین فایل» می‌گیرد — پیش از هر `startJob`، پس خط
 // لولهٔ واقعی راه نمی‌افتد.
 {
   const fs = await import("node:fs");
@@ -159,19 +161,21 @@ config.FREE_FIRST_FILE = true;
 
   const S1 = mk("feed0000feed0001", 150, "audio-G-1");
   let cs = await press(`ff:${S1}`, PID);
-  check("دکمهٔ رایگان ۱۲۰ دقیقه واریز کرد", getUser(G).credit_sec === 7200, String(getUser(G).credit_sec));
+  check("دکمهٔ رایگان ۱۲۰ دقیقه واریز کرد", getUser(G).credit_toman === priceOf(7200), String(getUser(G).credit_toman));
   check("خبرِ رایگان به دانشجو رسید", texts(cs).includes("رایگان برای همین فایل"), texts(cs));
   check("برای ۳۰ دقیقهٔ بقیه «پرداخت همین فایل» آمد", btns(cs).includes(`pf:${S1}`), btns(cs).join(" "));
   check("خرید گروهی روی فایلِ اول پیشنهاد نشد", !btns(cs).some((d) => d?.startsWith("gb")));
-  check("جلسه منتظرِ شارژ ماند و کاری شروع نشد", getSession(S1).status === "awaiting_credit" && !texts(cs).includes("آماده"), getSession(S1).status);
+  // «آماده» دیگر نشانه نیست: متنِ موجودیِ کم خودش «جزوه که آماده شد» دارد. شروعِ کار یعنی رزرو در دفتر.
+  const reservedS1 = db.prepare(`SELECT COUNT(*) AS n FROM credit_ledger WHERE session_id = ? AND reason = 'reserve'`).get(S1).n;
+  check("جلسه منتظرِ شارژ ماند و کاری شروع نشد", getSession(S1).status === "awaiting_credit" && reservedS1 === 0 && !texts(cs).includes("تو صفه"), `${getSession(S1).status} · رزرو ${reservedS1}`);
 
   cs = await press(`ff:${S1}`, PID);
-  check("زدنِ دوباره: «قبلاً گرفتی» و سکه‌ای اضافه نشد", texts(cs).includes("قبلاً گرفتی") && getUser(G).credit_sec === 7200, texts(cs));
+  check("زدنِ دوباره: «قبلاً گرفتی» و اعتباری اضافه نشد", texts(cs).includes("قبلاً گرفتی") && getUser(G).credit_toman === priceOf(7200), texts(cs));
 
   const S2 = mk("feed0000feed0002", 10, "audio-G-2");
   updateSession(S2, { status: "done" });
   cs = await press(`ff:${S2}`, PID);
-  check("روی فایلی که کارش شروع شده، دکمهٔ رایگان کاری نمی‌کند", cs.some((c) => c.method === "answerCallbackQuery" && c.payload.text?.includes("شروع شده")) && getUser(G).credit_sec === 7200);
+  check("روی فایلی که کارش شروع شده، دکمهٔ رایگان کاری نمی‌کند", cs.some((c) => c.method === "answerCallbackQuery" && c.payload.text?.includes("شروع شده")) && getUser(G).credit_toman === priceOf(7200));
 
   const OTHER = 77_990_002;
   resolveIdentity({ platform: "telegram", platformUserId: String(OTHER), name: "غریبه" });
@@ -206,7 +210,7 @@ config.FREE_FIRST_FILE = true;
   };
   try {
     let r = await post("/api/sessions/precheck", { durationSec: 9000 });
-    check("precheck برای حسابِ بی‌سکه ولی رایگان‌دار ۴۰۲ نمی‌دهد", r.status === 200 && r.body.freeFile?.minutes === 120, JSON.stringify(r));
+    check("precheck برای حسابِ بی‌اعتبار ولی رایگان‌دار ۴۰۲ نمی‌دهد", r.status === 200 && r.body.freeFile?.minutes === 120, JSON.stringify(r));
     r = await post("/api/sessions/precheck", { durationSec: 9000 }, createSessionToken(G, "telegram"));
     check("precheck برای کسی که رایگانش را گرفته همان ۴۰۲ قدیمی", r.status === 402, JSON.stringify(r));
 
@@ -215,10 +219,10 @@ config.FREE_FIRST_FILE = true;
     createSession(SW, W, null);
     updateSession(SW, { status: "queued", original_file: wav, download_route: "web", mode: "full" });
     r = await post(`/api/sessions/${SW}/confirm`, { free: true });
-    check("confirm با رایگان: رایگان واریز شد و برای بقیه ۴۰۲", r.status === 402 && getUser(W).credit_sec === 60, `${JSON.stringify(r)} · ${getUser(W).credit_sec}`);
+    check("confirm با رایگان: رایگان واریز شد و برای بقیه ۴۰۲", r.status === 402 && getUser(W).credit_toman === priceOf(60), `${JSON.stringify(r)} · ${getUser(W).credit_toman}`);
     check("ردیفِ رایگان برای همین جلسه ثبت شد", db.prepare(`SELECT session_id FROM free_files WHERE tg_id = ?`).get(W)?.session_id === SW);
     r = await post(`/api/sessions/${SW}/confirm`, { free: true });
-    check("confirm دوباره با رایگان: ۴۰۹ با دلیلِ used، بی واریزِ دوباره", r.status === 409 && r.body.freeRefused === "used" && getUser(W).credit_sec === 60, JSON.stringify(r));
+    check("confirm دوباره با رایگان: ۴۰۹ با دلیلِ used، بی واریزِ دوباره", r.status === 409 && r.body.freeRefused === "used" && getUser(W).credit_toman === priceOf(60), JSON.stringify(r));
   } finally {
     config.FREE_FIRST_FILE_MAX_MIN = 120;
     await new Promise((ok) => server.close(ok));
@@ -230,9 +234,9 @@ config.FREE_FIRST_FILE = true;
 {
   const drift = db
     .prepare(
-      `SELECT u.tg_id, u.credit_sec, COALESCE(SUM(l.delta_sec), 0) AS sum
+      `SELECT u.tg_id, u.credit_toman, COALESCE(SUM(l.delta_toman), 0) AS sum
          FROM users u LEFT JOIN credit_ledger l ON l.tg_id = u.tg_id
-        WHERE u.tg_id > 7700000 GROUP BY u.tg_id HAVING u.credit_sec != sum`,
+        WHERE u.tg_id > 7700000 GROUP BY u.tg_id HAVING u.credit_toman != sum`,
     )
     .all();
   check("جمعِ دفتر برای هر حساب با موجودی می‌خواند", drift.length === 0, JSON.stringify(drift));

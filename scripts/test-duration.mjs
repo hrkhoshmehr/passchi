@@ -15,7 +15,7 @@
  * اجرا: npx tsx scripts/test-duration.mjs
  */
 import { declaredDurationSec } from "../src/util/time.ts";
-import { costCoins } from "../src/billing/coins.ts";
+import { priceOf } from "../src/billing/money.ts";
 
 let bad = 0;
 const check = (label, ok, extra = "") => {
@@ -31,7 +31,7 @@ const check = (label, ok, extra = "") => {
   const r = declaredDurationSec(49_440, SIZE);
   check("ویسِ بله (میلی‌ثانیه) به ثانیه برمی‌گردد", r.sec === 49, `${r.sec}`);
   check("و مطمئن است", r.sure);
-  check("هزینه‌اش یک سکه است نه ۸۲۴", costCoins(r.sec) === 1, `${costCoins(r.sec)} سکه`);
+  check("هزینه‌اش ۱٬۵۰۰ تومان است نه یک میلیون", priceOf(r.sec) === 1_500, `${priceOf(r.sec)} تومان`);
 
   // همان فایل، اگر سکو ثانیه بدهد — نباید دست بخورد
   const s = declaredDurationSec(49, SIZE);
@@ -46,7 +46,7 @@ const check = (label, ok, extra = "") => {
   const SIZE = 24 * 1024 * 1024; // ۲۴ مگابایت، نمونهٔ واقعیِ کلاس ۵۲ دقیقه‌ای
   const asSec = declaredDurationSec(3_102, SIZE);
   check("کلاس ۵۲ دقیقه‌ای با اعلامِ ثانیه درست می‌ماند", asSec.sec === 3_102 && asSec.sure);
-  check("و رایگان تمام نمی‌شود", costCoins(asSec.sec) === 52, `${costCoins(asSec.sec)} سکه`);
+  check("و رایگان تمام نمی‌شود", priceOf(asSec.sec) === 78_000, `${priceOf(asSec.sec)} تومان`);
 
   const asMs = declaredDurationSec(3_101_946, SIZE);
   check("همان کلاس با اعلامِ میلی‌ثانیه هم درست می‌شود", asMs.sec === 3_102 && asMs.sure);

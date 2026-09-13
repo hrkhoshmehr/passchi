@@ -42,7 +42,7 @@ import { InsufficientCredit } from "../billing/ledger.js";
 import { deliveryChannel } from "../bot/notify.js";
 import { FREE_FILE_REFUSAL } from "../bot/strings.js";
 import { unreservedSql } from "../db/index.js";
-import { balanceCoins, costCoins, fmtCoins, PACKAGES, COINS_PER_MINUTE, SHARE_TARGET } from "../billing/coins.js";
+import { PACKAGES, SHARE_TARGET, TOMAN_PER_MINUTE, fmtToman, priceOf } from "../billing/money.js";
 import { setShareEnabled, setShareTarget } from "../billing/sharing.js";
 import { history } from "../billing/ledger.js";
 import {
@@ -224,7 +224,7 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
       if (!user) return json(res, 401, { error: "احراز هویت مینی‌اپ ناموفق بود." });
       return json(res, 200, {
         token: createSessionToken(user.tg_id, platform),
-        user: { name: user.name, coins: balanceCoins(user.credit_sec) },
+        user: { name: user.name, credit: user.credit_toman },
         /**
          * سکویی که امضایش **واقعاً** پذیرفته شد.
          *
@@ -254,7 +254,7 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
         const user = verifyOtp(phone ?? "", code ?? "");
         return json(res, 200, {
           token: createSessionToken(user.tg_id, "web"),
-          user: { name: user.name, coins: balanceCoins(user.credit_sec) },
+          user: { name: user.name, credit: user.credit_toman },
         });
       } catch (e) {
         if (e instanceof OtpError) return json(res, 400, { error: e.message, code: e.code });
@@ -277,10 +277,9 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
       return json(res, 200, {
         name: u.name,
         username: u.username,
-        coins: balanceCoins(u.credit_sec),
-        creditSec: u.credit_sec,
-        totalUsedSec: u.total_used_sec,
-        coinsPerMinute: COINS_PER_MINUTE,
+        credit: u.credit_toman,
+        spent: u.total_spent_toman,
+        tomanPerMinute: TOMAN_PER_MINUTE,
         platforms: identitiesOf(uid).map((i) => i.platform),
       });
     }
@@ -290,8 +289,7 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
       if (uid === null) return;
       return json(res, 200, {
         entries: history(uid, 30).map((r) => ({
-          delta: r.delta_sec,
-          deltaCoins: balanceCoins(Math.abs(r.delta_sec)) * Math.sign(r.delta_sec),
+          delta: r.delta_toman,
           reason: r.reason,
           sessionId: r.session_id,
           note: r.note,
@@ -303,7 +301,7 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
     case "GET /api/packages":
       return json(res, 200, {
         packages: PACKAGES,
-        coinsPerMinute: COINS_PER_MINUTE,
+        tomanPerMinute: TOMAN_PER_MINUTE,
         // مینی‌اپ فقط وقتی دکمهٔ «پرداخت» می‌سازد که درگاه واقعاً هست؛ وگرنه
         // کاربر را به ربات می‌فرستد که مسیر کارت‌به‌کارت آنجاست.
         gateway: gatewayConfigured(),
@@ -372,11 +370,11 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
     case "GET /api/config":
       return json(res, 200, {
         phoneLogin: phoneLoginEnabled(),
-        coinsPerMinute: COINS_PER_MINUTE,
+        tomanPerMinute: TOMAN_PER_MINUTE,
         // هدیهٔ شروع از پیکربندی می‌آید، نه از متنِ سفت‌شده در HTML. یک بار
         // صفحه «۱۰۰ سکه» تبلیغ می‌کرد در حالی که مقدار واقعی ۲۰ شده بود —
         // یعنی کاربر با وعده‌ای می‌آمد که ربات زیرش نمی‌زد.
-        trialCoins: config.FREE_TRIAL_COINS,
+        trialToman: config.FREE_TRIAL_TOMAN,
         // آدرس‌ها از خودِ `getMe` می‌آیند نه از HTML سفت‌شده یا متغیر محیطی:
         // هر دو با عوض‌شدن توکن ربات بی‌صدا کهنه می‌شوند و کاربر را به چت
         // اشتباه می‌برند.
@@ -439,17 +437,17 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
       }
       // اولین صوتِ رایگان هنوز گرفته نشده؟ پیش از آپلود «سکه‌ات کمه» نگو.
       const free = freeFileOffer(uid);
-      if (sec > 0 && u.credit_sec < sec && !free) {
+      if (sec > 0 && u.credit_toman < priceOf(sec) && !free) {
         return json(res, 402, {
           error: "اعتبارت کم است.",
-          needCoins: costCoins(sec),
-          haveCoins: balanceCoins(u.credit_sec),
+          need: priceOf(sec),
+          have: u.credit_toman,
         });
       }
       return json(res, 200, {
         ok: true,
-        costCoins: sec > 0 ? costCoins(sec) : null,
-        haveCoins: balanceCoins(u.credit_sec),
+        cost: sec > 0 ? priceOf(sec) : null,
+        have: u.credit_toman,
         freeFile: free,
       });
     }
@@ -523,7 +521,7 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
            FROM sessions s
           WHERE s.tg_id = ? AND s.status = 'queued' AND s.download_route = 'web'
             AND s.original_file IS NOT NULL
-            AND COALESCE((SELECT SUM(x.delta_sec) FROM credit_ledger x WHERE x.session_id = s.id
+            AND COALESCE((SELECT SUM(x.delta_toman) FROM credit_ledger x WHERE x.session_id = s.id
                             AND x.reason IN ('reserve', 'refund')), 0) >= 0
             AND NOT EXISTS (SELECT 1 FROM credit_ledger x WHERE x.session_id = s.id AND x.reason = 'commit')
           ORDER BY s.created_at DESC LIMIT 1`,
@@ -542,9 +540,9 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
       pending: {
         sessionId: row.id,
         durationSec: sec,
-        costCoins: costCoins(sec),
-        haveCoins: balanceCoins(u.credit_sec),
-        enough: u.credit_sec >= sec,
+        cost: priceOf(sec),
+        have: u.credit_toman,
+        enough: u.credit_toman >= priceOf(sec),
         freeFile: freeFileOffer(uid),
       },
     });
@@ -1021,11 +1019,11 @@ async function uploadAudio(
   const declaredSec = Math.max(0, Number(url.searchParams.get("duration") ?? 0));
   const courseId = Number(url.searchParams.get("courseId") ?? 0) || null;
 
-  if (declaredSec > 0 && u.credit_sec < declaredSec && !freeFileOffer(userId)) {
+  if (declaredSec > 0 && u.credit_toman < priceOf(declaredSec) && !freeFileOffer(userId)) {
     return refuse(req, res, 402, {
       error: "اعتبارت کم است.",
-      needCoins: costCoins(declaredSec),
-      haveCoins: balanceCoins(u.credit_sec),
+      need: priceOf(declaredSec),
+      have: u.credit_toman,
     });
   }
 
@@ -1115,7 +1113,7 @@ type UploadResult =
   | {
       status: 200;
       body: {
-        sessionId: string; durationSec: number; costCoins: number; haveCoins: number; enough: boolean;
+        sessionId: string; durationSec: number; cost: number; have: number; enough: boolean;
         freeFile: FreeFileOffer | null;
       };
     }
@@ -1174,9 +1172,9 @@ async function finalizeUpload(o: {
     body: {
       sessionId,
       durationSec: sec,
-      costCoins: costCoins(sec),
-      haveCoins: balanceCoins(u.credit_sec),
-      enough: u.credit_sec >= sec,
+      cost: priceOf(sec),
+      have: u.credit_toman,
+      enough: u.credit_toman >= priceOf(sec),
       freeFile: freeFileOffer(userId),
     },
   };
@@ -1330,8 +1328,8 @@ async function confirmSession(
     if (e instanceof InsufficientCredit) {
       return json(res, 402, {
         error: "اعتبارت کم است.",
-        needCoins: costCoins(e.needed),
-        haveCoins: balanceCoins(e.balance),
+        need: e.needed,
+        have: e.balance,
       });
     }
     throw e;
@@ -1659,9 +1657,9 @@ async function handlePayCallback(url: URL, res: Res): Promise<void> {
 
   switch (r.outcome) {
     case "credited":
-      return sendPage(res, 200, payPageFor({ ok: true, title: "پرداخت موفق", body: "سکه‌ها به حسابت اضافه شد و خبرش توی ربات اومده. برگرد به ربات و صوت کلاستو بفرست." }));
+      return sendPage(res, 200, payPageFor({ ok: true, title: "پرداخت موفق", body: "اعتبارش به حسابت اضافه شد و خبرش توی ربات اومده. برگرد به ربات و صوت کلاستو بفرست." }));
     case "already":
-      return sendPage(res, 200, payPageFor({ ok: true, title: "قبلاً تسویه شده", body: "سکه‌های این پرداخت همون موقع به حسابت اضافه شده بود." }));
+      return sendPage(res, 200, payPageFor({ ok: true, title: "قبلاً تسویه شده", body: "اعتبار این پرداخت همون موقع به حسابت اضافه شده بود." }));
     case "unpaid":
       return sendPage(res, 200, payPageFor({ ok: false, title: "پرداخت انجام نشد", body: cancelled ? "از پرداخت انصراف دادی. هر وقت خواستی از ربات دوباره شروع کن." : "پولی از این پرداخت نرسید. اگه از حسابت کم شده، توی ربات «بررسی پرداخت» رو بزن." }));
     case "error":
@@ -1793,4 +1791,4 @@ export function startWebServer(): http.Server | null {
   return server;
 }
 
-export { fmtCoins };
+export { fmtToman };

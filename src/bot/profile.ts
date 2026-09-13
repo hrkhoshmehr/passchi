@@ -11,8 +11,6 @@
 
 import type { Api } from "grammy";
 import { logger } from "../util/logger.js";
-import { fmtCoins } from "../billing/coins.js";
-import { TRIAL_COINS } from "./menu.js";
 
 /** حداکثر ۱۲۰ کاراکتر — زیر نام ربات در صفحهٔ پروفایل و در نتایج جست‌وجو */
 export const SHORT_DESCRIPTION =
@@ -27,7 +25,7 @@ export const DESCRIPTION = `دیگه لازم نیست سر کلاس جزوه ب
 🕘 بخش‌بندی کلاس با زمان
 📕 جزوهٔ کامل PDF
 
-خرجشو با هم‌کلاسیات تقسیم کن — با ۱۰ نفر، نصف سکه‌هات برمی‌گرده.
+خرجشو با هم‌کلاسیات تقسیم کن — لینک جلسه رو بفرست، هر کی بیاد سهمش رو می‌ده و تو فقط سهم خودت رو.
 
 اول کار نمونهٔ یه کلاس واقعی رو نشونت می‌دم، و یه صوت هم رایگان برات پیاده می‌کنم. /start بزن.`;
 
@@ -42,7 +40,7 @@ export const COMMANDS = [
   { command: "start", description: "شروع" },
   { command: "menu", description: "منوی اصلی" },
   { command: "history", description: "جلسه‌های قبلی" },
-  { command: "credit", description: "حساب و سکه‌ها" },
+  { command: "credit", description: "حساب و موجودی" },
   { command: "buy", description: "شارژ حساب" },
   { command: "course", description: "ثبت درس" },
   { command: "help", description: "راهنما" },

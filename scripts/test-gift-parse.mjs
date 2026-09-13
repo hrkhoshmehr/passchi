@@ -6,7 +6,7 @@
  *
  * ## باگی که این آزمون نگه می‌دارد
  *
- * `/gift ۵۰` با رقم فارسی، بی‌صدا به «یادداشت» می‌افتاد: کد با ۲۰ سکهٔ
+ * `/gift ۵۰` با رقم فارسی، بی‌صدا به «یادداشت» می‌افتاد: کد با هدیهٔ
  * پیش‌فرض ساخته می‌شد و هیچ خطایی هم داده نمی‌شد. ادمین این دستور را از روی
  * موبایل با صفحه‌کلید فارسی می‌زند، پس این حالتِ نادری نیست.
  *
@@ -33,13 +33,13 @@ if (begin < 0 || end < 0) {
 // می‌خواهد نه تایپ‌اسکریپت.
 const loop = src.slice(begin, end + 4).replace(/let m: RegExpMatchArray \| null;/, "let m;");
 
-const DEFAULT_GIFT_COINS = 20;
+const DEFAULT_GIFT_TOMAN = 20_000;
 const body = `
   const parts = (arg ?? "").trim().split(/\\s+/).filter(Boolean);
   let coins = null, maxUses = 1, days = null;
   const words = [];
 ${loop}
-  return { coins: coins ?? ${DEFAULT_GIFT_COINS}, maxUses, days, note: words.join(" ") || null };
+  return { coins: coins ?? ${DEFAULT_GIFT_TOMAN}, maxUses, days, note: words.join(" ") || null };
 `;
 const parse = new Function("arg", body);
 
@@ -47,7 +47,7 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // ─── حالت‌های مستند ─────────────────────────────────────────────────────────
 check("بدون آرگومان → ۲۰ سکه، یک‌بارمصرف",
-  eq(parse(""), { coins: 20, maxUses: 1, days: null, note: null }));
+  eq(parse(""), { coins: 20000, maxUses: 1, days: null, note: null }));
 check("مقدار تنها",
   eq(parse("50"), { coins: 50, maxUses: 1, days: null, note: null }));
 check("مقدار و ظرفیت",

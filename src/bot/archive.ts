@@ -31,7 +31,7 @@ import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml, transcriptBytes } from "../util/text.js";
 import { fmtDuration } from "../util/time.js";
-import { fmtCost } from "../billing/coins.js";
+import { fmtToman, priceOf } from "../billing/money.js";
 import { getSession, updateSession, type SessionMode, type SessionRow } from "../db/index.js";
 import type { Platform } from "../db/identity.js";
 import type { AnalysisReport } from "../analysis/schema.js";
@@ -129,7 +129,7 @@ export function audioCaption(i: {
   if (i.sourceUrl) out.push(`🔗 ${escapeHtml(i.sourceUrl)}`);
   if (i.courseName) out.push(`📘 ${escapeHtml(i.courseName)}`);
   if (i.mode === "full") {
-    out.push(`💸 ${fmtCost(Math.round(i.durationMs / 1000))}`);
+    out.push(`💸 ${fmtToman(priceOf(Math.round(i.durationMs / 1000)))}`);
   }
   out.push("", `<code>${i.sessionId}</code>`);
   return out.join("\n");
@@ -382,7 +382,7 @@ export async function archiveUpgrade(s: SessionRow): Promise<void> {
   try {
     await tgApi!.sendMessage(
       config.ARCHIVE_CHAT_ID!,
-      `⬆️ <b>ارتقا به تحلیل کامل</b> — ${fmtCost(Math.round(s.original_ms / 1000))} کسر شد.`,
+      `⬆️ <b>ارتقا به تحلیل کامل</b> — ${fmtToman(priceOf(Math.round(s.original_ms / 1000)))} کسر شد.`,
       { parse_mode: "HTML", ...reply },
     );
   } catch (e) {

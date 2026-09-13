@@ -1,66 +1,55 @@
 /**
  * بررسی قیمت‌گذاری: هزینهٔ تمام‌شده، حاشیهٔ هر پکیج، و قیمت یک کلاس واقعی.
  *
- * بعد از هر تغییری در `PACKAGES` یا در فرض‌های هزینه اجرا شود. خروجی‌اش
- * جواب این سؤال است: «آیا هنوز داریم سود می‌کنیم؟»
+ * بعد از هر تغییری در `PACKAGES`، `TOMAN_PER_MINUTE` یا فرض‌های هزینه اجرا شود.
+ * حاشیه **پس از کارمزد درگاه** است (`packageMargin`) و هدیهٔ پکیج را هم حساب
+ * می‌کند؛ عددِ پیش از کارمزد فقط برای مقایسه کنارش می‌آید.
  *
- * حاشیه **پس از کارمزد درگاه** است (`packageMargin`)؛ عددِ پیش از کارمزد فقط
- * برای مقایسه کنارش می‌آید، نه برای تصمیم.
+ * اجرا: node --import tsx scripts/pricing.mjs
  */
 import {
-  COINS_PER_MINUTE, COST_PER_AUDIO_HOUR_USD, COST_PER_COIN_TOMAN, GATEWAY_FEE_MAX_TOMAN,
-  GATEWAY_FEE_MIN_TOMAN, GATEWAY_FEE_PCT, GATEWAY_FEE_VAT, MIN_MARGIN, PACKAGES, SHARE_TARGET,
-  USD_TOMAN, classesFor, costCoins, gatewayFeeToman, packageMargin, shareBack,
-} from "../src/billing/coins.ts";
+  COST_PER_AUDIO_HOUR_USD, COST_PER_MINUTE_TOMAN, GATEWAY_FEE_MAX_TOMAN, GATEWAY_FEE_MIN_TOMAN,
+  GATEWAY_FEE_PCT, GATEWAY_FEE_VAT, MIN_MARGIN, MIN_TOPUP_TOMAN, PACKAGES, SHARE_COUNTS, TOMAN_PER_MINUTE,
+  USD_TOMAN, fileTopup, gatewayFeeToman, packageMargin, priceOf, shareCap, shareSeat,
+} from "../src/billing/money.ts";
 
-const fa = (n) => n.toLocaleString("fa-IR", { maximumFractionDigits: 0 });
+const fa = (n) => Math.round(n).toLocaleString("fa-IR");
 
 console.log("فرض‌های هزینه");
-console.log(`  هر ساعت صوت: $${COST_PER_AUDIO_HOUR_USD.toFixed(2)}`);
-console.log(`  نرخ دلار: ${fa(USD_TOMAN)} تومان`);
-console.log(`  نرخ سکه: هر دقیقه ${COINS_PER_MINUTE} سکه`);
-console.log(`  ⇒ هزینهٔ هر سکه برای ما: ${COST_PER_COIN_TOMAN.toFixed(1)} تومان`);
+console.log(`  هر ساعت صوت: $${COST_PER_AUDIO_HOUR_USD.toFixed(2)} · نرخ دلار ${fa(USD_TOMAN)} تومان`);
+console.log(`  هزینهٔ هر دقیقه برای ما: ${COST_PER_MINUTE_TOMAN.toFixed(1)} تومان · قیمتِ فروشِ هر دقیقه: ${fa(TOMAN_PER_MINUTE)} تومان`);
 console.log(
   `  کارمزد درگاه: ${GATEWAY_FEE_PCT * 100}٪، کف ${fa(GATEWAY_FEE_MIN_TOMAN)} و سقف ${fa(GATEWAY_FEE_MAX_TOMAN)} تومان،` +
     ` +${GATEWAY_FEE_VAT * 100}٪ مالیات\n`,
 );
 
 let worst = Infinity;
-const base = PACKAGES[0].price / PACKAGES[0].coins;
-
-console.log("پکیج‌ها (حاشیه پس از کارمزد)");
+console.log("پکیج‌ها (حاشیه پس از کارمزد، با هدیه)");
 for (const p of PACKAGES) {
-  const perCoin = p.price / p.coins;
-  const gross = perCoin / COST_PER_COIN_TOMAN;
   const margin = packageMargin(p);
-  const discount = Math.round((1 - perCoin / base) * 100);
   worst = Math.min(worst, margin);
+  const perMinute = p.price / (p.credit / TOMAN_PER_MINUTE);
   console.log(
-    `  ${p.id} · ${String(p.coins).padStart(5)} سکه · ${String(fa(p.price)).padStart(9)} تومان` +
-      ` · کارمزد ${fa(gatewayFeeToman(p.price))}` +
-      ` · هر سکه ${perCoin.toFixed(0)} تومان` +
-      ` · حاشیه ×${margin.toFixed(2)} (بی‌کارمزد ×${gross.toFixed(2)})` +
-      ` · تخفیف ${discount}٪` +
-      ` · ${classesFor(p.coins)} کلاس ۹۰ دقیقه‌ای`,
+    `  ${p.id} · ${fa(p.price).padStart(9)} تومان ⇒ اعتبار ${fa(p.credit).padStart(9)}` +
+      ` · کارمزد ${fa(gatewayFeeToman(p.price))} · هر دقیقه عملاً ${fa(perMinute)} تومان · حاشیه ×${margin.toFixed(2)}`,
   );
 }
 
+const minFile = fileTopup(0);
+const fileMargin = packageMargin(minFile);
+worst = Math.min(worst, fileMargin);
+console.log(`\n«پرداخت همین فایل» با کمترین مبلغ (${fa(MIN_TOPUP_TOMAN)}): حاشیه ×${fileMargin.toFixed(2)}`);
+
 console.log("\nیک کلاس ۹۰ دقیقه‌ای");
-const classCoins = costCoins(90 * 60);
-const { seat, cap } = shareBack(90 * 60, SHARE_TARGET);
-for (const p of PACKAGES) {
-  const price = (classCoins * p.price) / p.coins;
-  const each = (seat * p.price) / p.coins;
-  const back = Math.round((cap / classCoins) * 100);
-  console.log(
-    `  با پکیج ${p.coins}: ${fa(price)} تومان تنها` +
-      ` — یا ${fa(each)} تومان برای هر یک از ${SHARE_TARGET} نفر (سهمِ ثابت، تا ${back}٪ برگشت به مالک)`,
-  );
+const cls = priceOf(90 * 60);
+console.log(`  قیمت: ${fa(cls)} تومان`);
+for (const n of SHARE_COUNTS) {
+  console.log(`  ${fa(n)} نفر: سهم هر نفر ${fa(shareSeat(cls, n))} · برگشتیِ صاحب جلسه تا ${fa(shareCap(cls, n))}`);
 }
 
 console.log(`\nکف حاشیه پس از کارمزد: ×${worst.toFixed(2)} (حداقل قابل قبول: ×${MIN_MARGIN})`);
 if (worst < MIN_MARGIN) {
-  console.error("❌ یک پکیج زیر کف حاشیه است.");
+  console.error("❌ یک پکیج یا پرداختِ فایل زیر کف حاشیه است.");
   process.exit(1);
 }
-console.log("✅ همهٔ پکیج‌ها بالای کف حاشیه‌اند.");
+console.log("✅ همه بالای کف حاشیه‌اند.");
