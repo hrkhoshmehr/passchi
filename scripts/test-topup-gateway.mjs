@@ -71,12 +71,12 @@ const TG = 9101;
 upsertUser(TG, "آزمون درگاه", "gw");
 const bal = () => balanceCoins(getUser(TG).credit_sec);
 const start = bal();
-const p1 = findPackage("p1");
+const p1 = findPackage("p4");
 
 check("درگاه تنظیم است", gatewayConfigured());
 
 // ── شروع ────────────────────────────────────────────────────────────────────
-const o = await beginTopup(TG, "p1");
+const o = await beginTopup(TG, "p4");
 check("لینک پرداخت ساخته شد", o.payUrl?.startsWith("https://gateway.zibal.ir/start/"), o.payUrl);
 check("مبلغ به ریال رفت", calls[0].body.amount === p1.price * 10, String(calls[0].body.amount));
 check("orderId همان شناسهٔ سفارش است", calls[0].body.orderId === o.id);
@@ -117,8 +117,8 @@ const anon = async (qs) => {
   return { status: res.status, html: await res.text() };
 };
 try {
-  const p2 = findPackage("p2");
-  const o2 = await beginTopup(TG, "p2");
+  const p2 = findPackage("p5");
+  const o2 = await beginTopup(TG, "p5");
   const track2 = getTopup(o2.id).track_id;
   /** هر نشانه‌ای که بگوید این سفارش چیست یا مال کیست. */
   const leaks = (html) =>
@@ -154,7 +154,7 @@ try {
   const fakeApi = (username) => ({ getMe: async () => ({ username }) });
   await resolveBotLinks(fakeApi("paschi_tg_bot"), fakeApi("paschi_bale_bot"));
   const baleOwner = resolveIdentity({ platform: "bale", platformUserId: "77001", name: "بله‌ای" });
-  const ob = await beginTopup(baleOwner.tg_id, "p0");
+  const ob = await beginTopup(baleOwner.tg_id, "p4");
   verifyResult = 100;
   page = await anon(`trackId=${getTopup(ob.id).track_id}&success=1`);
   check("صفحهٔ بازگشتِ کاربر بله ربات بله را نشان می‌دهد", page.html.includes("ble.ir/paschi_bale_bot"));
@@ -170,7 +170,7 @@ try {
 // ── انصراف از ربات — تنها راهِ بستنِ سفارشِ درگاهی ────────────────────────────
 {
   const before = bal();
-  const o3 = await beginTopup(TG, "p3");
+  const o3 = await beginTopup(TG, "p6");
   check("انصراف کاربر روی سفارش درگاهی", cancelTopup(o3.id, TG) && getTopup(o3.id).status === "rejected");
   check("انصراف با شناسهٔ غلط رد می‌شود", cancelTopup(o.id, 1) === false);
   verifyResult = 100;
@@ -185,9 +185,9 @@ try {
 // مقایسهٔ سخت مبلغ) پولش می‌رفت و سکه نمی‌آمد.
 {
   const before = bal();
-  const o4 = await beginTopup(TG, "p1");
+  const o4 = await beginTopup(TG, "p4");
   const stored = getTopup(o4.id);
-  const pkg = findPackage("p1");
+  const pkg = findPackage("p4");
   const saved = { coins: pkg.coins, price: pkg.price };
   // «استقرار»: همان شناسه، سکه و قیمتِ دیگر
   pkg.coins = saved.coins + 7;

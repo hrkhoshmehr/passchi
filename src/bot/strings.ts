@@ -7,7 +7,7 @@ import {
   fmtBalance, fmtCoins, fmtCost, fmtToman, PACKAGES, RATE_LINE, shareBack, SHARE_TARGET_MIN,
   type CoinPackage,
 } from "../billing/coins.js";
-import { BTN } from "./menu.js";
+import { BTN, sharePitch } from "./menu.js";
 import type { JobFailureKind } from "../util/job-failure.js";
 import type { SessionStatus } from "../db/index.js";
 import type { RefusalReason as GroupRefusal } from "../billing/group-buy.js";
@@ -54,12 +54,11 @@ export const HELP = `<b>چیکار می‌کنم</b>
 ${COIN_MEANING}. موجودی و شارژ: «${BTN.account}».
 
 <b>با بچه‌های کلاس شریک شو</b>
-هر کی با لینک جزوه رو بگیره یه سهم کوچیک، سر یه کلاس ۹۰ دقیقه‌ای بین ${toFaDigits(shareBack(5400, 30).seat)} تا ${toFaDigits(shareBack(5400, 5).seat)} سکه، می‌ده که میاد تو حساب تو، تا نصف هزینه. بعدش برای بقیه مجانیه.
+${sharePitch(`سر یه کلاس ۹۰ دقیقه‌ای بین ${toFaDigits(shareBack(5400, 30).seat)} تا ${toFaDigits(shareBack(5400, 5).seat)} سکه`)} بعدش برای بقیه مجانیه.
 
 <b>بقیه</b>
 جلسه‌های قبلی: «${BTN.history}»
 ثبت درس: «${BTN.courses}»
-سکه دادن به هم‌کلاسی: «${BTN.account}»
 داده‌هات و پاک‌کردنشون:
 /privacy`;
 
@@ -763,8 +762,6 @@ export interface AccountInput {
   usedSec: number;
   refundedSec: number;
   sessionCount: number;
-  /** سکه‌های خریداری‌شده و خرج‌نشده — تنها چیزی که می‌شود برای هم‌کلاسی فرستاد */
-  transferableSec?: number;
 }
 
 /**
@@ -786,7 +783,6 @@ export interface AccountInput {
 export function accountMessage(i: AccountInput): string {
   const coins = balanceCoins(i.creditSec);
   const asTime = coinsAsMinutesIfUseful(coins);
-  const transferable = balanceCoins(i.transferableSec ?? 0);
 
   const stats: string[] = [];
   if (i.sessionCount > 0) stats.push(`📚 ${toFaDigits(i.sessionCount)} جلسه فرستاده‌ای`);
@@ -800,27 +796,6 @@ export function accountMessage(i: AccountInput): string {
       ...(asTime ? [`<i>یعنی حدود ${asTime}</i>`] : []),
     ],
     ...(stats.length ? [stats] : []),
-    /**
-     * «فرستادن سکه» فقط وقتی گفته می‌شود که کاربر واقعاً چیزی برای فرستادن
-     * دارد.
-     *
-     * نشان‌دادنش به کسی که فقط سهمیهٔ رایگان دارد، دعوت به دیوارِ «قابل
-     * فرستادن نیست» است — همان اشتباهی که در مسیر آپلود قبلاً افتاد و به
-     * همین دلیل موجودی *پیش از* آپلود گفته می‌شود.
-     */
-    /**
-     * به دکمه اشاره می‌کند، نه به دستور.
-     *
-     * پیش‌تر `/send 20` وسطِ خطِ فارسی می‌آمد: هم روی گوشی جابه‌جا چیده
-     * می‌شد و هم تنها راهِ کار تایپِ یک دستور بود. دکمه‌اش حالا زیرِ همین
-     * صفحه است.
-     */
-    ...(transferable > 0
-      ? [[
-          `<i>تا ${fmtCoins(transferable)} از اینا رو می‌تونی به هم‌کلاسیت بدی؛ ` +
-            `دکمهٔ «${GIVE_BTN}» رو بزن.</i>`,
-        ]]
-      : []),
     [`<i>${COIN_MEANING}.</i>`],
   ];
   return groups.map((g) => g.join("\n")).join("\n\n");
@@ -860,30 +835,6 @@ export function sendPromptMessage(forwardLine: string, balanceSec: number): stri
     "",
     "<i>گوشی رو رو میز و نزدیک‌تر به استاد بذار، نه تو کیف.</i>",
     "<i>قبل از ضبط از استاد اجازه بگیر.</i>",
-  ].join("\n");
-}
-
-// ─── سکه دادن به هم‌کلاسی ────────────────────────────────────────────────────
-
-export const GIVE_BTN = "🎁 سکه بده به هم‌کلاسی";
-
-/** مقدارهای آماده — تا کسی مجبور نباشد عدد تایپ کند. */
-export const GIVE_AMOUNTS = [10, 20, 50] as const;
-
-/**
- * صفحهٔ «سکه بده» — پیش از ساختنِ لینک.
- *
- * قاعدهٔ سکهٔ هدیه همین‌جا گفته می‌شود، **پیش از** انتخاب؛ نه بعدش در قالبِ
- * خطا. کسی که ۳۰ سکه موجودی می‌بیند و ۲۰ را می‌زند، باید از قبل بداند چرا
- * فقط ۱۰ تا قابل دادن است.
- */
-export function givePrompt(availableCoins: number): string {
-  return [
-    `🎁 <b>${GIVE_BTN.replace(/^🎁 /, "")}</b>`,
-    "",
-    "چند سکه؟ یه لینک می‌سازم که براش بفرستی؛ اولین نفری که بازش کنه سکه‌ها رو می‌گیره.",
-    "",
-    `<i>فقط سکه‌ای که خودت خریدی رو میشه داد، نه سکهٔ هدیه. الان ${fmtCoins(availableCoins)} می‌تونی بدی.</i>`,
   ].join("\n");
 }
 
@@ -1109,7 +1060,7 @@ export function settlementMessage(
   const share = shareOn
     ? `👥 شریکی با بچه‌های کلاس روشنه و لینکش رو پیام بعدی می‌فرستم. ` +
       shareMechanic(seatText(costSec, opts.people ?? null), cap)
-    : `👥 جزوه رو با بچه‌های کلاس شریک شو: ${shareMechanic(seatText(costSec, null))}`;
+    : `👥 ${sharePitch(seatText(costSec, null))} بعدش برای بقیه مجانیه.`;
   const archive =
     opts.hasArchive === false ? [] : ["", "📎 متن کامل کلاس و کلاس دقیقه‌به‌دقیقه رو از دکمه‌های پایین بگیر."];
   return [head, "", share, ...archive].join("\n");
@@ -1181,103 +1132,12 @@ export function invitationTail(i: {
   ].join("\n");
 }
 
-// ─── فرستادن سکه ─────────────────────────────────────────────────────────────
-
 /**
- * راهنمای `/send`.
- *
- * **حالتِ «مستقیم با شناسه» از متن رفت.** آن حالت شناسهٔ داخلی می‌خواست که
- * هیچ دانشجویی ندارد و هیچ صفحه‌ای نشانش نمی‌دهد — یعنی نیمی از راهنما
- * دربارهٔ کاری بود که انجامش ممکن نبود. دستور برای ادمین همچنان کار می‌کند.
- *
- * دستور در خطِ خودش می‌آید: `/send` وسطِ جملهٔ فارسی روی گوشی جابه‌جا
- * می‌نشیند. و راهِ اصلی دکمه است، نه دستور.
+ * جوابِ `/send`، دکمه‌های «سکه بده» و لینک‌های `t_` که از پیش از برداشتنِ
+ * انتقال سکه در چت‌ها مانده‌اند.
  */
-export const SEND_USAGE = [
-  `🎁 <b>${GIVE_BTN.replace(/^🎁 /, "")}</b>`,
-  "",
-  `راحت‌ترین راه: «${BTN.account}» و بعد «${GIVE_BTN}».`,
-  "با دستور هم میشه؛ مثلاً برای ۱۰ سکه بفرست:",
-  "<code>/send 10</code>",
-  "",
-  "<i>فقط سکه‌ای که خودت خریدی رو میشه داد، نه سکهٔ هدیه.</i>",
-].join("\n");
-
-/**
- * جملهٔ «چقدر می‌تونی بفرستی» — و چرا عدد گفته می‌شود نه فقط «کم است».
- *
- * سؤالِ بعدیِ هرکسی که این پیام را می‌گیرد همان عدد است؛ بدون آن باید با
- * آزمون‌وخطا پیدایش کند. دلیلِ تفاوتِ این عدد با موجودی هم همان‌جا گفته
- * می‌شود، وگرنه کاربر فکر می‌کند ربات موجودی‌اش را اشتباه می‌بیند.
- */
-export function sendTooMuchMessage(availableCoins: number): string {
-  const why =
-    "<i>سکهٔ هدیه و سهمیهٔ رایگان فرستاده نمی‌شه — فقط اونی که خودت خریدی و خرج نکردی.</i>";
-  return availableCoins > 0
-    ? `فقط <b>${fmtCoins(availableCoins)}</b> قابل فرستادنه.\n\n${why}`
-    : `سکهٔ قابل‌فرستادنی نداری 🙃\n\n${why}`;
-}
-
-/**
- * پیامی که فرستنده پس از ساختِ لینک می‌بیند.
- *
- * جملهٔ «همون لحظه کم می‌شه» اختیاری نیست: سکه‌ای کنار گذاشته نشده، پس اگر
- * فرستنده تا زمانِ برداشت خرجش کند لینک کار نمی‌کند. گفتنش اینجا ارزان است
- * و نگفتنش یعنی یک هم‌کلاسیِ سردرگم پشت لینکی که وعده داده بود.
- */
-export function transferLinkMessage(coins: number, link: string): string {
-  return [
-    `🎁 <b>لینک ${fmtCoins(coins)} ساخته شد</b>`,
-    "",
-    // لینک داخل <code> است تا با یک لمس کپی شود و پیش‌نمایشش باز نشود.
-    `<code>${link}</code>`,
-    "",
-    "<i>بفرستش تو گروه کلاس. اولین نفری که بازش کنه سکه‌ها رو می‌گیره، و همون " +
-      "لحظه از حساب تو کم می‌شه — پس تا اون موقع خرجشون نکن.</i>",
-  ].join("\n");
-}
-
-/** پیامِ گیرنده پس از برداشتِ موفق. */
-export function transferReceivedMessage(
-  coins: number,
-  fromName: string,
-  balanceSec: number,
-): string {
-  return [
-    `🎁 <b>${fmtCoins(coins)}</b> از ${escapeHtml(fromName)} رسید!`,
-    "",
-    `موجودیت: <b>${fmtBalance(balanceSec)}</b>`,
-    `<i>${COIN_MEANING}.</i>`,
-    "",
-    "صوت کلاستو بفرست تا خلاصه، نکته‌های امتحانی و جزوه‌ش رو برات دربیارم 🎧",
-  ].join("\n");
-}
-
-/** خبری که به فرستنده می‌رسد وقتی لینکش برداشته شد. */
-export function transferTakenMessage(coins: number, byName: string): string {
-  return `✅ <b>${fmtCoins(coins)}</b> که فرستاده بودی به ${escapeHtml(byName)} رسید.`;
-}
-
-/** جوابِ رد — یک جا، تا سه مسیرِ `/send` سه جور نگویندش. */
-export function transferRefusal(
-  reason: "unknown" | "self" | "already" | "insufficient",
-  availableCoins = 0,
-): string {
-  switch (reason) {
-    case "unknown":
-      return "این لینک معتبر نیست.";
-    case "self":
-      return "به خودت که نمی‌شه سکه فرستاد 🙂";
-    case "already":
-      return "این سکه‌ها رو یکی زودتر برداشته.";
-    case "insufficient":
-      return (
-        "فرستنده الان این‌قدر سکهٔ قابل‌انتقال نداره 🙃\n\n" +
-        `<i>${availableCoins > 0 ? `فقط ${fmtCoins(availableCoins)} مونده. ` : ""}` +
-        "احتمالاً بین ساختنِ لینک و باز کردنش خرجشون کرده.</i>"
-      );
-  }
-}
+export const TRANSFER_GONE =
+  "انتقال سکه بین حساب‌ها دیگه نیست. برای اینکه هزینهٔ کلاس رو با بچه‌ها تقسیم کنید، موقع فرستادن صوت «👥 با هم‌کلاسیا بخریم» رو بزن.";
 
 /** زیرِ پیامِ کمبود سکه روی مسیرِ پیوستن — تا شارژکردن یعنی گم‌کردنِ جزوه نباشد. */
 export const JOIN_RETURN_HINT = "شارژ که کردی، همین‌جا یه دکمه می‌گیری که همون جزوه رو برداری.";

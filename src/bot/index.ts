@@ -22,9 +22,8 @@ import {
   FileTooLargeError,
 } from "./download.js";
 import {
-  commit, InsufficientCredit, grant, refund, reserve, totalShareRefunds, transferableSec,
+  commit, InsufficientCredit, grant, refund, reserve, totalShareRefunds,
 } from "../billing/ledger.js";
-import { claimTransfer, mintTransfer, sendDirect } from "./transfer.js";
 import {
   accessibleSessions, isMember, registerOwner, setShareEnabled, setShareTarget, shareStatus,
 } from "../billing/sharing.js";
@@ -280,17 +279,14 @@ async function accountScreen(ctx: Context): Promise<void> {
   const u = touchUser(ctx);
   if (!u) return;
   const done = listSessions(u.tg_id, 500).filter((s) => s.status === "done").length;
-  const transferable = transferableSec(u.tg_id);
   /**
-   * دکمه‌های حساب: شارژ، سکه دادن، پشتیبانی.
+   * دکمه‌های حساب: شارژ و پشتیبانی. پشتیبانی اینجاست چون صفحهٔ حساب همان
+   * جایی است که آدم با «سکه‌ام کجا رفت؟» می‌رسد.
    *
-   * «سکه بده» فقط وقتی هست که واقعاً سکهٔ خریداری‌شده‌ای برای دادن باشد —
-   * همان قاعدهٔ متنِ `accountMessage`. پشتیبانی اینجاست چون صفحهٔ حساب
-   * همان جایی است که آدم با «سکه‌ام کجا رفت؟» می‌رسد.
+   * «سکه بده به هم‌کلاسی» ۲۰۲۶-۰۹-۱۳ رفت: با خرید گروهی و سهمِ هر نفر،
+   * راهِ دومی برای جابه‌جا کردنِ سکه فقط یک قاعدهٔ دیگر برای فهمیدن بود.
    */
-  const kb = new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup");
-  if (balanceCoins(transferable) > 0) kb.row().text(S.GIVE_BTN, "give");
-  kb.row().text(BTN.support, "support");
+  const kb = new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup").row().text(BTN.support, "support");
   await reply(
     ctx,
     S.accountMessage({
@@ -298,7 +294,6 @@ async function accountScreen(ctx: Context): Promise<void> {
       usedSec: u.total_used_sec,
       refundedSec: totalShareRefunds(u.tg_id),
       sessionCount: done,
-      transferableSec: transferable,
     }),
     { reply_markup: withBack(kb) },
   );
@@ -627,29 +622,15 @@ handlers.command("start", async (ctx) => {
   }
 
   /**
-   * لینک انتقال سکه: /start t_<code>
+   * لینکِ قدیمیِ انتقال سکه: /start t_<code>
    *
-   * کنار شاخهٔ هدیه می‌نشیند و به همان دلیل پیش از منوی خوشامد می‌آید: گیرنده
-   * روی لینکی زده که به او سکه وعده داده، و منوی عمومی به‌جای آن یعنی خرابیِ
-   * وعده. صفحه‌کلید هم در هر دو حالت نشانده می‌شود، چون کسی که از این لینک
-   * آمده ممکن است هرگز `/start` ساده نزند.
+   * انتقال سکه برداشته شد، ولی لینک‌هایی که پیش از آن در گروه‌ها رفته‌اند
+   * هنوز زده می‌شوند. سکه موقع ساختنِ لینک کم نمی‌شد، پس چیزی گم نشده؛ فقط
+   * باید به‌جای خوش‌آمدِ بی‌ربط گفته شود که این لینک دیگر کار نمی‌کند.
    */
   if (payload.startsWith("t_")) {
-    const code = payload.slice(2);
-    const id = uid(ctx);
-    const out = claimTransfer(code, id);
     await ctx.reply("سلام 👋", { reply_markup: mainKeyboard });
-    if (!out.ok) {
-      await reply(ctx, S.transferRefusal(out.reason, out.availableCoins ?? 0));
-      return;
-    }
-    await reply(
-      ctx,
-      S.transferReceivedMessage(out.coins, describeUser(out.fromId), out.balanceSec),
-    );
-    // فرستنده باید بداند سکه‌اش رفت — بی‌صدا شکست می‌خورد، چون گیرنده سکه‌اش
-    // را گرفته و هیچ خطایی در مسیر او نباید از این خبررسانی بیرون بزند.
-    await notifyUser(out.fromId, S.transferTakenMessage(out.coins, describeUser(id))).catch(() => {});
+    await reply(ctx, S.TRANSFER_GONE);
     return;
   }
 
@@ -934,120 +915,14 @@ handlers.command("credit", (ctx) => accountScreen(ctx));
 handlers.command("buy", (ctx) => topupScreen(ctx));
 
 /**
- * فرستادن سکه به هم‌کلاسی.
+ * انتقال سکه میان کاربران برداشته شد (۲۰۲۶-۰۹-۱۳).
  *
- *   /send 10            →  لینک می‌سازد؛ هرکس بازش کند سکه‌ها را می‌گیرد
- *   /send <tg_id> 10    →  مستقیم، به کسی که از قبل با ربات حرف زده
- *
- * دو جهت در **یک** دستور، برخلاف `/gift` و `/grant` که ادمین دارد. ادمین
- * می‌داند کدام را بزند؛ دانشجو نه — و دو دستور یعنی نصفشان دستورِ اشتباه را
- * می‌زنند و پیام خطا می‌گیرند. تفکیک از روی تعداد عددها انجام می‌شود: یک
- * عدد یعنی لینک، دو عدد یعنی شناسه و مقدار.
- *
- * جهتِ **لینک** جهتِ اصلی است: فرستنده تقریباً هیچ‌وقت شناسهٔ داخلیِ
- * هم‌کلاسی‌اش را ندارد و راهی هم برای پیدا کردنش نیست.
+ * `/send` و دکمه‌های «سکه بده» که هنوز در چت‌های قدیمی مانده‌اند، جوابِ روشن
+ * می‌گیرند نه سکوت — دکمه‌ای که بزنی و هیچ نشود، خراب خوانده می‌شود. ادمین
+ * برای سکه دادن `/grant` و `/gift` را دارد.
  */
-handlers.command("send", async (ctx) => {
-  const u = touchUser(ctx);
-  if (!u) return;
-  const me = uid(ctx);
-
-  // رقم فارسی/عربی هم عدد است — همان دلیلی که در `/gift` و `/grant` هست:
-  // این دستور از روی موبایل و با صفحه‌کلید فارسی زده می‌شود.
-  const digits = (s: string) =>
-    s
-      .replace(/[٬,]/g, "")
-      .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
-      .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
-
-  const parts = ((ctx.match as string | undefined) ?? "").trim().split(/\s+/).filter(Boolean);
-  const nums = parts.map(digits).filter((p) => /^\d+$/.test(p)).map(Number);
-  const coins = nums.length >= 2 ? nums[1]! : nums[0];
-  const target = nums.length >= 2 ? nums[0]! : null;
-
-  if (coins === undefined || !Number.isFinite(coins) || coins <= 0) {
-    await reply(ctx, S.SEND_USAGE);
-    return;
-  }
-
-  /**
-   * ── جهت دوم: مستقیم با شناسه — **فقط ادمین** ──────────────────────────────
-   *
-   * شناسهٔ داخلی را هیچ دانشجویی ندارد و هیچ صفحه‌ای نشانش نمی‌دهد؛ این جهت
-   * برای او فقط یک راهِ اشتباه‌تایپ‌کردن بود. ادمین شناسه را از `/gift` و
-   * لاگ دارد و همچنان می‌تواند. دو عدد از دانشجو یعنی راهنما، نه انتقال.
-   */
-  if (target !== null && !isAdmin(ctx)) {
-    await reply(ctx, S.SEND_USAGE);
-    return;
-  }
-  if (target !== null) {
-    const out = sendDirect(me, target, coins);
-    if (!out.ok) {
-      await reply(
-        ctx,
-        out.reason === "insufficient"
-          ? S.sendTooMuchMessage(out.availableCoins ?? 0)
-          : S.transferRefusal(out.reason, out.availableCoins ?? 0),
-      );
-      return;
-    }
-    await reply(ctx, S.transferTakenMessage(out.coins, describeUser(target)));
-    await notifyUser(
-      target,
-      S.transferReceivedMessage(out.coins, describeUser(me), out.balanceSec),
-    ).catch(() => {});
-    return;
-  }
-
-  // ── جهت اصلی: لینک ────────────────────────────────────────────────────────
-  const minted = await mintTransfer(ctx.api, { fromId: me, coins });
-  if ("error" in minted) {
-    await reply(ctx, S.sendTooMuchMessage(minted.availableCoins));
-    return;
-  }
-  await reply(ctx, S.transferLinkMessage(minted.transfer.coins, minted.link));
-});
-
-/**
- * «🎁 سکه بده به هم‌کلاسی» از صفحهٔ حساب — همان کارِ `/send`، بدون تایپ.
- *
- * تا امروز تنها راه تایپِ `/send 20` بود، که دانشجوی سال‌اولی نه می‌شناسد نه
- * روی صفحه‌کلیدِ فارسی راحت می‌زند. مقدارها دکمه‌اند و فقط آن‌هایی می‌آیند که
- * واقعاً قابل دادن‌اند؛ اگر کمتر از کوچک‌ترینشان مانده، همان عدد یک دکمه
- * می‌شود — وگرنه صفحه‌ای بی‌دکمه می‌ماند.
- */
-handlers.callbackQuery("give", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  touchUser(ctx);
-  const available = balanceCoins(transferableSec(uid(ctx)));
-  if (available <= 0) {
-    await reply(ctx, S.sendTooMuchMessage(0), { reply_markup: withBack(new InlineKeyboard()) });
-    return;
-  }
-  const amounts = S.GIVE_AMOUNTS.filter((n) => n <= available);
-  const kb = new InlineKeyboard();
-  for (const n of amounts.length ? amounts : [available]) {
-    kb.text(`${toFaDigits(n)} سکه`, `give:${n}`);
-  }
-  await reply(ctx, S.givePrompt(available), { reply_markup: withBack(kb) });
-});
-
-handlers.callbackQuery(/^give:(\d+)$/, async (ctx) => {
-  const coins = Number(ctx.match![1]);
-  touchUser(ctx);
-  await ctx.answerCallbackQuery();
-  if (!Number.isFinite(coins) || coins <= 0) return;
-  // همان مسیرِ `/send`: سقفِ «فقط سکهٔ خریداری‌شده» در `mintTransfer` است، نه
-  // در دکمه — دکمه‌ای که از پیامِ قدیمی زده شود ممکن است دیگر پوشش نداشته باشد.
-  const minted = await mintTransfer(ctx.api, { fromId: uid(ctx), coins });
-  if ("error" in minted) {
-    await reply(ctx, S.sendTooMuchMessage(minted.availableCoins));
-    return;
-  }
-  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
-  await reply(ctx, S.transferLinkMessage(minted.transfer.coins, minted.link));
-});
+handlers.command("send", (ctx) => reply(ctx, S.TRANSFER_GONE));
+handlers.callbackQuery(/^give(:\d+)?$/, (ctx) => ctx.answerCallbackQuery({ text: S.TRANSFER_GONE, show_alert: true }));
 
 handlers.command("course", async (ctx) => {
   touchUser(ctx);

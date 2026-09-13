@@ -165,7 +165,10 @@ export function currentBalance(tgId: number): number {
   return row?.credit_sec ?? 0;
 }
 
-// ─── انتقال بین دو کاربر ─────────────────────────────────────────────────────
+// ─── سکهٔ خریداری‌شده ────────────────────────────────────────────────────────
+//
+// انتقال سکه میان کاربران ۲۰۲۶-۰۹-۱۳ برداشته شد؛ این سنجه برای سهمِ هدیه‌ایِ
+// خرید گروهی مانده. سطرهای `transfer_in`/`transfer_out` تاریخچه‌اند.
 
 /**
  * سکه‌هایی که کاربر **پول داده** و هنوز خرجشان نکرده — تنها چیزی که اجازهٔ
@@ -221,80 +224,6 @@ export function transferableSec(tgId: number): number {
 
   const free = row.bought - row.sent - Math.max(0, row.spent);
   return Math.max(0, Math.min(free, currentBalance(tgId)));
-}
-
-export interface TransferResult {
-  fromBalance: number;
-  toBalance: number;
-}
-
-/**
- * یک انتقال، **یک** تراکنش.
- *
- * دو بار صداکردن `move` وسوسه‌انگیز است ولی هر کدام `BEGIN IMMEDIATE` خودش
- * را دارد: مردنِ پروسه بین آن دو یعنی سکه از فرستنده کم شده و به گیرنده
- * نرسیده — و چون هر دو سطر «درست»اند، هیچ‌جا معلوم نمی‌شود چه گم شده.
- *
- * ترتیب داخل تراکنش همان قاعدهٔ `claimGift` است: **اول ثبت برداشت، بعد
- * واریز**. با تراکنشِ واحد هیچ‌کدام بدون دیگری نمی‌ماند، ولی ترتیب را نگه
- * می‌داریم تا اگر روزی این تابع شکسته شد، بدترین حالت همان حالتِ بی‌ضرر
- * بماند.
- *
- * `guard` — اگر داده شود — **درون همان تراکنش** اجرا می‌شود. تنها راهِ
- * اینکه «ثبتِ برداشتِ لینک» و «جابه‌جایی سکه» یک اتم باشند، بی‌آنکه این
- * ماژول از کدهای انتقال چیزی بداند. برگرداندنِ `false` کل انتقال را
- * برمی‌گرداند و `null` بیرون می‌دهد.
- */
-export function moveBetween(opt: {
-  fromId: number;
-  toId: number;
-  deltaSec: number;
-  note?: string | null;
-  guard?: () => boolean;
-}): TransferResult | null {
-  const amount = Math.round(opt.deltaSec);
-  if (amount <= 0) throw new Error("مقدار انتقال باید مثبت باشد.");
-  // فرستادن به خود، جابه‌جایی نیست؛ دو سطرِ خنثی در دفتر می‌گذارد و در
-  // گزارش‌ها مثل گردشِ واقعی به‌نظر می‌رسد.
-  if (opt.fromId === opt.toId) throw new Error("فرستادن سکه به خود ممکن نیست.");
-
-  db.prepare("BEGIN IMMEDIATE").run();
-  try {
-    if (opt.guard && !opt.guard()) {
-      db.prepare("ROLLBACK").run();
-      return null;
-    }
-
-    const from = balanceOf.get(opt.fromId) as unknown as { credit_sec: number } | undefined;
-    const to = balanceOf.get(opt.toId) as unknown as { credit_sec: number } | undefined;
-    if (!from) throw new Error(`کاربر ${opt.fromId} وجود ندارد.`);
-    if (!to) throw new Error(`کاربر ${opt.toId} وجود ندارد.`);
-
-    // سنجهٔ «قابل انتقال» **داخل** تراکنش خوانده می‌شود، وگرنه دو برداشتِ
-    // همزمان هر دو همان عددِ کهنه را می‌بینند و مجموعشان از سقف رد می‌شود.
-    const free = transferableSec(opt.fromId);
-    if (free < amount) throw new InsufficientCredit(free, amount);
-
-    const fromNext = from.credit_sec - amount;
-    const toNext = to.credit_sec + amount;
-
-    // `total_used_sec` عمداً بالا نمی‌رود: آن ستون «چقدر صوت پردازش کردی» را
-    // می‌گوید و صفحهٔ حساب همان را نشان می‌دهد. فرستادنِ سکه مصرف نیست.
-    applyDelta.run(fromNext, opt.fromId);
-    writeRow.run(opt.fromId, -amount, fromNext, "transfer_out", null, opt.note ?? null);
-    applyDelta.run(toNext, opt.toId);
-    writeRow.run(opt.toId, amount, toNext, "transfer_in", null, opt.note ?? null);
-
-    db.prepare("COMMIT").run();
-    logger.info(
-      { from: opt.fromId, to: opt.toId, sec: amount },
-      "coin transfer",
-    );
-    return { fromBalance: fromNext, toBalance: toNext };
-  } catch (e) {
-    db.prepare("ROLLBACK").run();
-    throw e;
-  }
 }
 
 export interface LedgerRow {
