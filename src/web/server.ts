@@ -1450,12 +1450,34 @@ function sendPage(res: Res, status: number, html: string): void {
  * باز شود و تنها کارش گفتنِ یک جمله و دادنِ یک راه برگشت است. لینک ربات از
  * `getMe` می‌آید نه از HTML سفت‌شده.
  */
-function payPage(o: { ok: boolean; title: string; body: string }): string {
+function payPage(o: { ok: boolean; title: string; body: string; owner?: number | null }): string {
   const links = botLinks();
+  /**
+   * راه برگشت از روی **حساب صاحب سفارش**، نه همه‌چیز برای همه.
+   *
+   * ردیف `topups` نمی‌گوید سفارش از کدام سکو باز شد؛ فقط شناسهٔ داخلی دارد.
+   * ولی `identities` می‌گوید این آدم کجا حساب دارد، و همان بس است: کاربر بله
+   * که دکمهٔ تلگرام را اول می‌دید، به چتی می‌رفت که هیچ‌وقت در آن نبود.
+   *
+   * «بازکردن اپ» فقط برای کسی که حساب وب دارد و ورود با شماره روشن است.
+   * بازگشت از بانک معمولاً در مرورگرِ بیرونی باز می‌شود و آنجا `/app` نشستِ
+   * مینی‌اپ را ندارد — برای کاربر تلگرام و بله فقط صفحهٔ ورودی بود که واردش
+   * نمی‌کرد.
+   *
+   * این به غریبه‌ای که trackIdها را می‌شمارد یک تکه اطلاع می‌دهد (صاحب سفارش
+   * تلگرامی است یا بله‌ای) — نه پکیج، نه شناسه، نه نام. بن‌بست‌نبودنِ صفحه
+   * برای خودِ پرداخت‌کننده به همین ارزش دارد. سفارشِ ناشناس هر دو ربات را
+   * می‌بیند، چون حدس‌زدن بدتر از نشان‌دادنِ هر دوست.
+   */
+  const has = new Set(o.owner != null ? identitiesOf(o.owner).map((i) => i.platform) : []);
+  const known = has.has("telegram") || has.has("bale") || has.has("web");
+  const showTg = Boolean(links.telegram) && (!known || has.has("telegram"));
+  const showBale = Boolean(links.bale) && (!known || has.has("bale"));
+  const showApp = has.has("web") && phoneLoginEnabled();
   const back = [
-    links.telegram ? `<a class="b" href="${links.telegram}">برگشت به ربات تلگرام</a>` : "",
-    links.bale ? `<a class="b g" href="${links.bale}">برگشت به ربات بله</a>` : "",
-    `<a class="b g" href="/app">بازکردن اپ</a>`,
+    showTg ? `<a class="b" href="${links.telegram}">برگشت به ربات تلگرام</a>` : "",
+    showBale ? `<a class="b${showTg ? " g" : ""}" href="${links.bale}">برگشت به ربات بله</a>` : "",
+    showApp ? `<a class="b${showTg || showBale ? " g" : ""}" href="/app">بازکردن اپ</a>` : "",
   ].join("");
   return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
@@ -1477,20 +1499,34 @@ async function handlePayCallback(url: URL, res: Res): Promise<void> {
     return sendPage(res, 400, payPage({ ok: false, title: "لینک نامعتبر", body: "این آدرس بازگشتِ درگاه نیست." }));
   }
 
-  // `success=0` یعنی کاربر در درگاه انصراف داده؛ verify هم همین را می‌گوید
-  // ولی سفارش با آن بسته می‌شود تا در ربات باز نماند.
-  const r = await settleTopup({ trackId }, { closeIfUnpaid: cancelled });
-  const coins = r.topup ? fmtCoins(r.topup.coins) : "";
+  /**
+   * این آدرس **بی‌احراز** است و باید بماند: مرورگرِ خودِ کاربر از درگاه به
+   * اینجا برمی‌گردد، اغلب داخل وب‌ویوی تلگرام یا بله، و نشستِ مینی‌اپ (توکنِ
+   * Bearer در localStorage) با یک ناوبری GET همراه نمی‌آید. پس هر کاری که
+   * اینجا می‌شود باید برای یک غریبه که trackIdها را می‌شمارد هم بی‌خطر باشد.
+   *
+   * • **تسویه بی‌خطر است** — `verify` مدرک است و `claimTopupPaid` یک بار واریز
+   *   می‌کند، آن هم به حساب صاحب سفارش.
+   * • **بستن بی‌خطر نیست** — پیش‌تر `success=0` سفارش را می‌بست، و غریبه
+   *   می‌توانست سفارشِ باز کسی را پیش از پرداختش ببندد؛ پول او می‌رفت و سکه
+   *   نمی‌آمد. حالا `success=0` فقط متن صفحه را عوض می‌کند. بستن از ربات است.
+   * • **صفحه چیزی از سفارش نمی‌گوید** — نه پکیج، نه تعداد سکه. صاحب سفارش
+   *   عدد را در پیام ربات می‌گیرد (`creditTopup`)؛ صفحه فقط نتیجه را می‌گوید.
+   */
+  const r = await settleTopup({ trackId });
+  // صاحب سفارش فقط برای انتخابِ راه برگشت؛ صفحه هیچ‌چیز دیگری از او نمی‌گوید.
+  const payPageFor = (o: { ok: boolean; title: string; body: string }) =>
+    payPage({ ...o, owner: r.topup?.tg_id ?? null });
 
   switch (r.outcome) {
     case "credited":
-      return sendPage(res, 200, payPage({ ok: true, title: "پرداخت موفق", body: `${coins} به حسابت اضافه شد. برگرد به ربات و صوت کلاست رو بفرست.` }));
+      return sendPage(res, 200, payPageFor({ ok: true, title: "پرداخت موفق", body: "سکه‌ها به حسابت اضافه شد و خبرش توی ربات اومده. برگرد به ربات و صوت کلاستو بفرست." }));
     case "already":
-      return sendPage(res, 200, payPage({ ok: true, title: "قبلاً تسویه شده", body: `${coins} همون موقع به حسابت اضافه شده بود.` }));
+      return sendPage(res, 200, payPageFor({ ok: true, title: "قبلاً تسویه شده", body: "سکه‌های این پرداخت همون موقع به حسابت اضافه شده بود." }));
     case "unpaid":
-      return sendPage(res, 200, payPage({ ok: false, title: "پرداخت انجام نشد", body: cancelled ? "از پرداخت انصراف دادی. هر وقت خواستی از ربات دوباره شروع کن." : r.detail }));
+      return sendPage(res, 200, payPageFor({ ok: false, title: "پرداخت انجام نشد", body: cancelled ? "از پرداخت انصراف دادی. هر وقت خواستی از ربات دوباره شروع کن." : "پولی از این پرداخت نرسید. اگه از حسابت کم شده، توی ربات «بررسی پرداخت» رو بزن." }));
     case "error":
-      return sendPage(res, 502, payPage({ ok: false, title: "درگاه جواب نداد", body: r.detail }));
+      return sendPage(res, 502, payPageFor({ ok: false, title: "درگاه جواب نداد", body: r.detail }));
     default:
       return sendPage(res, 404, payPage({ ok: false, title: "سفارش پیدا نشد", body: "اگر پرداخت کردی، در ربات «بررسی پرداخت» را بزن یا به پشتیبانی بگو." }));
   }
