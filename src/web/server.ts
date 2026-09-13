@@ -81,15 +81,18 @@ function allowEvent(req: http.IncomingMessage): boolean {
   const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim() || req.socket.remoteAddress || "?";
   const now = Date.now();
   if (now - evGlobal.since > 60 * 60_000) evGlobal = { n: 0, since: now };
-  if (++evGlobal.n > EV_GLOBAL_PER_HOUR) return false;
+  if (evGlobal.n >= EV_GLOBAL_PER_HOUR) return false;
   if (evHits.size > 5000) evHits.clear();
   const h = evHits.get(ip);
   if (!h || now - h.since > 10 * 60_000) {
     evHits.set(ip, { n: 1, since: now });
-    return true;
+  } else if (++h.n > 30) {
+    return false;
   }
-  h.n++;
-  return h.n <= 30;
+  // سراسری فقط بعد از سقفِ آی‌پی شمرده می‌شود؛ وگرنه یک کلاینتِ پرتکرار — که
+  // خودش فقط سی رویداد ثبت می‌کند — سهمِ ساعت را برای همهٔ بازدیدکننده‌ها می‌سوزاند.
+  evGlobal.n++;
+  return true;
 }
 
 function json(res: Res, status: number, body: unknown): void {

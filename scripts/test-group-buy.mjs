@@ -357,6 +357,19 @@ const M5 = user(0, 50);
   check("جلسهٔ تمام‌شده ← busy", !r2.ok && r2.reason === "busy");
   check("…و سکه‌ای رزرو نشد", currentBalance(O2) === coinsToSec(100));
   check("متنِ busy هست", typeof S.GROUP_REFUSAL.busy === "string" && S.GROUP_REFUSAL.busy.length > 0);
+
+  // فاصلهٔ «پیام فرستاده شد، رزرو هنوز نه» در startJob ربات
+  const Q = await import("../src/queue.ts");
+  const O3 = user(0, 100);
+  const sid3 = session(O3);
+  Q.markStarting(sid3);
+  const r3 = openGroup({ sessionId: sid3, ownerId: O3, costSec: 5400, people: 3, origin: "bot" });
+  check("کارِ در حال شروع ← busy", !r3.ok && r3.reason === "busy");
+  Q.clearStarting(sid3);
+  const r4 = openGroup({ sessionId: sid3, ownerId: O3, costSec: 5400, people: 3, origin: "bot" });
+  check("بعد از پاک‌شدنِ علامت، گروه باز می‌شود", r4.ok);
+  GB.cancelGroupBuy(sid3);
+  check("…و لغوش دقیقاً برمی‌گرداند", currentBalance(O3) === coinsToSec(100));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

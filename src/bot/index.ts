@@ -76,6 +76,7 @@ import {
 } from "./group-buy.js";
 import { GROUP_BUY_HOURS, cancelGroupBuy, groupProgress, groupSeats } from "../billing/group-buy.js";
 import { funnelReport, recordStart, track } from "../db/funnel.js";
+import { clearStarting, markStarting } from "../queue.js";
 import { rememberPendingJoin } from "../db/index.js";
 import { deliverSession } from "./share.js";
 
@@ -2821,9 +2822,14 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
   const { sessionId, mode } = job;
   const chatId = ctx.chat!.id;
   const userId = uid(ctx);
-  const progress = await ctx.api.sendMessage(chatId, S.progressMessage("preprocess"), {
-    parse_mode: "HTML",
-  });
+  // تا رزرو ننشسته، «در حال شروع» است — خرید گروهی روی همین جلسه باز نمی‌شود.
+  markStarting(sessionId);
+  const progress = await ctx.api
+    .sendMessage(chatId, S.progressMessage("preprocess"), { parse_mode: "HTML" })
+    .catch((e: unknown) => {
+      clearStarting(sessionId);
+      throw e;
+    });
 
   let lastText = "";
   const edit = async (text: string, extra: { reply_markup?: InlineKeyboard } = {}) => {
@@ -2843,7 +2849,9 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
   const reservedSec = Math.max(60, job.declaredDurationSec);
   try {
     reserve(userId, reservedSec, sessionId);
+    clearStarting(sessionId);
   } catch (e) {
+    clearStarting(sessionId);
     if (e instanceof InsufficientCredit) {
       /**
        * دکمهٔ شارژ همین‌جا لازم است، نه فقط اشاره به منو.

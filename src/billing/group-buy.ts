@@ -41,7 +41,7 @@ import { db, getSession } from "../db/index.js";
 import { logger } from "../util/logger.js";
 import { GROUP_BUY_HOURS, GROUP_SIZES, coinsToSec, costCoins, groupSeat } from "./coins.js";
 import { atomic, transferableSec } from "./ledger.js";
-import { isBusy } from "../queue.js";
+import { isStarting } from "../queue.js";
 
 // عددها در `coins.ts` نشسته‌اند تا متن‌ها و پیش‌نمایش بی پایگاه‌داده بخوانندشان.
 export { GROUP_BUY_HOURS, GROUP_SIZES, groupSeat };
@@ -229,7 +229,7 @@ export function createGroupBuy(o: {
           WHERE session_id = ? AND tg_id = ? AND reason IN ('reserve', 'refund', 'commit')`,
       )
       .get(o.sessionId, o.ownerId) as unknown as { n: number };
-    if (s.status === "done" || isBusy(o.sessionId) || (openSolo.n > 0 && s.status !== "awaiting_group")) {
+    if (s.status === "done" || isStarting(o.sessionId) || (openSolo.n > 0 && s.status !== "awaiting_group")) {
       throw new GroupBuyRefused("busy");
     }
     const old = groupBuy(o.sessionId);

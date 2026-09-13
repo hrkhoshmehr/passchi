@@ -136,3 +136,27 @@ export async function drain(timeoutMs = 25_000): Promise<{ finished: boolean; ac
   return { finished: active.size === 0, active: active.size };
 }
 
+
+/**
+ * جلسه‌هایی که کارشان **در حال شروع** است ولی هنوز رزرو نکرده‌اند.
+ *
+ * صف با شناسهٔ کاربر کلید خورده نه جلسه، پس از روی صف نمی‌شود فهمید یک جلسهٔ
+ * مشخص راه افتاده یا نه. `startJob` ربات پیش از رزرو یک پیام می‌فرستد؛ اگر
+ * مالک همان لحظه «خرید گروهی» را هم زده باشد، گروه روی کاری باز می‌شد که
+ * چند میلی‌ثانیه بعد رزروش را می‌نشاند. این علامت آن فاصله را می‌پوشاند و
+ * `createGroupBuy` داخل تراکنشش آن را می‌خواند. بعد از رزرو، خودِ دفتر کل
+ * همان نقش را دارد.
+ */
+const starting = new Set<string>();
+
+export function markStarting(sessionId: string): void {
+  starting.add(sessionId);
+}
+
+export function clearStarting(sessionId: string): void {
+  starting.delete(sessionId);
+}
+
+export function isStarting(sessionId: string): boolean {
+  return starting.has(sessionId);
+}
