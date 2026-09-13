@@ -183,7 +183,7 @@ check("هیچ ردیفِ خالی‌ای نیست", !rows.some((r) => r.length =
 check(
   "تقسیم هزینه و هر سه بخشِ بایگانی، زیرِ یک پیام",
   datas.join(",") ===
-    `son:${SESSION},${MORE_CB.timeline}:${SESSION},${MORE_CB.transcript}:${SESSION},${MORE_CB.srt}:${SESSION}`,
+    `son:${SESSION},${MORE_CB.timeline}:${SESSION},${MORE_CB.transcript}:${SESSION},${MORE_CB.notes}:${SESSION}`,
   datas.join(" | "),
 );
 check("هیچ کال‌بکی از ۶۴ بایت رد نمی‌شود", datas.every((d) => Buffer.byteLength(d) <= 64));
@@ -239,15 +239,16 @@ check(
   "به کاربر هم گفته می‌شود زمان‌ها زدنی‌اند",
   timeline?.payload.text.includes("رو هر زمان بزنی"),
 );
+// دکمه باید **بماند**: کاربر روز امتحان همان پیام را بالا می‌آورد تا دوباره
+// فایل را بردارد، و صفحه‌کلیدِ خالی آن راه را می‌بندد.
 check(
-  "دکمهٔ زده‌شده برداشته شد و بقیه ماندند",
-  c.some(
-    (x) =>
-      x.method === "editMessageReplyMarkup" &&
-      !JSON.stringify(x.payload.reply_markup).includes(`"${MORE_CB.timeline}:${SESSION}"`) &&
-      JSON.stringify(x.payload.reply_markup).includes(`"${MORE_CB.transcript}:${SESSION}"`),
-  ),
-  JSON.stringify(c.find((x) => x.method === "editMessageReplyMarkup")?.payload.reply_markup),
+  "دکمهٔ زده‌شده برداشته نمی‌شود",
+  !c.some((x) => x.method === "editMessageReplyMarkup"),
+  c.map((x) => x.method).join(" | "),
+);
+check(
+  "به‌جایش همان لحظه یک بازخورد کوتاه می‌آید",
+  c.some((x) => x.method === "answerCallbackQuery" && x.payload.text === S.MORE_SENDING.timeline),
 );
 
 // ── همان دکمه در چتِ دیگر: ریپلای نباید به پیامِ بی‌ربط بچسبد ───────────────
@@ -262,11 +263,27 @@ check(
 );
 check("و آنجا وعدهٔ زدنی‌بودن داده نمی‌شود", !elsewhere?.payload.text.includes("رو هر زمان بزنی"));
 
-// ── رونوشت کامل ─────────────────────────────────────────────────────────────
+// ── رونوشت کامل + زیرنویس، با **یک** دکمه ──────────────────────────────────
 c = await press(`${MORE_CB.transcript}:${SESSION}`, OWNER);
 check(
   "رونوشت کامل با دکمه می‌آید",
   c.some((x) => x.method === "sendDocument" && x.payload.caption === S.CAPTION.transcript),
+);
+check(
+  "و زیرنویس هم با همان یک دکمه می‌آید",
+  c.some((x) => x.method === "sendDocument" && x.payload.caption === S.CAPTION.srt),
+  c.filter((x) => x.method === "sendDocument").map((x) => x.payload.caption).join(" | "),
+);
+
+// ── جزوه، از همان صفحه‌کلید ────────────────────────────────────────────────
+//
+// در خودِ تحویل فرستاده شده، ولی در چتِ شلوغ گم می‌شود و کاربر انتظار دارد
+// از همان‌جا دوباره بگیردش.
+c = await press(`${MORE_CB.notes}:${SESSION}`, OWNER);
+check(
+  "دکمهٔ جزوه فایل جزوه را می‌فرستد",
+  c.some((x) => x.method === "sendDocument" && x.payload.caption === S.CAPTION.notes),
+  c.map((x) => x.method).join(" | "),
 );
 
 // ─── ۴) غریبه ───────────────────────────────────────────────────────────────
@@ -373,7 +390,7 @@ const inbotDatas = (inbotPrompt?.payload.reply_markup?.inline_keyboard ?? [])
 check(
   "مسیر ربات هم همان چهار دکمه را در یک پیام می‌دهد",
   inbotDatas.join(",") ===
-    `son:${SESSION2},${MORE_CB.timeline}:${SESSION2},${MORE_CB.transcript}:${SESSION2},${MORE_CB.srt}:${SESSION2}`,
+    `son:${SESSION2},${MORE_CB.timeline}:${SESSION2},${MORE_CB.transcript}:${SESSION2},${MORE_CB.notes}:${SESSION2}`,
   inbotDatas.join(" | "),
 );
 check("پیامِ پایانی یکی است، نه دو تا", inbot.filter((c) => c.method === "sendMessage" && c.payload.reply_markup).length === 1);

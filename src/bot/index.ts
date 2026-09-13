@@ -2756,27 +2756,18 @@ handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
 });
 
 /**
- * دکمه را از روی پیام بردار.
+ * ### دکمهٔ زده‌شده **نمی‌رود**
  *
- * قاعده‌اش را تور نمونه گذاشت: دکمهٔ زده‌شده باید برود، وگرنه کاربر نمی‌فهمد
- * زدنِ دوباره کاری می‌کند یا نه و همان فایل دو بار می‌آید. اینجا اما سه دکمه
- * روی یک پیام‌اند، پس فقط همان یکی حذف می‌شود نه کلِ صفحه‌کلید.
+ * یک دوره دکمه را پس از زدن از روی پیام برمی‌داشتیم، با این استدلال که
+ * کاربر باید بفهمد زدنش کار کرده. در عمل برعکس شد: دانشجو فایل را گرفته،
+ * چت را بسته، و روز امتحان همان پیام را بالا آورده تا دوباره جزوه را
+ * بردارد — و دکمه‌ای آنجا نبوده. یعنی برای یک بازخوردِ لحظه‌ای، تنها راهِ
+ * دوباره‌گرفتن از دست می‌رفت.
  *
- * شکست بلعیده می‌شود: پیامِ خیلی قدیمی ویرایش‌شدنی نیست و بله هم گاهی
- * `editMessageReplyMarkup` را رد می‌کند — هیچ‌کدام نباید جلوی ارسالِ خودِ
- * فایل را بگیرد.
+ * حالا دکمه‌ها می‌مانند و هر بار همان فایل را دوباره می‌فرستند؛ فرستادنِ
+ * دوبارهٔ یک سند بی‌ضرر است و `answerCallbackQuery` هم همان لحظه نشان می‌دهد
+ * که زدن گرفته شد.
  */
-async function dropPressedButton(ctx: Context): Promise<void> {
-  const data = ctx.callbackQuery?.data;
-  const rows = ctx.callbackQuery?.message?.reply_markup?.inline_keyboard ?? [];
-  if (!data || rows.length === 0) return;
-  const left = rows
-    .map((row) => row.filter((b) => !("callback_data" in b && b.callback_data === data)))
-    .filter((row) => row.length > 0);
-  await ctx
-    .editMessageReplyMarkup({ reply_markup: left.length ? { inline_keyboard: left } : undefined })
-    .catch(() => {});
-}
 
 /**
  * بخش‌های بایگانیِ یک جلسه: بخش‌بندی زمانی، رونوشت کامل، و SRT.
@@ -2786,7 +2777,9 @@ async function dropPressedButton(ctx: Context): Promise<void> {
  * این بررسی، هر کسی رونوشت هر جلسه‌ای را بی‌پرداختِ سهم برمی‌داشت.
  */
 handlers.callbackQuery(
-  new RegExp(String.raw`^(${MORE_CB.timeline}|${MORE_CB.transcript}|${MORE_CB.srt}):([a-f0-9]+)$`),
+  new RegExp(
+    String.raw`^(${MORE_CB.timeline}|${MORE_CB.transcript}|${MORE_CB.srt}|${MORE_CB.notes}):([a-f0-9]+)$`,
+  ),
   async (ctx) => {
     const part = MORE_PART_OF[ctx.match![1]!]!;
     const s = readableSession(ctx, ctx.match![2]!);
@@ -2794,8 +2787,8 @@ handlers.callbackQuery(
       await ctx.answerCallbackQuery({ text: S.MORE_DENIED });
       return;
     }
-    await ctx.answerCallbackQuery();
-    await dropPressedButton(ctx);
+    // دکمه سر جایش می‌ماند تا بشود دوباره زد — چرایش بالای همین بخش.
+    await ctx.answerCallbackQuery({ text: S.MORE_SENDING[part] });
     // `viewerId`: عضو صوت را در چتِ خودش با شناسهٔ دیگری دارد — `reportReplyTo`.
     const ok = await sendMorePart(
       { api: ctx.api, chatId: ctx.chat!.id, platform: platformOf(ctx), viewerId: uid(ctx) },
@@ -3183,7 +3176,9 @@ handlers.callbackQuery(/^slink:([a-f0-9]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
     return;
   }
-  await ctx.answerCallbackQuery();
+  // با متن، نه خالی: بی آن، زدنِ دکمه روی بله هیچ نشانی نمی‌داد و کاربر
+  // فکر می‌کرد دکمه خراب است.
+  await ctx.answerCallbackQuery({ text: "لینک دعوت رو می‌فرستم…" });
   await sendInvitation(ctx, sessionId);
 });
 
@@ -3455,8 +3450,8 @@ handlers.callbackQuery(new RegExp(String.raw`^${GROUP_CB.get}:([a-f0-9]+)$`), as
     await ctx.answerCallbackQuery({ text: S.MORE_DENIED });
     return;
   }
-  await ctx.answerCallbackQuery();
-  await dropPressedButton(ctx);
+  // دکمه می‌ماند: هم‌کلاسی ممکن است بعداً همان جلسه را دوباره بخواهد.
+  await ctx.answerCallbackQuery({ text: "در حال فرستادن…" });
   try {
     await deliverSession(ctx, s);
   } catch (e) {
@@ -3478,6 +3473,24 @@ export async function cleanupOldAudio(): Promise<void> {
     clearAudioPath(row.id);
   }
 }
+
+/**
+ * دکمه‌ای که هیچ دست‌کدی نگرفتش — **ساکت نماند**.
+ *
+ * تا امروز چنین زدنی نه پیامی می‌داد نه خطی در لاگ: کاربر می‌گفت «می‌زنم
+ * هیچی نمیاد» و از بیرون هیچ راهی نبود که بفهمیم کدام دکمه بوده. حالا هم
+ * کاربر یک جمله می‌گیرد و هم `callback_data` در لاگ می‌نشیند.
+ *
+ * آخر از همه ثبت می‌شود تا فقط چیزی به آن برسد که از کنارِ همهٔ دست‌کدهای
+ * بالا رد شده.
+ */
+handlers.on("callback_query:data", async (ctx) => {
+  logger.warn(
+    { data: ctx.callbackQuery.data, platform: platformOf(ctx), userId: uid(ctx) },
+    "دکمهٔ بی‌دست‌کد",
+  );
+  await ctx.answerCallbackQuery({ text: "این دکمه دیگه کار نمی‌کنه؛ از «📚 جلسه‌های من» برو." });
+});
 
 /**
  * دست‌کدها روی هر دو ربات سوار می‌شوند.

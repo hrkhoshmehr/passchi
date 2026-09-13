@@ -78,6 +78,7 @@ export const MORE_CB = {
   timeline: "dtl",
   transcript: "dtx",
   srt: "dsrt",
+  notes: "dpdf",
 } as const;
 
 export type MorePart = keyof typeof MORE_CB;
@@ -116,13 +117,32 @@ function transcriptSource(
   return null;
 }
 
-/** کدام بخش‌ها **همین حالا** واقعاً چیزی برای دادن دارند. */
+/** زیرنویس، اگر همین حالا روی دیسک باشد. */
+function srtSource(s: SessionRow): { path: string; filename: string } | null {
+  return s.transcript_srt && fs.existsSync(s.transcript_srt)
+    ? { path: s.transcript_srt, filename: S.FILE_NAME.srt }
+    : null;
+}
+
+/**
+ * کدام بخش‌ها **همین حالا** واقعاً چیزی برای دادن دارند.
+ *
+ * **زیرنویس دکمهٔ خودش را ندارد.** هر دو فایل یک چیزند — حرف‌های کلاس — و
+ * فقط قالبشان فرق می‌کند؛ دانشجو هم وقتی «متن کامل کلاس» را می‌خواهد، معمولاً
+ * هر دو به کارش می‌آید. پس یک دکمه هر دو را می‌فرستد و یک ردیف از صفحه‌کلید
+ * کم می‌شود. `MorePart.srt` می‌ماند، چون پیام‌های تحویل‌شدهٔ قدیمی هنوز
+ * دکمه‌اش را در تاریخچهٔ چت دارند و زدنشان باید کار کند.
+ *
+ * **جزوه هم دکمه دارد**، با اینکه در خودِ تحویل فرستاده شده: در چتِ شلوغ گم
+ * می‌شود و کاربر انتظار دارد از همان‌جا دوباره بگیردش — پیش‌تر تنها راهش
+ * «جلسه‌های من» بود.
+ */
 export function moreParts(s: SessionRow): MorePart[] {
   const out: MorePart[] = [];
   const r = sessionReport(s);
   if (r && r.chapters.length > 0) out.push("timeline");
-  if (transcriptSource(s)) out.push("transcript");
-  if (s.transcript_srt && fs.existsSync(s.transcript_srt)) out.push("srt");
+  if (transcriptSource(s) || srtSource(s)) out.push("transcript");
+  if (s.pdf_path && fs.existsSync(s.pdf_path)) out.push("notes");
   return out;
 }
 
@@ -238,24 +258,43 @@ export async function sendMorePart(to: SendTarget, s: SessionRow, part: MorePart
     return ok;
   }
 
-  const source =
-    part === "transcript"
-      ? transcriptSource(s)
-      : s.transcript_srt && fs.existsSync(s.transcript_srt)
-        ? ({ path: s.transcript_srt, filename: S.FILE_NAME.srt } as const)
-        : null;
-  if (!source) return false;
-
   // از `sendFileTo` و نه `InputFile` خام: روی بله ارجاعِ `attach://` رد می‌شود
   // و کاربر بی‌صدا چیزی نمی‌گیرد.
-  return await sendFileTo(to.api, to.chatId, to.platform, "sendDocument", source, {
-    caption: part === "transcript" ? S.CAPTION.transcript : S.CAPTION.srt,
-  })
-    .then(() => true)
-    .catch((e: unknown) => {
-      logger.warn({ sessionId: s.id, part, err: String(e) }, "deferred file failed");
-      return false;
-    });
+  const sendOne = async (
+    source: { path: string; filename: string } | { bytes: Buffer; filename: string },
+    caption: string,
+  ): Promise<boolean> =>
+    await sendFileTo(to.api, to.chatId, to.platform, "sendDocument", source, { caption })
+      .then(() => true)
+      .catch((e: unknown) => {
+        logger.warn({ sessionId: s.id, part, err: String(e) }, "deferred file failed");
+        return false;
+      });
+
+  if (part === "notes") {
+    return s.pdf_path && fs.existsSync(s.pdf_path)
+      ? await sendOne({ path: s.pdf_path, filename: `${s.title ?? "جزوه"}.pdf` }, S.CAPTION.notes)
+      : false;
+  }
+
+  if (part === "srt") {
+    const srt = srtSource(s);
+    return srt ? await sendOne(srt, S.CAPTION.srt) : false;
+  }
+
+  /**
+   * **یک دکمه، دو فایل.** متن کامل و زیرنویس با هم می‌روند؛ چرایش در
+   * `moreParts`. هرکدام که نباشد بی‌سروصدا رد می‌شود و `false` فقط وقتی
+   * برمی‌گردد که **هیچ‌کدام** نرفته باشد — وگرنه کاربر فایل را می‌گیرد و
+   * زیرش «دیگه رو سرور نیست» می‌خواند.
+   */
+  const tx = transcriptSource(s);
+  const srt = srtSource(s);
+  if (!tx && !srt) return false;
+  let any = false;
+  if (tx) any = (await sendOne(tx, S.CAPTION.transcript)) || any;
+  if (srt) any = (await sendOne(srt, S.CAPTION.srt)) || any;
+  return any;
 }
 
 /**

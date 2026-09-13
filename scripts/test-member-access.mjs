@@ -183,7 +183,7 @@ const closingDatas = datasOf(memberClosing);
 check(
   "پیامِ آخر همان دکمه‌های بایگانیِ مالک را دارد",
   closingDatas.join(",") ===
-    `${MORE_CB.timeline}:${SESSION},${MORE_CB.transcript}:${SESSION},${MORE_CB.srt}:${SESSION}`,
+    `${MORE_CB.timeline}:${SESSION},${MORE_CB.transcript}:${SESSION},${MORE_CB.notes}:${SESSION}`,
   closingDatas.join(" | "),
 );
 check("دکمهٔ شریک‌شدنِ مالک به عضو نشان داده نمی‌شود", !closingDatas.some((d) => /^(son|slink):/.test(d)));
