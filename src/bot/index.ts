@@ -70,6 +70,13 @@ import { sendDoc } from "./bale-upload.js";
 import { notifyUser } from "./notify.js";
 import { extractUrl, fetchUrlToFile, UrlFetchError, type FetchUrlResult } from "./fetch-url.js";
 import { JobFailure } from "../util/job-failure.js";
+import {
+  GROUP_CB, GROUP_START_PREFIX, expireGroupsAndNotify, groupBuyEnabled, groupSizeKeyboard, joinGroup,
+  openGroup, payRestAndStart, payRestKeyboard, sendGroupInvite,
+} from "./group-buy.js";
+import { GROUP_BUY_HOURS, cancelGroupBuy, groupProgress, groupSeats } from "../billing/group-buy.js";
+import { rememberPendingJoin } from "../db/index.js";
+import { deliverSession } from "./share.js";
 
 export const bot = new Bot(
   requireKey("BOT_TOKEN"),
@@ -453,6 +460,11 @@ async function sessionCard(ctx: Context, sessionId: string): Promise<void> {
   if (owner && (s.status === "awaiting_confirm" || s.status === "awaiting_credit") && s.original_file) {
     kb.text("✅ شروع کن", `go:${s.id}`).row();
   }
+  // خرید گروهیِ باز: همان دو کاری که مالک از پیامِ دعوت هم می‌تواند بکند.
+  if (owner && s.status === "awaiting_group") {
+    kb.text(S.GROUP_BTN.payRest, `${GROUP_CB.rest}:${s.id}`).row();
+    kb.text(S.GROUP_BTN.resend, `${GROUP_CB.link}:${s.id}`).row();
+  }
   if (s.pdf_path) kb.text("📕 فایل جزوه", `pdf:${s.id}`);
   if (s.report_json) kb.text("📋 خلاصه و نکته‌ها", `rep:${s.id}`);
   if (s.transcript_txt) kb.row().text("📄 متن کامل کلاس", `txt:${s.id}`);
@@ -625,6 +637,49 @@ handlers.command("start", async (ctx) => {
     // فرستنده باید بداند سکه‌اش رفت — بی‌صدا شکست می‌خورد، چون گیرنده سکه‌اش
     // را گرفته و هیچ خطایی در مسیر او نباید از این خبررسانی بیرون بزند.
     await notifyUser(out.fromId, S.transferTakenMessage(out.coins, describeUser(id))).catch(() => {});
+    return;
+  }
+
+  /**
+   * لینک خرید گروهی: /start p_<sessionId>
+   *
+   * پرچم اینجا سنجیده **نمی‌شود**: اگر قابلیت خاموش شد و گروهی باز مانده،
+   * هم‌کلاسی‌ها باید بتوانند همان را پر کنند؛ فقط ساختنِ گروهِ تازه بسته است.
+   */
+  if (payload.startsWith(GROUP_START_PREFIX)) {
+    const sessionId = payload.slice(GROUP_START_PREFIX.length);
+    const me = uid(ctx);
+    const p = groupProgress(sessionId);
+    const live = p && p.status === "open" && new Date(p.expiresAt).getTime() > Date.now();
+    const refusal = !live
+      ? S.GROUP_REFUSAL.closed
+      : p.ownerId === me
+        ? S.GROUP_REFUSAL.owner
+        : groupSeats(sessionId).some((x) => x.tg_id === me)
+          ? S.GROUP_REFUSAL.already
+          : p.full
+            ? S.GROUP_REFUSAL.full
+            : null;
+    if (refusal || !p) {
+      await reply(ctx, refusal ?? S.GROUP_REFUSAL.closed, { reply_markup: mainKeyboard });
+      return;
+    }
+    await ctx.reply(
+      S.groupPreviewMessage({
+        durationMs: p.costSec * 1000,
+        seats: p.seats,
+        filled: p.filled,
+        seatCoins: p.seatCoins,
+        balanceSec: u?.credit_sec ?? 0,
+      }),
+      {
+        parse_mode: "HTML",
+        reply_markup: new InlineKeyboard()
+          .text(S.GROUP_BTN.join, `${GROUP_CB.join}:${sessionId}`)
+          .row()
+          .text(S.GROUP_BTN.later, `jno:${sessionId}`),
+      },
+    );
     return;
   }
 
@@ -1243,6 +1298,19 @@ handlers.command("forget", async (ctx) => {
      * نمی‌شوند. خاموش‌شدنِ اشتراک جلوی پیوستنِ تازه را می‌گیرد، که همان چیزی
      * است که کاربر خواسته.
      */
+    /**
+     * خرید گروهیِ باز اول بسته می‌شود، با برگشتِ سکهٔ همه.
+     *
+     * رزروِ هم‌کلاسی‌ها به همین جلسه بسته است؛ پاک‌کردنِ جلسه بی این کار آن
+     * سکه‌ها را برای همیشه قفل می‌کرد، چون دیگر جلسه‌ای نمی‌ماند که
+     * `danglingReservations` برگرداندش.
+     */
+    if (s.status === "awaiting_group") {
+      const closed = cancelGroupBuy(s.id);
+      for (const x of closed?.participants ?? []) {
+        if (x.role === "member") await notifyUser(x.tgId, S.GROUP_CANCELLED_MEMBER).catch(() => {});
+      }
+    }
     if (s.share_enabled) {
       setShareEnabled(s.id, false);
       unshared++;
@@ -1881,7 +1949,27 @@ function confirmKeyboard(sessionId: string): InlineKeyboard {
  * صادر شده تا آزمون همین را قفل کند.
  */
 export function lowBalanceKeyboard(sessionId: string, resumeData = `go:${sessionId}`): InlineKeyboard {
+  if (groupBuyEnabled()) {
+    /**
+     * خرید گروهی: دو راهِ **هم‌وزن** در یک ردیف.
+     *
+     * برخلافِ دکمهٔ شریک‌شدنِ حذف‌شده، این یکی واقعاً کمتر از جیبِ دانشجو
+     * می‌گیرد: هزینه پیش از شروع میان همه تقسیم می‌شود. پس «راهِ کم‌دادن»
+     * خواندنش انتظارِ غلط نیست، خودِ پیشنهاد است. هیچ‌کدام بالای دیگری
+     * نمی‌نشیند، چون هیچ‌کدام پیش‌فرض نیست.
+     */
+    return new InlineKeyboard()
+      .text(S.GROUP_BTN.self, "topup")
+      .text(S.GROUP_BTN.group, `${GROUP_CB.open}:${sessionId}`)
+      .row()
+      .text(S.GROUP_BTN.resume, resumeData);
+  }
   return new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup").row().text("▶️ ادامه بده", resumeData);
+}
+
+/** متنِ همان صفحه؛ با خرید گروهی برچسبِ شارژ و جملهٔ دلگرمی هم می‌آید. */
+function lowBalanceText(sec: number, balanceSec: number): string {
+  return groupBuyEnabled() ? S.lowBalanceGroupMessage(sec, balanceSec) : S.lowBalanceMessage(sec, balanceSec);
 }
 
 /** وضعیتِ شریک‌شدنِ یک جلسه، به شکلی که صفحهٔ تأیید می‌خواهد. */
@@ -1930,7 +2018,7 @@ async function holdBeforeDownload(
   if (u.credit_sec < sec) {
     await reply(
       ctx,
-      S.lowBalanceMessage(sec, u.credit_sec) +
+      lowBalanceText(sec, u.credit_sec) +
         "\n\n<i>فایلت همون‌جا تو چت هست — بعد از شارژ همین دکمه رو بزن، لازم نیست دوباره بفرستی.</i>",
       { reply_markup: lowBalanceKeyboard(sessionId) },
     );
@@ -2076,7 +2164,7 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
     });
     await reply(
       ctx,
-      S.lowBalanceMessage(effectiveSec, u.credit_sec) +
+      lowBalanceText(effectiveSec, u.credit_sec) +
         "\n\n<i>فایلت نگه داشته شد — بعد از شارژ لازم نیست دوباره بفرستی.</i>",
       { reply_markup: lowBalanceKeyboard(sessionId, `resume:${sessionId}`) },
     );
@@ -2306,6 +2394,24 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
   const u = touchUser(ctx);
   if (!s || !u || s.tg_id !== u.tg_id) return;
 
+  /**
+   * خرید گروهیِ باز یا در جریان یعنی سهمِ هم‌کلاسی‌ها رزرو است.
+   *
+   * «شروع کن» یا «ادامه بده»ی قدیمی که هنوز در چت مانده، از اینجا کلِ هزینه
+   * را دوباره از مالک می‌گرفت و کار را تنها شروع می‌کرد — و رزروِ بقیه هرگز
+   * پایانی نمی‌گرفت. راهِ درست «بقیه‌اش رو خودم می‌دم» است که جای خالی را پر
+   * و همه را با هم تسویه می‌کند.
+   */
+  const group = groupProgress(sessionId);
+  if (group?.status === "open") {
+    await reply(ctx, S.GROUP_OPEN_PAY_ALONE, { reply_markup: payRestKeyboard(sessionId) });
+    return;
+  }
+  if (group?.status === "started") {
+    await reply(ctx, S.GROUP_STARTED_OWNER);
+    return;
+  }
+
   if (isBusy(String(uid(ctx)))) {
     await reply(ctx, "یه کار در جریانه، صبر کن تموم شه 🙏");
     return;
@@ -2313,11 +2419,8 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
 
   let durationSec = Math.max(0, Math.round(s.original_ms / 1000));
   if (durationSec > 0 && u.credit_sec < durationSec) {
-    await reply(ctx, S.lowBalanceMessage(durationSec, u.credit_sec), {
-      reply_markup: new InlineKeyboard()
-        .text("🪙 شارژ حساب", "topup")
-        .row()
-        .text("▶️ ادامه بده", `go:${sessionId}`),
+    await reply(ctx, lowBalanceText(durationSec, u.credit_sec), {
+      reply_markup: lowBalanceKeyboard(sessionId),
     });
     return;
   }
@@ -2377,7 +2480,7 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
             await reply(
               ctx,
               `این فایل در واقع <b>${toFaDigits(fmtDuration(realSec * 1000))}</b> بود، بیشتر از چیزی که اول نشون داده شد.\n\n` +
-                S.lowBalanceMessage(realSec, u.credit_sec),
+                lowBalanceText(realSec, u.credit_sec),
               { reply_markup: lowBalanceKeyboard(sessionId) },
             );
             return;
@@ -2472,6 +2575,12 @@ handlers.callbackQuery(/^retry:([a-f0-9]+)$/, async (ctx) => {
   const u = touchUser(ctx);
   if (!s || !u || s.tg_id !== u.tg_id) {
     await ctx.answerCallbackQuery({ text: "این جلسه مال تو نیست." });
+    return;
+  }
+  // همان دامِ `resumeSession`: گروهِ باز یا در جریان را تنها از نو شروع نکن.
+  const group = groupProgress(sessionId);
+  if (group?.status === "open" || group?.status === "started") {
+    await ctx.answerCallbackQuery({ text: S.GROUP_REFUSAL.exists });
     return;
   }
   if (!s.original_file || !(await fs.access(s.original_file).then(() => true).catch(() => false))) {
@@ -3065,9 +3174,231 @@ handlers.command("shared", async (ctx) => {
   await reply(ctx, lines.join("\n"));
 });
 
+// ─── خرید گروهی ─────────────────────────────────────────────────────────────
+//
+// قاعده‌ها در `billing/group-buy.ts`، پیام‌ها و شروعِ کار در `bot/group-buy.ts`.
+// اینجا فقط اتصالِ دکمه‌ها به آن دو.
+
+/** جلسه‌ای که مالکش می‌تواند برایش گروه باز کند: خودش فرستاده و هنوز شروع نشده. */
+function groupableSession(ctx: Context, sessionId: string): SessionRow | null {
+  const s = getSession(sessionId);
+  if (!s || s.tg_id !== uid(ctx)) return null;
+  return s.status === "awaiting_credit" || s.status === "awaiting_confirm" ? s : null;
+}
+
+/**
+ * فایلِ جلسه باید **پیش از** بازشدنِ گروه روی دیسک باشد.
+ *
+ * گروه با زدنِ آخرین هم‌کلاسی شروع می‌شود، در چتِ او؛ آنجا نه `file_id`
+ * سکوی مالک به کار می‌آید نه می‌شود از مالک خواست فایل را دوباره بفرستد. پس
+ * همین حالا، در چتِ خودِ مالک، گرفته می‌شود — و مدتِ واقعی هم همین‌جا معلوم
+ * می‌شود تا سهم‌ها روی عددِ درست باشند نه تخمینِ سکو. بایگانی هم همین‌جا،
+ * همان‌طور که `resumeSession` پس از دانلود می‌کند.
+ */
+async function audioForGroup(ctx: Context, s: SessionRow): Promise<{ sec: number } | null> {
+  let sec = Math.round(s.original_ms / 1000);
+  const onDisk =
+    s.original_file !== null && (await fs.access(s.original_file).then(() => true).catch(() => false));
+  if (onDisk) return { sec };
+  if (!s.audio_file_id) {
+    await reply(ctx, "فایل صوتی این جلسه دیگر روی سرور نیست 😔 دوباره بفرستش.");
+    return null;
+  }
+  const dl = await downloadMedia(ctx, {
+    sessionId: s.id,
+    fileId: s.audio_file_id,
+    messageId: s.audio_message_id ?? 0,
+    declaredSize: 0,
+  });
+  if (!dl) return null;
+  updateSession(s.id, { original_file: dl.audioFile, download_route: dl.route });
+  try {
+    const real = Math.round((await probe(dl.audioFile)).durationMs / 1000);
+    if (real > 0) {
+      sec = real;
+      updateSession(s.id, { original_ms: real * 1000 });
+    }
+  } catch (e) {
+    logger.warn({ sessionId: s.id, err: String(e) }, "probe before group buy failed");
+  }
+  const u = getUser(s.tg_id);
+  const platform = platformOf(ctx);
+  const caption = audioCaption({
+    sender: { tgId: s.tg_id, name: u?.name ?? null, username: u?.username ?? null },
+    mode: "full",
+    durationMs: sec * 1000,
+    sessionId: s.id,
+    courseName: s.course_id ? (getCourse(s.course_id)?.name ?? null) : null,
+    origin: platform,
+  });
+  if (platform === "bale") void archiveAudio(s.id, { path: dl.audioFile }, caption, sec);
+  else await archiveAudio(s.id, { fileId: s.audio_file_id }, caption, sec);
+  return { sec };
+}
+
+/**
+ * «👥 با هم‌کلاسیا بخریم» — پرسشِ اندازه **جای** همان پیام می‌نشیند.
+ *
+ * برخلافِ پرسشِ شریک‌شدن که پیامِ تازه می‌فرستد، اینجا «بی‌خیال» باید به همان
+ * دو گزینه برگردد؛ ویرایشِ یک پیام این رفت‌وبرگشت را بی‌آنکه چت پر شود
+ * می‌دهد. اگر ویرایش نشد (پیامِ قدیمی)، پیامِ تازه.
+ */
+handlers.callbackQuery(new RegExp(String.raw`^${GROUP_CB.open}:([a-f0-9]+)$`), async (ctx) => {
+  const s = groupableSession(ctx, ctx.match![1]!);
+  if (!groupBuyEnabled() || !s) {
+    await ctx.answerCallbackQuery({ text: S.GROUP_REFUSAL.not_found });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  const costSec = Math.round(s.original_ms / 1000);
+  const text = S.groupSizePrompt(costSec, GROUP_BUY_HOURS);
+  const kb = groupSizeKeyboard(s.id, costSec);
+  await ctx
+    .editMessageText(text, { parse_mode: "HTML", reply_markup: kb })
+    .catch(() => reply(ctx, text, { reply_markup: kb }));
+});
+
+/** «بی‌خیال» زیرِ اندازه‌ها: برگشت به همان دو گزینه. */
+handlers.callbackQuery(new RegExp(String.raw`^${GROUP_CB.back}:([a-f0-9]+)$`), async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const s = groupableSession(ctx, ctx.match![1]!);
+  const u = getUser(uid(ctx));
+  if (!s || !u) {
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+    return;
+  }
+  await ctx
+    .editMessageText(lowBalanceText(Math.round(s.original_ms / 1000), u.credit_sec), {
+      parse_mode: "HTML",
+      reply_markup: lowBalanceKeyboard(s.id),
+    })
+    .catch(() => {});
+});
+
+/** انتخابِ اندازه: فایل روی دیسک، سهمِ مالک رزرو، و پیامِ دعوت. */
+handlers.callbackQuery(new RegExp(String.raw`^${GROUP_CB.size}:([a-f0-9]+):(\d+)$`), async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  const people = Number(ctx.match![2]);
+  const u = touchUser(ctx);
+  const s = groupableSession(ctx, sessionId);
+  if (!groupBuyEnabled() || !s || !u) {
+    await ctx.answerCallbackQuery({ text: S.GROUP_REFUSAL.not_found });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+
+  const ready = await audioForGroup(ctx, s);
+  if (!ready) return;
+
+  const out = openGroup({ sessionId, ownerId: u.tg_id, costSec: ready.sec, people, origin: "bot" });
+  if (!out.ok) {
+    if (out.reason === "short") {
+      await reply(ctx, S.groupOwnerShortMessage(costCoins(out.seatSec), out.balanceSec), {
+        reply_markup: new InlineKeyboard().text(S.GROUP_BTN.self, "topup"),
+      });
+      return;
+    }
+    await reply(ctx, S.GROUP_REFUSAL[out.reason]);
+    return;
+  }
+  const opened = S.groupOpenedMessage(out.progress.seats, out.progress.seatCoins);
+  await ctx.editMessageText(opened, { parse_mode: "HTML" }).catch(() => reply(ctx, opened));
+  await sendGroupInvite(sessionId, { api: ctx.api, chatId: ctx.chat!.id });
+});
+
+/**
+ * «✅ هستم».
+ *
+ * اگر همین ورود گروه را پر کرد، کار شروع شده و خبرش را `startGroup` به همه —
+ * این نفر هم — داده است؛ پس اینجا پیامِ دومی نمی‌رود.
+ */
+handlers.callbackQuery(new RegExp(String.raw`^${GROUP_CB.join}:([a-f0-9]+)$`), async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  const u = touchUser(ctx);
+  if (!u) return;
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+  const out = await joinGroup(sessionId, u.tg_id);
+  if (out.ok) {
+    if (!out.started) {
+      await reply(ctx, S.groupJoinedMessage(out.progress.seatCoins, out.progress.filled, out.progress.seats));
+    }
+    return;
+  }
+  if (out.reason === "short") {
+    // همان الگوی جزوهٔ شریکی: کسری، دکمهٔ شارژ، و برگشت به همین گروه پس از شارژ.
+    rememberPendingJoin(u.tg_id, sessionId);
+    await reply(ctx, `${S.lowBalanceMessage(out.seatSec, out.balanceSec)}\n\n${S.JOIN_RETURN_HINT}`, {
+      reply_markup: new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup"),
+    });
+    return;
+  }
+  await reply(ctx, S.GROUP_REFUSAL[out.reason]);
+});
+
+/** «بقیه‌اش رو خودم می‌دم، شروع کن» — خبرِ شروع را `startGroup` می‌دهد. */
+handlers.callbackQuery(new RegExp(String.raw`^${GROUP_CB.rest}:([a-f0-9]+)$`), async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  await ctx.answerCallbackQuery();
+  const out = await payRestAndStart(sessionId, uid(ctx));
+  if (out.ok) {
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+    if (!out.started) await reply(ctx, S.GROUP_REFUSAL.closed);
+    return;
+  }
+  if (out.reason === "short") {
+    await reply(ctx, S.lowBalanceMessage(out.seatSec, out.balanceSec), {
+      reply_markup: new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup"),
+    });
+    return;
+  }
+  await reply(ctx, S.GROUP_REFUSAL[out.reason]);
+});
+
+/** دوباره پیامِ گروه کلاس — فقط برای مالک و فقط وقتی گروه باز است. */
+handlers.callbackQuery(new RegExp(String.raw`^${GROUP_CB.link}:([a-f0-9]+)$`), async (ctx) => {
+  const sessionId = ctx.match![1]!;
+  const p = groupProgress(sessionId);
+  if (!p || p.ownerId !== uid(ctx) || p.status !== "open") {
+    await ctx.answerCallbackQuery({ text: S.GROUP_REFUSAL.closed });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  await sendGroupInvite(sessionId, { api: ctx.api, chatId: ctx.chat!.id });
+});
+
+/**
+ * «📓 بفرستش» — نتیجهٔ خرید گروهی برای هم‌کلاسی.
+ *
+ * همان `deliverSession`ِ جزوهٔ شریکی: همان چهار چیز و همان دکمه‌های بایگانی،
+ * نه یک تحویلِ سوم. `readableSession` عضویت را می‌سنجد، پس کال‌بکِ ساختگی
+ * جزوه‌ای نمی‌دهد.
+ */
+handlers.callbackQuery(new RegExp(String.raw`^${GROUP_CB.get}:([a-f0-9]+)$`), async (ctx) => {
+  const s = readableSession(ctx, ctx.match![1]!);
+  if (!s || s.status !== "done") {
+    await ctx.answerCallbackQuery({ text: S.MORE_DENIED });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  await dropPressedButton(ctx);
+  try {
+    await deliverSession(ctx, s);
+  } catch (e) {
+    logger.error({ sessionId: s.id, err: String(e) }, "group buy member delivery failed");
+    await reply(ctx, "فرستادنش الان نشد؛ از «📚 جلسه‌های من» دوباره امتحان کن.");
+  }
+});
+
 // ─── نگهداری ────────────────────────────────────────────────────────────────
 
 export async function cleanupOldAudio(): Promise<void> {
+  // انقضای خرید گروهی سوارِ همین تایمر است، نه زمان‌بندِ تازه. اول می‌آید تا
+  // جلسه‌ای که برگشت، در همین دور با وضعیتِ درستش دیده شود.
+  await expireGroupsAndNotify().catch((e: unknown) =>
+    logger.error({ err: String(e) }, "group buy expiry failed"),
+  );
   for (const row of expiredAudio(config.KEEP_AUDIO_DAYS)) {
     await fs.unlink(row.original_file).catch(() => {});
     clearAudioPath(row.id);

@@ -46,6 +46,8 @@ import { uid } from "./identity.js";
 import { notifyAdmins, notifyUser } from "./notify.js";
 import { APP_NAME } from "./menu.js";
 import { isMember } from "../billing/sharing.js";
+import { groupJoinable } from "../billing/group-buy.js";
+import { GROUP_CB } from "./group-buy.js";
 import * as S from "./strings.js";
 
 const orderId = () => randomBytes(4).toString("hex");
@@ -279,6 +281,13 @@ async function creditTopup(t: TopupRow): Promise<void> {
   if (wanted && wanted.status === "done" && !isMember(wanted.id, t.tg_id)) {
     await notifyUser(t.tg_id, head + S.PENDING_JOIN_AFTER_TOPUP, {
       reply_markup: new InlineKeyboard().text(S.PENDING_JOIN_BTN, `jdo:${wanted.id}`),
+    });
+    return;
+  }
+  // همان خواسته، برای خرید گروهی‌ای که هنوز باز است و جا دارد.
+  if (wanted && wanted.status === "awaiting_group" && groupJoinable(wanted.id, t.tg_id)) {
+    await notifyUser(t.tg_id, head + S.PENDING_GROUP_AFTER_TOPUP, {
+      reply_markup: new InlineKeyboard().text(S.GROUP_BTN.join, `${GROUP_CB.join}:${wanted.id}`),
     });
     return;
   }

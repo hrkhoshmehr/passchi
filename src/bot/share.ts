@@ -46,10 +46,20 @@ const usernames: { telegram: string | null; bale: string | null } = {
  * همان قاعدهٔ `links.ts`: دامنه از سکو می‌آید، نه از ثابتِ کد.
  */
 export async function shareLink(api: Api, sessionId: string): Promise<string> {
+  return startLink(api, `j_${sessionId}`);
+}
+
+/**
+ * لینکِ `/start` با هر پیشوندی، روی دامنهٔ همان سکو.
+ *
+ * خرید گروهی (`p_`) همان مشکلِ لینک دعوت را دارد و نباید نسخهٔ دومی از این
+ * قاعده بسازد که روزی از آن عقب بماند.
+ */
+export async function startLink(api: Api, payload: string): Promise<string> {
   const platform = isBale(api) ? "bale" : "telegram";
   usernames[platform] ??= (await api.getMe()).username ?? null;
   const host = platform === "bale" ? "https://ble.ir" : "https://t.me";
-  return `${host}/${usernames[platform]}?start=j_${sessionId}`;
+  return `${host}/${usernames[platform]}?start=${payload}`;
 }
 
 /**

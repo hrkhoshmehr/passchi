@@ -16,6 +16,7 @@ import path from "node:path";
 const NEEDS_DB = new Set([
   "gift", "identity", "archive-routing", "interrupted-recovery", "sharing", "share-seat",
   "topup-gateway", "transfer", "deferred-delivery", "pending-resume", "member-access", "topup-continuation",
+  "group-buy",
 ]);
 
 const tests = [
@@ -64,6 +65,7 @@ const tests = [
   "platform-neutral",
   "sharing",
   "share-seat",
+  "group-buy",
   "gift",
   "transfer",
   "identity",
