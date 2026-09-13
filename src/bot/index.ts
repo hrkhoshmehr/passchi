@@ -75,6 +75,7 @@ import {
   openGroup, payRestAndStart, payRestKeyboard, sendGroupInvite,
 } from "./group-buy.js";
 import { GROUP_BUY_HOURS, cancelGroupBuy, groupProgress, groupSeats } from "../billing/group-buy.js";
+import { funnelReport, recordStart, track } from "../db/funnel.js";
 import { rememberPendingJoin } from "../db/index.js";
 import { deliverSession } from "./share.js";
 
@@ -583,6 +584,15 @@ handlers.command("start", async (ctx) => {
   const payload = (ctx.match as string | undefined)?.trim() ?? "";
 
   /**
+   * منبعِ ورود، پیش از هر شاخه.
+   *
+   * لینکِ تبلیغ `?start=s_<نام>` است و هیچ شاخهٔ دیگری آن را نمی‌خواند، پس
+   * به خوش‌آمدِ عادی می‌رسد. لینک‌های هدیه و جزوه هم منبع‌اند و همین‌جا ثبت
+   * می‌شوند؛ `/funnel` از همین جدول می‌خواند.
+   */
+  if (u) recordStart(u.tg_id, payload);
+
+  /**
    * لینک هدیه: /start g_<code>
    *
    * پیش از شاخهٔ دعوت و پیش از منوی خوشامد می‌آید، چون گیرنده روی لینکی زده
@@ -806,6 +816,8 @@ function demoAudioIdOf(ctx: Context): number | null {
 
 handlers.callbackQuery(DEMO_CB.recap, async (ctx) => {
   await advance(ctx);
+  // «تور را دید» جای دیگری ثبت نمی‌شود و گامِ اولِ قیف است.
+  track(uid(ctx), "demo");
   await reply(ctx, DEMO_INTRO);
 
   /**
@@ -1355,6 +1367,60 @@ handlers.command("stats", async (ctx) => {
       `<b>حالا</b>\n` +
       `صف: ${toFaDigits(q.active)} فعال، ${toFaDigits(q.pending)} در انتظار\n` +
       `شارژهای بی‌تکلیف: ${toFaDigits(pendingTopups(50).length)}`,
+  );
+});
+
+/**
+ * قیف — `/funnel` یا `/funnel 30`.
+ *
+ * هم‌گروهی است: هر عدد از میانِ کسانی است که در همان چند روز آمده‌اند. درصدِ
+ * هر گام نسبت به کلِ آن گروه است نه گامِ قبل، تا یک نگاه بگوید چند نفر از
+ * صد نفر به پرداخت رسیدند.
+ */
+handlers.command("funnel", async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const arg = Number(((ctx.match as string | undefined) ?? "").trim());
+  const days = Number.isFinite(arg) && arg >= 1 && arg <= 365 ? Math.floor(arg) : 7;
+  const r = funnelReport(days);
+  const pct = (n: number, of: number) => (of ? ` (${toFaDigits(Math.round((100 * n) / of))}٪)` : "");
+  const t = r.total;
+  const line = (label: string, n: number) => `${label}: ${toFaDigits(n)}${pct(n, t.users)}`;
+
+  const sources = r.bySource
+    .slice(0, 10)
+    .map(
+      (s) =>
+        `<code>${escapeHtml(s.source)}</code> — ${toFaDigits(s.users)} نفر، ` +
+        `${toFaDigits(s.uploaded)} صوت، ${toFaDigits(s.joined)} جزوهٔ هم‌کلاسی، ${toFaDigits(s.paid)} پرداخت`,
+    )
+    .join("\n");
+
+  const webNames: Record<string, string> = {
+    landing_view: "بازدید سایت",
+    landing_cta: "کلیک روی شروع",
+    app_view: "صفحهٔ ورود",
+    bot_link: "کلیک به ربات",
+  };
+  const web = r.web
+    .slice(0, 12)
+    .map((w) => `${webNames[w.name] ?? w.name} · <code>${escapeHtml(w.source)}</code>: ${toFaDigits(w.n)}`)
+    .join("\n");
+
+  await reply(
+    ctx,
+    `<b>قیف ${toFaDigits(days)} روز اخیر</b>\n` +
+      `${line("آمدند", t.users)}\n` +
+      `${line("نمونه رو دیدند", t.demo)}\n` +
+      `${line("صوت فرستادند", t.uploaded)}\n` +
+      `${line("جزوه گرفتند", t.delivered)}\n` +
+      `${line("جزوهٔ هم‌کلاسی گرفتند", t.joined)}\n` +
+      `${line("پرداخت کردند", t.paid)}\n\n` +
+      `<b>منبع ورود</b>\n${sources || "—"}\n\n` +
+      `<b>سایت</b>\n${web || "—"}\n\n` +
+      `<b>یادآوری</b>\n` +
+      `فرستاده: ${toFaDigits(r.nudges.sent)}، رسیده: ${toFaDigits(r.nudges.delivered)}، ` +
+      `بعدش صوت فرستادند: ${toFaDigits(r.nudges.uploadedAfter)}\n\n` +
+      `<i>«نمونه رو دیدند» از امروز شمرده می‌شود؛ بقیه تاریخچه دارند.</i>`,
   );
 });
 

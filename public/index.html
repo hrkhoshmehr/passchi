@@ -568,6 +568,43 @@ footer {
 </footer>
 
 <script>
+/*
+ * منبعِ آگهی و شمارشِ ناشناس.
+ *
+ * آگهی به `passchi.ir/?s=instagram` لینک می‌دهد. همان نام به دکمه‌های
+ * «شروع» می‌چسبد (`/app?s=instagram`) و از آنجا به لینکِ ربات
+ * (`?start=s_instagram`) — تا `/funnel` بگوید آن آگهی چند نفر آورد و چند
+ * نفرشان پول دادند. بی‌پارامتر، ورود از سایت `site` نامیده می‌شود تا از
+ * کسی که ربات را مستقیم پیدا کرده جدا بماند.
+ *
+ * هیچ سرویس بیرونی‌ای در کار نیست؛ فقط `/api/ev` روی همین دامنه.
+ */
+const src = (() => {
+  try {
+    const q = new URLSearchParams(location.search);
+    const raw = (q.get("s") || q.get("utm_source") || "").toLowerCase();
+    return /^[a-z0-9_-]{1,32}$/.test(raw) ? raw : "";
+  } catch { return ""; }
+})();
+const ev = (name) => {
+  try {
+    const body = JSON.stringify({ name, source: src || null });
+    if (!(navigator.sendBeacon && navigator.sendBeacon("/api/ev", body))) {
+      fetch("/api/ev", { method: "POST", body, keepalive: true }).catch(() => {});
+    }
+  } catch {}
+};
+ev("landing_view");
+const appHref = `/app?s=${src || "site"}`;
+for (const a of document.querySelectorAll('a[href="/app"]')) a.href = appHref;
+// کارت‌های قیمت بعداً از سرور ساخته می‌شوند؛ پس لینک لحظهٔ کلیک هم درست می‌شود.
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest('a[href^="/app"]');
+  if (!a) return;
+  a.setAttribute("href", appHref);
+  ev("landing_cta");
+}, true);
+
 // سایهٔ زیر سربرگ فقط وقتی صفحه اسکرول شده
 const nav = document.getElementById("nav");
 const onScroll = () => nav.classList.toggle("scrolled", window.scrollY > 8);

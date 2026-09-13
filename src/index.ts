@@ -13,6 +13,7 @@ import { APP_NAME } from "./bot/menu.js";
 import { archiveStatus } from "./bot/archive.js";
 import { drain } from "./queue.js";
 import { recoverInterrupted } from "./jobs/service.js";
+import { startNudges } from "./jobs/nudge.js";
 
 for (const dir of [config.dataDir, config.audioDir, config.workDir, config.outDir]) {
   fs.mkdirSync(dir, { recursive: true });
@@ -83,6 +84,9 @@ void cleanupOldAudio();
  */
 const recovered = recoverInterrupted();
 
+// یادآوریِ فعال‌سازی؛ اولین دور نود ثانیه بعد، تا بازیابی و صف اول تمام شوند.
+startNudges();
+
 /**
  * وضعیت بله را **می‌آزماید**، نه اینکه فقط وجود توکن را گزارش کند.
  *
@@ -141,6 +145,9 @@ logger.info(
     archive: archiveStatus(),
     bale: await baleStatus(),
     web: config.WEB_ENABLED ? `پورت ${config.WEB_PORT}` : "خاموش",
+    // یادآوری و خرید گروهی هر دو بی‌صدا خاموش می‌مانند اگر متغیرشان روی سرور نباشد.
+    nudges: config.NUDGES ? "روشن" : "خاموش",
+    groupBuy: config.GROUP_BUY ? "روشن" : "خاموش",
     // بدون سرویس پیامک، ورود با شماره **بسته** است نه ناامن: پیش‌تر کد تأیید
     // در پاسخ HTTP برمی‌گشت و هرکسی با دانستن یک شماره وارد حساب صاحبش می‌شد.
     // حالا هویت فقط از شناسهٔ سکو می‌آید و این خط می‌گوید کدام حالت برقرار است.

@@ -476,6 +476,44 @@ async function boot() {
  * اگر خواندن پیکربندی شکست بخورد، **بسته** فرض می‌شود: پیش‌فرضِ امن آن است
  * که کاربر را به ربات بفرستیم، نه به فرمی که احتمالاً جواب نمی‌دهد.
  */
+/**
+ * منبعِ ورود از سایت به ربات می‌رسد.
+ *
+ * صفحهٔ فرود دکمه‌ها را `/app?s=<منبع>` می‌کند؛ اینجا همان نام به لینکِ ربات
+ * `?start=s_<منبع>` می‌چسبد و ربات هنگام `/start` ثبتش می‌کند. داخل مینی‌اپ
+ * پارامتری نیست و لینک دست‌نخورده می‌ماند.
+ */
+function entrySource() {
+  try {
+    const raw = (new URLSearchParams(location.search).get("s") || "").toLowerCase();
+    return /^[a-z0-9_-]{1,32}$/.test(raw) ? raw : "";
+  } catch {
+    return "";
+  }
+}
+
+function withStart(url) {
+  const s = entrySource();
+  if (!s) return url;
+  try {
+    const u = new URL(url);
+    u.searchParams.set("start", `s_${s}`);
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+/** شمارشِ ناشناس — شکستش هرگز به کاربر نمی‌رسد. */
+function beacon(name) {
+  try {
+    const body = JSON.stringify({ name, source: entrySource() || null });
+    if (!(navigator.sendBeacon && navigator.sendBeacon("/api/ev", body))) {
+      fetch("/api/ev", { method: "POST", body, keepalive: true }).catch(() => {});
+    }
+  } catch {}
+}
+
 async function showAuthScreen({ slow = false } = {}) {
   let phoneLogin = false;
   let bots = {};
@@ -505,7 +543,8 @@ async function showAuthScreen({ slow = false } = {}) {
   // به هیچ‌جا نبرد، بدتر از نبودنش است.
   for (const [id, key, url] of [["open-tg", "telegram", bots.telegram], ["open-bale", "bale", bots.bale]]) {
     const el = $(id);
-    if (url) el.href = url;
+    if (url) el.href = withStart(url);
+    el.onclick = () => beacon("bot_link");
     show(el, Boolean(url) && (!knownHere || knownHere === key));
     if (knownHere === key) {
       el.classList.add("btn-primary");
@@ -530,6 +569,8 @@ async function showAuthScreen({ slow = false } = {}) {
    * او روی همان دکمه زده و بله بیرونش انداخته؛ دادن دکمهٔ «باز کردن در بله»
    * یعنی فرستادنش به همان حلقه. تنها راهِ واقعیِ امروز، گوشی است.
    */
+  // فقط بیرون از مینی‌اپ: داخل ربات کاربر از قبل رسیده و این شمارش قیفِ سایت است.
+  if (!miniApp) beacon("app_view");
   const strandedOnDesktop = !phoneLogin && isDesktop;
   if (strandedOnDesktop) {
     show($("auth-bots"), false);

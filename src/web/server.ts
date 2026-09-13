@@ -17,6 +17,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
+import { isWebEvent, normalizeSource, track } from "../db/funnel.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml, shortId } from "../util/text.js";
 import { beginTopup, gatewayConfigured, settleTopup } from "../bot/topup.js";
@@ -58,6 +59,29 @@ const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
 // ─── کمکی‌ها ────────────────────────────────────────────────────────────────
 
 type Res = http.ServerResponse;
+
+/**
+ * سقفِ نرخِ رویدادِ ناشناس، به‌ازای آی‌پی: سی رویداد در ده دقیقه.
+ *
+ * `/api/ev` بی‌احراز است و هرکسی می‌تواند با یک حلقه جدولِ رویداد را پر کند
+ * یا قیف را جعل کند. سقفِ درحافظه کافی است: هدف دفعِ پُرکردن است نه امنیت،
+ * و ری‌استارت که حافظه را پاک می‌کند فقط چند رویدادِ اضافه راه می‌دهد.
+ * آی‌پی ذخیره **نمی‌شود**؛ فقط کلیدِ این نقشه است.
+ */
+const evHits = new Map<string, { n: number; since: number }>();
+function allowEvent(req: http.IncomingMessage): boolean {
+  const fwd = req.headers["x-forwarded-for"];
+  const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim() || req.socket.remoteAddress || "?";
+  const now = Date.now();
+  if (evHits.size > 5000) evHits.clear();
+  const h = evHits.get(ip);
+  if (!h || now - h.since > 10 * 60_000) {
+    evHits.set(ip, { n: 1, since: now });
+    return true;
+  }
+  h.n++;
+  return h.n <= 30;
+}
 
 function json(res: Res, status: number, body: unknown): void {
   const text = JSON.stringify(body);
@@ -306,6 +330,26 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
      * پیش از هر چیز این خوانده می‌شود و فرم شماره فقط وقتی ساخته می‌شود که
      * واقعاً کار کند.
      */
+    /**
+     * شمارشِ ناشناسِ سایت و مینی‌اپ — بازدید و کلیک، با منبعِ آگهی.
+     *
+     * پاسخ همیشه یکی است، چه پذیرفته شود چه نه: فرستنده نباید از پاسخ
+     * بفهمد به سقف خورده یا نامش رد شده. با `sendBeacon` می‌آید که
+     * `text/plain` است، پس بدنه دستی خوانده می‌شود و سقفش دو کیلوبایت است.
+     */
+    case "POST /api/ev": {
+      try {
+        const body = JSON.parse((await readBody(req, 2048)).toString("utf8") || "{}") as {
+          name?: unknown;
+          source?: unknown;
+        };
+        if (isWebEvent(body.name) && allowEvent(req)) track(null, body.name, normalizeSource(body.source));
+      } catch {
+        /* بدنهٔ خراب هم همان پاسخ را می‌گیرد */
+      }
+      return json(res, 200, { ok: true });
+    }
+
     case "GET /api/config":
       return json(res, 200, {
         phoneLogin: phoneLoginEnabled(),

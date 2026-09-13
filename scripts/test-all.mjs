@@ -16,7 +16,7 @@ import path from "node:path";
 const NEEDS_DB = new Set([
   "gift", "identity", "archive-routing", "interrupted-recovery", "sharing", "share-seat",
   "topup-gateway", "transfer", "deferred-delivery", "pending-resume", "member-access", "topup-continuation",
-  "group-buy",
+  "group-buy", "funnel", "nudge",
 ]);
 
 const tests = [
@@ -70,6 +70,8 @@ const tests = [
   "transfer",
   "identity",
   "topup-gateway",
+  "funnel",
+  "nudge",
 ];
 
 const tmpRoot = path.join("data", `tmp-test-${process.pid}`);
