@@ -235,3 +235,51 @@ line("هدیه — پیام‌های رد");
 for (const r of ["unknown", "revoked", "expired", "already", "exhausted"]) {
   console.log(`  ${r.padEnd(10)} → ${refusalMessage(r)}`);
 }
+
+// ── خرید گروهی (پشت پرچم GROUP_BUY) ────────────────────────────────────────
+{
+  const G = await import("../src/bot/strings.ts");
+  const { groupSeat, GROUP_SIZES, GROUP_BUY_HOURS } = await import("../src/billing/coins.ts");
+  const NL = "\n";
+  line("خرید گروهی — سکهٔ کم، دو راه");
+  show(G.lowBalanceGroupMessage(90 * 60, coinsToSec(20)));
+  console.log(`${NL}[ ${G.GROUP_BTN.self} ] [ ${G.GROUP_BTN.group} ]${NL}[ ${G.GROUP_BTN.resume} ]`);
+  line("خرید گروهی — چند نفر");
+  show(G.groupSizePrompt(5400, GROUP_BUY_HOURS));
+  console.log(
+    NL +
+      GROUP_SIZES.map((n) => `[ ${G.groupSizeLabel(n, groupSeat(5400, n).seatCoins, 20)} ]`).join(NL) +
+      `${NL}[ ${G.GROUP_BTN.cancel} ]`,
+  );
+  line("خرید گروهی — باز شد (مالک)");
+  show(G.groupOpenedMessage(5, 18));
+  line("خرید گروهی — دعوت برای گروه کلاس");
+  show(
+    G.groupInviteMessage({
+      durationMs: 5_400_000, seats: 5, seatCoins: 18, giftCoins: 20,
+      link: "https://ble.ir/passchi_bot?start=p_ab12cd34ef56",
+    }),
+  );
+  line("خرید گروهی — زیر دعوت (فقط مالک)");
+  show(G.groupInviteTail(1, 5));
+  console.log(`${NL}[ ${G.GROUP_BTN.payRest} ]`);
+  line("خرید گروهی — پیش‌نمایش هم‌کلاسی");
+  show(G.groupPreviewMessage({ durationMs: 5_400_000, seats: 5, filled: 2, seatCoins: 18, balanceSec: coinsToSec(20) }));
+  console.log(`${NL}[ ${G.GROUP_BTN.join} ]${NL}[ ${G.GROUP_BTN.later} ]`);
+  line("خرید گروهی — «هستم» زد");
+  show(G.groupJoinedMessage(18, 3, 5));
+  line("خرید گروهی — خبر هر ورود به مالک");
+  show(G.groupProgressMessage(3, 5));
+  console.log(`${NL}[ ${G.GROUP_BTN.payRest} ]`);
+  line("خرید گروهی — پر شد");
+  show(G.GROUP_STARTED_OWNER);
+  show(G.GROUP_STARTED_MEMBER);
+  line("خرید گروهی — نتیجه برای هم‌کلاسی");
+  show(G.groupReadyMessage("مشتق جهت‌دار و گرادیان"));
+  console.log(`[ ${G.GROUP_BTN.get} ]`);
+  line("خرید گروهی — انقضا");
+  show(G.groupExpiredMessage("owner", "bot", GROUP_BUY_HOURS));
+  console.log(`[ ${G.GROUP_BTN.resume} ]`);
+  show(G.groupExpiredMessage("owner", "web", GROUP_BUY_HOURS));
+  show(G.groupExpiredMessage("member", "bot", GROUP_BUY_HOURS));
+}
