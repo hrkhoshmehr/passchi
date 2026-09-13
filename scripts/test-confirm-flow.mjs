@@ -284,7 +284,7 @@ check("دکمه‌های ربات فقط روی دسکتاپ پنهان می‌�
   const resume = bot.slice(bot.indexOf("async function resumeSession"), bot.indexOf("handlers.callbackQuery(/^resume:"));
   check("پس از دانلود، مدت با probe راستی‌آزمایی می‌شود", /await probe\(audioFile\)/.test(resume));
   check("مبنای رزرو، عددِ خودمان می‌شود", /durationSec = realSec/.test(resume));
-  check("گران‌تر از قیمتِ اعلام‌شده دوباره پرسیده می‌شود", /costCoins\(realSec\) > costCoins\(durationSec\)/.test(resume));
+  check("گران‌تر از قیمتِ اعلام‌شده دوباره پرسیده می‌شود", /costCoins\(realSec\) > costCoins\(quotedSec\)/.test(resume));
 
   // ── سقفِ فایل‌های تصمیم‌نگرفته ────────────────────────────────────────────
   check("سقفِ جلسه‌های معلق هست", /const MAX_PENDING_SESSIONS = \d+/.test(bot));

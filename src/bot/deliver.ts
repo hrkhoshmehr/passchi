@@ -174,6 +174,34 @@ export function moreKeyboard(s: SessionRow): InlineKeyboard | null {
  * ترتیب سطرها عمدی است: تقسیم هزینه اول، چون کارِ همین حالاست؛ رونوشت و
  * زیرنویس بعد، چون بایگانی‌اند.
  */
+/**
+ * متنی که شاید از سقفِ پیامِ سکو بلندتر باشد، با دکمه‌ها **فقط زیرِ تکهٔ آخر**.
+ *
+ * `reply()` همان گزینه‌ها را روی هر تکه می‌گذارد؛ برای پیامِ یکی‌شدهٔ خلاصه و
+ * نکته‌ها یعنی دکمه‌ها وسطِ متن تکرار می‌شدند. ریپلای به صوت روی همهٔ تکه‌ها
+ * می‌ماند تا زمان‌ها در هر تکه لینکِ پخش باشند. شکستِ ارسال لاگ و بلعیده
+ * می‌شود: جزوه‌ای که پس از این می‌آید نباید پشتِ یک خطای شبکه بماند.
+ */
+export async function sendWithKeyboard(
+  to: { api: Api; chatId: number },
+  text: string,
+  extra: Record<string, unknown>,
+  keyboard?: InlineKeyboard,
+): Promise<void> {
+  const parts = S.chunk(text);
+  for (const [i, part] of parts.entries()) {
+    const last = i === parts.length - 1;
+    await to.api
+      .sendMessage(to.chatId, part, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+        ...extra,
+        ...(last && keyboard ? { reply_markup: keyboard } : {}),
+      })
+      .catch((e: unknown) => logger.warn({ err: String(e) }, "delivery message failed"));
+  }
+}
+
 export function closingKeyboard(s: SessionRow, shareOn: boolean): InlineKeyboard {
   const kb = shareToggleKeyboard(s.id, shareOn);
   const more = moreKeyboard(s);
@@ -391,22 +419,37 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
     }
   };
 
-  await send(
-    S.recapMessage({
-      report: r,
-      courseName: course?.name ?? null,
-      sessionDate: s.session_date,
-      durationMs: s.original_ms,
-      savedMs: Math.max(0, s.original_ms - s.billed_ms),
-      qualityWarnings: [],
-    }),
+  /**
+   * خلاصه، نکته‌ها و تسویه در **یک** پیام با دکمه‌ها زیرِ همان — چرایی در
+   * `deliveryMessage`. اگر کاربر سرِ تأیید «تقسیم می‌کنم» زده بود، دعوت پایین‌تر
+   * خودکار می‌آید.
+   */
+  const u = getUser(userId);
+  const shareOn = Boolean(s.share_enabled);
+  const tail = u
+    ? // مالکِ خرید گروهی فقط سهمِ خودش را داده؛ «این جلسه ۹۰ سکه شد» به او دروغ است.
+      S.settlementMessage(groupBuyOwnerPaidSec(s.id) ?? Math.round(s.original_ms / 1000), u.credit_sec, shareOn, {
+        people: s.share_target,
+        hasArchive: moreKeyboard(s) !== null,
+      })
+    : "";
+  await sendWithKeyboard(
+    ch,
+    S.deliveryMessage(
+      {
+        report: r,
+        courseName: course?.name ?? null,
+        sessionDate: s.session_date,
+        durationMs: s.original_ms,
+        savedMs: Math.max(0, s.original_ms - s.billed_ms),
+        qualityWarnings: [],
+      },
+      tail,
+    ),
+    asReply,
+    closingKeyboard(s, shareOn),
   );
-  // بخش‌بندی زمانی دیگر اینجا نمی‌آید؛ پشت دکمه رفته و آنجا هم ریپلایِ همین
-  // صوت فرستاده می‌شود تا زمان‌هایش لینکِ پخش بمانند.
-  await send(S.extractedMessage(r), asReply);
-  // خالی برمی‌گردد وقتی این جلسه پاسِ پرسش و پاسخ نداشته — پیش‌فرض خاموش است
-  // و آن‌وقت `send` رشتهٔ خالی را همان اول رد می‌کند. جایش کنارِ نکته‌هاست نه
-  // پشتِ دکمه: محتوای درسی است، نه بایگانی.
+  // خالی برمی‌گردد وقتی این جلسه پاسِ پرسش و پاسخ نداشته (پیش‌فرض خاموش).
   await send(S.qaMessage(r), asReply);
 
   if (s.pdf_path && fs.existsSync(s.pdf_path)) {
@@ -420,43 +463,6 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
     ).catch((e: unknown) => logger.warn({ err: String(e) }, "deliver pdf failed"));
   }
 
-  /**
-   * آخرین پیامِ فوری: دکمه‌های بایگانی.
-   *
-   * سطرِ جلسه دوباره از حافظه ساخته نمی‌شود — `s` همان است — ولی شناسهٔ صوتِ
-   * تحویل تازه در پایگاه‌داده نشسته و هندلرِ دکمه خودش سطر را تازه می‌خواند،
-   * پس اینجا لازم نیست.
-   */
-  /**
-   * تسویه و **تقسیم با هم‌کلاسیا** — که تا امروز روی این مسیر اصلاً نبود.
-   *
-   * کاربری که از مینی‌اپ می‌آمد نه می‌فهمید چقدر برایش مانده و نه هیچ‌وقت
-   * پیشنهاد تقسیم را می‌دید: آن دکمه فقط در `sendResults` مسیر ربات بود. یعنی
-   * برای کاربر بله — که به‌خاطر سقف بیست مگابایت اغلب از مینی‌اپ می‌آید —
-   * کلِ اقتصادِ اشتراک خاموش بود.
-   *
-   * اگر کاربر سرِ تأییدِ هزینه گفته باشد «تقسیم می‌کنم»، لینک دعوت هم همین‌جا
-   * می‌آید و لازم نیست دکمه‌ای بزند.
-   */
-  const u = getUser(userId);
-  const shareOn = Boolean(s.share_enabled);
-  const closing = closingKeyboard(s, shareOn);
-  const closingText = u
-    ? // مالکِ خرید گروهی فقط سهمِ خودش را داده؛ «این جلسه ۹۰ سکه شد» به او دروغ است.
-    S.settlementMessage(groupBuyOwnerPaidSec(s.id) ?? Math.round(s.original_ms / 1000), u.credit_sec, shareOn, {
-        people: s.share_target,
-        hasArchive: moreKeyboard(s) !== null,
-      })
-    : S.MORE_PROMPT;
-  if (u || moreKeyboard(s)) {
-    await ch.api
-      .sendMessage(ch.chatId, closingText, {
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-        reply_markup: closing,
-      })
-      .catch((e: unknown) => logger.warn({ err: String(e) }, "deliver settlement failed"));
-  }
   if (shareOn) {
     await ch.api
       .sendMessage(ch.chatId, await invitationMessage(ch.api, s), {

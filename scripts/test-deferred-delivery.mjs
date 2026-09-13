@@ -167,10 +167,18 @@ check(
 check("رونوشت کامل در تحویل فوری نیامد", !docs.some((d) => d.payload.caption === S.CAPTION.transcript));
 check("SRT در تحویل فوری نیامد", !docs.some((d) => d.payload.caption === S.CAPTION.srt));
 check(
-  "دقیقاً پنج ارسال: صوت، خلاصه، نکته‌ها، جزوه، و پیامِ دکمه‌ها",
-  sent.length === 5,
+  // خلاصه و نکته‌ها و تسویه یک پیامِ دکمه‌دارند — دکمه‌ها زیرِ همان، نه پیامِ سومی پایینِ جزوه.
+  "دقیقاً سه ارسال: صوت، پیامِ یکی‌شدهٔ خلاصه و نکته‌ها با دکمه‌ها، جزوه",
+  sent.length === 3,
   sent.map((c) => c.method).join(" → "),
 );
+{
+  const merged = sent.find((c) => c.method === "sendMessage");
+  check(
+    "پیامِ یکی‌شده هم خلاصه دارد هم «چی از کلاس درآوردم» هم دکمه‌ها",
+    merged?.payload.text.includes("📋") && merged.payload.text.includes("چی از کلاس درآوردم") && Boolean(merged.payload.reply_markup),
+  );
+}
 
 // ─── ۲) دکمه‌ها ─────────────────────────────────────────────────────────────
 

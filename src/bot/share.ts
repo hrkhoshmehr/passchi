@@ -10,7 +10,7 @@ import { costCoins, fmtBalance, fmtCoins, fmtCost, shareBack } from "../billing/
 import {
   getCourse, getSession, rememberPendingJoin, sessionReport, setMemberDelivery, updateSession, type SessionRow,
 } from "../db/index.js";
-import { moreKeyboard, reportReplyTo } from "./deliver.js";
+import { moreKeyboard, reportReplyTo, sendWithKeyboard } from "./deliver.js";
 import { InsufficientCredit } from "../billing/ledger.js";
 import {
   AlreadyMember,
@@ -343,9 +343,11 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
     }
   };
 
-  // همان چیزهای فوریِ مالک، به همان ترتیب: خلاصه، نکته‌ها، پرسش و پاسخ، جزوه
-  await send(
-    S.recapMessage({
+  // همان پیامِ یکی‌شدهٔ مالک — خلاصه و نکته‌ها با دکمه‌های بایگانی زیرش؛ دکمهٔ
+  // شریک‌شدن نه، چون مالِ مالک است.
+  await sendWithKeyboard(
+    { api: ctx.api, chatId },
+    S.deliveryMessage({
       report: r,
       courseName: course?.name ?? null,
       sessionDate: s.session_date,
@@ -353,8 +355,9 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
       savedMs: Math.max(0, s.original_ms - s.billed_ms),
       qualityWarnings: [],
     }),
+    asReply,
+    moreKeyboard(fresh) ?? undefined,
   );
-  await send(S.extractedMessage(r), asReply);
   // جلسهٔ اشتراکی همان گزارش را می‌گیرد؛ اگر این خط نباشد، هم‌کلاسیِ گیرنده
   // بخشی از خروجیِ همان جلسه را نمی‌بیند. خالی برمی‌گردد وقتی جلسه این پاس
   // را نداشته، پس در حالت پیش‌فرض هیچ پیامی اضافه نمی‌شود.
@@ -367,15 +370,6 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
     await sendDoc(ctx, s.pdf_path, `${s.title ?? "جزوه"}.pdf`, { caption: S.CAPTION.notes });
   }
 
-  // کلاس دقیقه‌به‌دقیقه، متن کامل و زیرنویس: پشتِ همان دکمه‌های مالک.
-  const more = moreKeyboard(fresh);
-  if (more) {
-    await ctx.reply(S.MORE_PROMPT, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: more,
-    });
-  }
 }
 
 export interface JoinOutcome {

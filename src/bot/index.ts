@@ -42,7 +42,7 @@ import {
   archiveAudio, archiveFailure, archiveReport, archiveUpgrade, audioCaption, setArchiveApi,
 } from "./archive.js";
 import {
-  MORE_CB, MORE_PART_OF, closingKeyboard, moreKeyboard, reportReplyTo, sendMorePart,
+  MORE_CB, MORE_PART_OF, closingKeyboard, moreKeyboard, reportReplyTo, sendMorePart, sendWithKeyboard,
 } from "./deliver.js";
 import {
   beginFileTopup, beginTopup, cancelTopup, decide, gatewayConfigured, paymentConfigured, receiveReceipt, settleTopup,
@@ -156,8 +156,9 @@ const handlers = new Composer<Context>();
 // ─── وضعیت گفت‌وگوی کوتاه‌مدت (در حافظه) ────────────────────────────────────
 
 type Pending =
-  | { kind: "await_course_name" }
-  | { kind: "await_professor"; courseName: string };
+  // `sessionId`: درس برای جلسه‌ای ساخته می‌شود که هنوز شروع نشده (`crsnew:`)
+  | { kind: "await_course_name"; sessionId?: string }
+  | { kind: "await_professor"; courseName: string; sessionId?: string };
 
 const convo = new Map<number, Pending>();
 
@@ -1389,7 +1390,11 @@ handlers.on("message:text", async (ctx) => {
   }
 
   if (state.kind === "await_course_name") {
-    convo.set(id, { kind: "await_professor", courseName: text.slice(0, 80) });
+    convo.set(id, {
+      kind: "await_professor",
+      courseName: text.slice(0, 80),
+      ...(state.sessionId ? { sessionId: state.sessionId } : {}),
+    });
     await reply(ctx, "اسم استاد؟ اگه نمی‌خوای بنویسی «-» بفرست.");
     return;
   }
@@ -1398,6 +1403,12 @@ handlers.on("message:text", async (ctx) => {
     const prof = text === "-" ? null : text.slice(0, 80);
     const c = createCourse(id, state.courseName, prof);
     convo.delete(id);
+    const pending = state.sessionId ? coursePickable(ctx, state.sessionId) : null;
+    if (pending) {
+      updateSession(pending.id, { course_id: c.id });
+      await reply(ctx, S.coursePickedMessage(c.name));
+      return;
+    }
     await reply(
       ctx,
       `✅ <b>${escapeHtml(c.name)}</b> ثبت شد.\n\n` +
@@ -1877,9 +1888,23 @@ function confirmKeyboard(sessionId: string): InlineKeyboard {
     .text(S.CONFIRM_BTN.go, `go:${sessionId}`)
     .text(S.CONFIRM_BTN.cancel, `nogo:${sessionId}`)
     .row();
-  return s?.share_enabled
+  (s?.share_enabled
     ? kb.text(S.shareOnButton(s.share_target ?? SHARE_TARGET), `spre:${sessionId}`)
-    : kb.text(S.CONFIRM_BTN.share, `spre:${sessionId}`);
+    : kb.text(S.CONFIRM_BTN.share, `spre:${sessionId}`)
+  ).row();
+  return kb.text(courseButtonLabel(s?.course_id ?? null), `crs:${sessionId}`);
+}
+
+/**
+ * «📘 درس: …» — درسِ همین جلسه، پیش از شروع.
+ *
+ * درس تا امروز فقط حدس زده می‌شد (`autoCourseId`) و هیچ راهی برای عوض‌کردنش
+ * نبود؛ کسی که دو درس داشت، هر فایل را به درسِ اشتباه می‌چسباند و واژه‌نامهٔ
+ * همان درس به رونویسیِ درسِ دیگر می‌رفت. مینی‌اپ انتخابِ درس داشت، ربات نه.
+ */
+function courseButtonLabel(courseId: number | null): string {
+  const name = courseId ? getCourse(courseId)?.name : null;
+  return name ? `📘 درس: ${name.slice(0, 30)} — عوض کن` : S.COURSE_BTN;
 }
 
 /**
@@ -1941,10 +1966,58 @@ function lowBalanceText(sec: number, balanceSec: number): string {
  */
 export function firstFileKeyboard(sessionId: string, enough: boolean): InlineKeyboard {
   const kb = new InlineKeyboard().text(S.FILE_BTN.free, `ff:${sessionId}`).row();
-  return enough
+  (enough
     ? kb.text(S.CONFIRM_BTN.go, `go:${sessionId}`).text(S.CONFIRM_BTN.cancel, `nogo:${sessionId}`)
-    : kb.text(S.FILE_BTN.pay, `pf:${sessionId}`).text(S.CONFIRM_BTN.topup, "topup");
+    : kb.text(S.FILE_BTN.pay, `pf:${sessionId}`).text(S.CONFIRM_BTN.topup, "topup")
+  ).row();
+  return kb.text(courseButtonLabel(getSession(sessionId)?.course_id ?? null), `crs:${sessionId}`);
 }
+
+/** فقط پیش از شروع می‌شود درس را عوض کرد؛ بعدش واژه‌نامه به رونویسی رفته. */
+function coursePickable(ctx: Context, sessionId: string): SessionRow | null {
+  const s = getSession(sessionId);
+  if (!s || s.tg_id !== uid(ctx)) return null;
+  return s.status === "awaiting_confirm" || s.status === "awaiting_credit" ? s : null;
+}
+
+handlers.callbackQuery(/^crs:([a-f0-9]+)$/, async (ctx) => {
+  const s = coursePickable(ctx, ctx.match![1]!);
+  if (!s) {
+    await ctx.answerCallbackQuery({ text: S.COURSE_LOCKED });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  const kb = new InlineKeyboard();
+  for (const c of listCourses(uid(ctx))) {
+    kb.text(`${c.id === s.course_id ? "✅ " : ""}${c.name.slice(0, 40)}`, `crsset:${s.id}:${c.id}`).row();
+  }
+  kb.text("➕ درس جدید", `crsnew:${s.id}`).row().text("بدون درس", `crsset:${s.id}:0`);
+  await reply(ctx, S.COURSE_PICK_PROMPT, { reply_markup: kb });
+});
+
+handlers.callbackQuery(/^crsset:([a-f0-9]+):(\d+)$/, async (ctx) => {
+  const s = coursePickable(ctx, ctx.match![1]!);
+  const courseId = Number(ctx.match![2]);
+  const course = courseId ? getCourse(courseId) : null;
+  if (!s || (courseId && course?.tg_id !== uid(ctx))) {
+    await ctx.answerCallbackQuery({ text: S.COURSE_LOCKED });
+    return;
+  }
+  updateSession(s.id, { course_id: course ? course.id : null });
+  await ctx.answerCallbackQuery({ text: "ثبت شد ✅" });
+  await ctx.editMessageText(S.coursePickedMessage(course?.name ?? null), { parse_mode: "HTML" }).catch(() => {});
+});
+
+handlers.callbackQuery(/^crsnew:([a-f0-9]+)$/, async (ctx) => {
+  const s = coursePickable(ctx, ctx.match![1]!);
+  if (!s) {
+    await ctx.answerCallbackQuery({ text: S.COURSE_LOCKED });
+    return;
+  }
+  await ctx.answerCallbackQuery();
+  convo.set(uid(ctx), { kind: "await_course_name", sessionId: s.id });
+  await reply(ctx, "اسم درس چیه؟\n\n<i>مثلاً: ریاضی مهندسی</i>");
+});
 
 /** وضعیتِ شریک‌شدنِ یک جلسه، به شکلی که صفحهٔ تأیید می‌خواهد. */
 function shareOf(s: SessionRow | null): { people: number } | null {
@@ -2063,24 +2136,8 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
 
   updateSession(sessionId, { mode: "full" });
 
-  /**
-   * یک نسخه به کانال بایگانی — که همیشه در تلگرام است، حتی برای کاربر بله.
-   *
-   * همین‌جا و نه بعد از پردازش: اگر خط لوله شکست بخورد هم ادمین باید صوت را
-   * داشته باشد تا بفهمد چه چیزی شکست. گزارش بعداً ریپلایِ همین پیام می‌شود.
-   *
-   * منبع بر اساس سکو فرق می‌کند: `file_id` تلگرام را خودِ تلگرام می‌شناسد و
-   * آپلود دوباره لازم ندارد، ولی `file_id` بله برای تلگرام یک رشتهٔ بی‌معنی
-   * است — پس همان فایلی که تازه دانلود شد آپلود می‌شود.
-   *
-   * و دقیقاً به همین دلیل مسیر بله `await` نمی‌شود: فرستادن `file_id` یک
-   * تماس کوتاه است، ولی آپلودِ ده‌ها مگابایت می‌تواند دقیقه‌ها طول بکشد و
-   * کاربر بله را پشت یک قابلیتِ ادمین منتظر نگه دارد.
-   *
-   * صوتی که از لینک آمده `file_id` ندارد — هیچ سکویی آن را نمی‌شناسد — پس
-   * مثل بله از روی فایل آپلود می‌شود و به همان دلیل `await` نمی‌شود.
-   */
-  const platform = platformOf(ctx);
+  // صوت اینجا به بایگانی نمی‌رود؛ فقط وقتی کار واقعاً شروع شود (`archiveOnStart`).
+  // شکستِ خط لوله هنوز صوت را در بایگانی دارد، چون شروع پیش از شکست است.
 
   /**
    * اینجا سکو مدتی نگفته بود، پس فایل را خودمان می‌پرسیم.
@@ -2100,21 +2157,6 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
     } catch (e) {
       logger.warn({ sessionId, err: String(e) }, "probe for duration failed");
     }
-  }
-
-  const caption = audioCaption({
-    sender: { tgId: id, name: u.name, username: u.username },
-    mode: "full",
-    durationMs: effectiveSec * 1000,
-    sessionId,
-    courseName: courseId ? (getCourse(courseId)?.name ?? null) : null,
-    origin: platform,
-    ...(spec.sourceUrl ? { sourceUrl: spec.sourceUrl } : {}),
-  });
-  if (platform === "bale" || !spec.fileId) {
-    void archiveAudio(sessionId, { path: audioFile }, caption, effectiveSec);
-  } else {
-    await archiveAudio(sessionId, { fileId: spec.fileId }, caption, effectiveSec);
   }
 
   /**
@@ -2200,6 +2242,7 @@ async function intakeAudio(ctx: Context, spec: IntakeSpec): Promise<void> {
     return;
   }
 
+  await archiveOnStart(ctx, sessionId, audioFile, effectiveSec, spec.sourceUrl);
   await startJob(ctx, {
     sessionId,
     audioFile,
@@ -2416,8 +2459,10 @@ async function resumeSession(ctx: Context, sessionId: string, opts: { free?: boo
   let durationSec = Math.max(0, Math.round(s.original_ms / 1000));
   // رایگان هنوز واریز نشده — پس از دانلود و با مدتِ واقعی واریز می‌شود.
   if (!opts.free && durationSec > 0 && u.credit_sec < durationSec) {
+    // منتظرِ شارژ، تا پس از شارژ «ادامهٔ همون فایل» پیشنهاد شود (`awaitingCreditSessions`).
+    updateSession(sessionId, { status: "awaiting_credit" });
     await reply(ctx, lowBalanceText(durationSec, u.credit_sec), {
-      reply_markup: lowBalanceKeyboard(sessionId),
+      reply_markup: lowBalanceKeyboard(sessionId, `resume:${sessionId}`),
     });
     return;
   }
@@ -2469,20 +2514,15 @@ async function resumeSession(ctx: Context, sessionId: string, opts: { free?: boo
         logger.info({ sessionId, quoted: durationSec, real: realSec }, "مدت واقعی با تخمین فرق داشت");
         updateSession(sessionId, { original_ms: realSec * 1000 });
 
-        // گران‌تر از آنچه قول داده بودیم؟ دوباره بپرس، نه اینکه بی‌خبر بگیری.
+        const quotedSec = durationSec;
+        // از این‌جا به بعد عددِ خودمان ملاک است، نه تخمینِ سکو. کمبودِ اعتبار با
+        // همین عدد پایین‌تر و **پیش از شروع** سنجیده می‌شود — نه در `reserve`
+        // وسطِ پیامِ «دارم آماده می‌شم» که بن‌بست بود.
+        durationSec = realSec;
+
+        // گران‌تر از آنچه قول داده بودیم و سکه‌اش را هم دارد؟ دوباره بپرس، بی‌خبر نگیر.
         // با رایگان، واریز همین پایین با مدتِ واقعی است؛ دوباره‌پرسیدن لازم نیست.
-        if (!opts.free && costCoins(realSec) > costCoins(durationSec) + 1) {
-          if (u.credit_sec < realSec) {
-            updateSession(sessionId, { status: "awaiting_credit" });
-            // «فرستنده» خودِ دانشجوست؛ عددِ اشتباه را سکو گفته بود نه او.
-            await reply(
-              ctx,
-              `این فایل در واقع <b>${toFaDigits(fmtDuration(realSec * 1000))}</b> بود، بیشتر از چیزی که اول نشون داده شد.\n\n` +
-                lowBalanceText(realSec, u.credit_sec),
-              { reply_markup: lowBalanceKeyboard(sessionId) },
-            );
-            return;
-          }
+        if (!opts.free && costCoins(realSec) > costCoins(quotedSec) + 1 && u.credit_sec >= realSec) {
           updateSession(sessionId, { status: "awaiting_confirm" });
           await reply(
             ctx,
@@ -2492,27 +2532,11 @@ async function resumeSession(ctx: Context, sessionId: string, opts: { free?: boo
           );
           return;
         }
-        // از این‌جا به بعد عددِ خودمان ملاک است، نه تخمینِ سکو.
-        durationSec = realSec;
       }
     } catch (e) {
       logger.warn({ sessionId, err: String(e) }, "probe after download failed");
     }
 
-    const platform = platformOf(ctx);
-    const caption = audioCaption({
-      sender: { tgId: u.tg_id, name: u.name, username: u.username },
-      mode: "full",
-      durationMs: durationSec * 1000,
-      sessionId,
-      courseName: s.course_id ? (getCourse(s.course_id)?.name ?? null) : null,
-      origin: platform,
-    });
-    if (platform === "bale" || !s.audio_file_id) {
-      void archiveAudio(sessionId, { path: audioFile }, caption, durationSec);
-    } else {
-      await archiveAudio(sessionId, { fileId: s.audio_file_id }, caption, durationSec);
-    }
   }
 
   /**
@@ -2534,20 +2558,37 @@ async function resumeSession(ctx: Context, sessionId: string, opts: { free?: boo
     });
     await reply(ctx, claim.ok ? S.freeFileGrantedMessage(claim.grantedSec, claim.fallback) : S.FREE_FILE_REFUSAL[claim.reason]);
     const now = getUser(u.tg_id)!;
-    if (durationSec > 0 && now.credit_sec < durationSec) {
-      updateSession(sessionId, { status: "awaiting_credit" });
-      await reply(ctx, S.lowBalanceMessage(durationSec, now.credit_sec, undefined, true), {
-        reply_markup: payFileKeyboard(sessionId),
-      });
-      return;
-    }
-    if (!claim.ok) {
+    if (!claim.ok && now.credit_sec >= durationSec) {
       updateSession(sessionId, { status: "awaiting_confirm" });
       await reply(ctx, S.confirmCostMessage(durationSec, now.credit_sec), { reply_markup: confirmKeyboard(sessionId) });
       return;
     }
   }
 
+  /**
+   * **آخرین بررسیِ اعتبار — با مدتِ واقعی، پیش از هر کاری که پس‌گرفتنی نیست.**
+   *
+   * پیش‌تر اگر مدتِ واقعی کمی بیش از تخمینِ سکو بود، این بررسی نبود و
+   * `reserve` داخلِ `startJob` شکست می‌خورد: پیامِ «دارم آماده می‌شم» به «سکه‌هات
+   * کم میاد» با تنها دکمهٔ شارژ عوض می‌شد، جلسه روی `queued` می‌ماند و بعد از
+   * شارژ هیچ پیشنهادِ ادامه‌ای نمی‌آمد. و صوت هم پیش از آن به بایگانی رفته بود.
+   */
+  const payer = getUser(u.tg_id)!;
+  if (durationSec > 0 && payer.credit_sec < durationSec) {
+    updateSession(sessionId, { status: "awaiting_credit" });
+    await reply(
+      ctx,
+      opts.free ? S.lowBalanceMessage(durationSec, payer.credit_sec, undefined, true) : lowBalanceText(durationSec, payer.credit_sec),
+      {
+        reply_markup: opts.free
+          ? payFileKeyboard(sessionId, `resume:${sessionId}`)
+          : lowBalanceKeyboard(sessionId, `resume:${sessionId}`),
+      },
+    );
+    return;
+  }
+
+  await archiveOnStart(ctx, sessionId, audioFile!, durationSec);
   updateSession(sessionId, { status: "queued", error: null });
   await startJob(ctx, {
     sessionId,
@@ -2556,6 +2597,43 @@ async function resumeSession(ctx: Context, sessionId: string, opts: { free?: boo
     declaredDurationSec: durationSec,
     mode: (s.mode as SessionMode) ?? "full",
   });
+}
+
+/**
+ * صوت را **فقط وقتی کار واقعاً شروع می‌شود** به کانال بایگانی بفرست.
+ *
+ * پیش‌تر سرِ دریافتِ فایل یا سرِ دانلود فرستاده می‌شد، پیش از بررسیِ اعتبار؛
+ * یعنی دانشجویی که سکه نداشت یا «بی‌خیال» زد هم صوتش در بایگانی می‌نشست، بی
+ * هیچ گزارشی زیرش. `archive_message_id` جلوی فرستادنِ دوباره را می‌گیرد
+ * («دوباره تلاش کن» روی همان جلسه).
+ */
+async function archiveOnStart(
+  ctx: Context,
+  sessionId: string,
+  audioFile: string,
+  durationSec: number,
+  sourceUrl?: string,
+): Promise<void> {
+  const s = getSession(sessionId);
+  const u = getUser(uid(ctx));
+  if (!s || !u || s.archive_message_id) return;
+  const platform = platformOf(ctx);
+  const caption = audioCaption({
+    sender: { tgId: u.tg_id, name: u.name, username: u.username },
+    mode: "full",
+    durationMs: durationSec * 1000,
+    sessionId,
+    courseName: s.course_id ? (getCourse(s.course_id)?.name ?? null) : null,
+    origin: platform,
+    ...(sourceUrl ? { sourceUrl } : {}),
+  });
+  // `file_id` تلگرام را خودِ تلگرام می‌شناسد و آپلودِ دوباره نمی‌خواهد؛ بله و
+  // لینک از روی فایل آپلود می‌شوند و `await` نمی‌شوند تا کاربر پشتش نماند.
+  if (platform === "bale" || !s.audio_file_id) {
+    void archiveAudio(sessionId, { path: audioFile }, caption, durationSec);
+  } else {
+    await archiveAudio(sessionId, { fileId: s.audio_file_id }, caption, durationSec);
+  }
 }
 
 handlers.callbackQuery(/^resume:([a-f0-9]+)$/, async (ctx) => {
@@ -2856,7 +2934,9 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
    * چند کار پشت‌سرهم صف کند که مجموعشان از اعتبارش بیشتر است. تسویهٔ نهایی
    * پس از پردازش انجام می‌شود، وقتی مدت واقعی معلوم شد.
    */
-  const reservedSec = Math.max(60, job.declaredDurationSec);
+  // مدتِ واقعی، بی کفِ یک دقیقه: با کف، فایلِ ۴۰ ثانیه‌ای برای کسی که ۵۰ ثانیه
+  // اعتبار داشت پس از «شروع کن» رد می‌شد. صفر فقط وقتی مدت را اصلاً نداریم.
+  const reservedSec = job.declaredDurationSec > 0 ? job.declaredDurationSec : 60;
   try {
     reserve(userId, reservedSec, sessionId);
     clearStarting(sessionId);
@@ -2864,16 +2944,16 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
     clearStarting(sessionId);
     if (e instanceof InsufficientCredit) {
       /**
-       * دکمهٔ شارژ همین‌جا لازم است، نه فقط اشاره به منو.
-       *
-       * این پیام جای پیامِ «دارم کار می‌کنم» را می‌گیرد و کاربر درست در
-       * لحظه‌ای است که می‌خواهد ادامه دهد. بدون دکمه، باید صفحه‌کلید پایین
-       * را پیدا کند — یعنی همان‌جا که آدم‌ها ول می‌کنند.
+       * نباید اینجا برسد — `resumeSession` پیش از شروع با مدتِ واقعی می‌سنجد.
+       * اگر رسید (اعتبار میانِ دو لحظه خرج شد)، **بن‌بست نه**: جلسه منتظرِ شارژ
+       * می‌ماند تا پس از شارژ «ادامهٔ همون فایل» بیاید، و «پرداخت همین فایل» هم
+       * همین‌جاست.
        */
+      updateSession(sessionId, { status: "awaiting_credit" });
       await ctx.api
-        .editMessageText(chatId, progress.message_id, S.lowBalanceMessage(e.needed, e.balance), {
+        .editMessageText(chatId, progress.message_id, S.lowBalanceMessage(e.needed, e.balance, undefined, true), {
           parse_mode: "HTML",
-          reply_markup: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
+          reply_markup: payFileKeyboard(sessionId, `resume:${sessionId}`),
         })
         .catch(() => {});
       return;
@@ -2919,7 +2999,13 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
       const message = e instanceof Error ? e.message : String(e);
       logger.error({ sessionId, err: message }, "pipeline failed");
       updateSession(sessionId, { status: "error", error: message.slice(0, 500) });
-      refund(userId, reservedSec, sessionId, "کار ناموفق بود");
+      // بی‌کلام: همان بخشی که به رونویسی رفت (پس از حذفِ سکوت) کم می‌شود — چرایی در `jobFailedMessage`.
+      const heardSec =
+        e instanceof JobFailure && e.kind === "no_speech"
+          ? Math.min(reservedSec, Math.round((getSession(sessionId)?.billed_ms ?? 0) / 1000))
+          : 0;
+      if (heardSec > 0) commit(userId, reservedSec, heardSec, sessionId);
+      else refund(userId, reservedSec, sessionId, "کار ناموفق بود");
       const failed = getSession(sessionId);
       if (failed) await archiveFailure(failed, message);
 
@@ -2949,7 +3035,7 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
       const kind = e instanceof JobFailure ? e.kind : null;
       const offerRetry = canRetry && kind === null;
       await edit(
-        S.jobFailedMessage(kind, offerRetry),
+        S.jobFailedMessage(kind, offerRetry, heardSec),
         offerRetry
           ? { reply_markup: new InlineKeyboard().text(S.RETRY_BTN, `retry:${sessionId}`) }
           : {},
@@ -3024,21 +3110,39 @@ export async function sendResults(
   const s = getSession(sessionId);
   const asReply = s ? reportReplyTo(s, ctx.chat!.id) : {};
 
-  await reply(
-    ctx,
-    S.recapMessage({
-      report: r,
-      courseName,
-      sessionDate: new Date().toLocaleDateString("fa-IR"),
-      durationMs: out.originalDurationMs,
-      savedMs: out.savedMs,
-      qualityWarnings: out.qualityWarnings,
-    }),
+  /**
+   * **یک پیام: خلاصه، «چی از کلاس درآوردم»، تسویه — و دکمه‌ها زیرِ همین.**
+   *
+   * پیش‌تر خلاصه، نکته‌ها، جزوه و بعد یک پیامِ سومِ دکمه‌دار می‌آمد؛ دکمه‌ها
+   * پایینِ جزوه گم می‌شدند. جزوه بعد از همین پیام می‌آید.
+   */
+  const u = getUser(uid(ctx));
+  const cost = Math.round(out.originalDurationMs / 1000);
+  // اگر سرِ تأیید «تقسیم می‌کنم» زده بود، دعوت پایین‌تر خودکار می‌آید.
+  const shareOn = Boolean(s?.share_enabled);
+  const tail =
+    u && s
+      ? S.settlementMessage(cost, u.credit_sec, shareOn, {
+          people: s.share_target,
+          hasArchive: moreKeyboard(s) !== null,
+        })
+      : "";
+  await sendWithKeyboard(
+    { api: ctx.api, chatId: ctx.chat!.id },
+    S.deliveryMessage(
+      {
+        report: r,
+        courseName,
+        sessionDate: new Date().toLocaleDateString("fa-IR"),
+        durationMs: out.originalDurationMs,
+        savedMs: out.savedMs,
+        qualityWarnings: out.qualityWarnings,
+      },
+      tail,
+    ),
+    asReply,
+    s ? closingKeyboard(s, shareOn) : undefined,
   );
-
-  // بخش‌بندی زمانی دیگر اینجا نمی‌آید؛ پشت دکمه رفته و `sendMorePart` آن را
-  // ریپلایِ همین صوت می‌فرستد تا زمان‌هایش لینکِ پخش بمانند.
-  await reply(ctx, S.extractedMessage(r), asReply);
 
   if (out.pdfPath) {
     await sendDoc(ctx, out.pdfPath, out.pdfName ?? "جزوه.pdf", {
@@ -3050,43 +3154,6 @@ export async function sendResults(
     await reply(ctx, S.NOTES_FAILED);
   }
 
-  /**
-   * رونوشت کامل و SRT دیگر خودبه‌خود نمی‌آیند — پشت دکمه‌اند.
-   *
-   * `moreKeyboard` از **سطر پایگاه‌داده** ساخته می‌شود نه از `out`، و فقط
-   * برای چیزهایی دکمه می‌گذارد که همان لحظه واقعاً هستند. پس جلسه‌ای که SRT
-   * ندارد یا جزوه‌اش ساخته نشده، دکمه‌ای نمی‌گیرد که بزنی و چیزی نیاید.
-   * خط لولهٔ پردازش هر سه مسیر (`transcript_pdf`، `transcript_srt`،
-   * `report_json`) را پیش از برگشتن نوشته، پس سطر تازه است.
-   */
-  const u = getUser(uid(ctx));
-  const cost = Math.round(out.originalDurationMs / 1000);
-  /**
-   * **اگر کاربر سرِ تأیید گفته بود «تقسیم می‌کنم»، حالا وقتِ لینک است.**
-   *
-   * پیش از این اینجا همیشه `false` نوشته شده بود، یعنی حتی جلسه‌ای که
-   * اشتراکش روشن بود باز هم دکمهٔ «تقسیم با هم‌کلاسیا» می‌گرفت — کاربر
-   * می‌دید انتخابش انگار ثبت نشده و دوباره از اول می‌پرسید.
-   *
-   * و فرستادنِ خودکارِ دعوت همان چیزی است که تصمیمِ زودهنگام را ارزشمند
-   * می‌کند: کاربر یک بار انتخاب کرده، حالا لینک بی‌آنکه دکمه‌ای بزند آماده
-   * است تا در گروه درس فوروارد شود.
-   */
-  const shareOn = Boolean(getSession(sessionId)?.share_enabled);
-  // یک پیامِ پایانی، نه دو تا — چرایش در `closingKeyboard`.
-  if (s && (u || moreKeyboard(s))) {
-    const closingText = u
-      ? S.settlementMessage(cost, u.credit_sec, shareOn, {
-          people: s.share_target,
-          hasArchive: moreKeyboard(s) !== null,
-        })
-      : S.MORE_PROMPT;
-    await ctx.reply(closingText, {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      reply_markup: closingKeyboard(s, shareOn),
-    });
-  }
   if (shareOn) await sendInvitation(ctx, sessionId);
 }
 

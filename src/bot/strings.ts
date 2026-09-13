@@ -197,6 +197,17 @@ export function recapMessage(i: OverviewInput): string {
   return out.join("\n");
 }
 
+/**
+ * **خلاصه و «چی از کلاس درآوردم» در یک پیام**، با پایانِ اختیاری (تسویه).
+ *
+ * دو پیامِ پشت‌سرهم و بعد یک پیامِ سومِ دکمه‌دار، سه جا برای گم‌کردنِ دکمه‌ها
+ * بود؛ دانشجو خلاصه را می‌خواند، بالا می‌رفت و دکمه را پایین‌ترِ جزوه پیدا
+ * نمی‌کرد. حالا یک پیام و دکمه‌ها زیرِ همان.
+ */
+export function deliveryMessage(i: OverviewInput, tail = ""): string {
+  return [recapMessage(i), extractedMessage(i.report), tail].filter(Boolean).join("\n\n");
+}
+
 /** مواردی که همیشه گفته می‌شود انجام شد یا نشد — چون «نشد» هم خبر است. */
 const CORE_ACTIONS = ["attendance", "quiz", "exam_info", "homework"] as const;
 
@@ -686,11 +697,21 @@ export function interruptedMessage(canRetry: boolean): string {
  * همان فایل همان نتیجه را می‌دهد — پس صدازننده فقط برای حالتِ عمومی
  * می‌گذاردش.
  */
-export function jobFailedMessage(kind: JobFailureKind | null, canRetry: boolean): string {
+export function jobFailedMessage(kind: JobFailureKind | null, canRetry: boolean, chargedSec = 0): string {
   switch (kind) {
+    /**
+     * **بی‌کلام: هزینهٔ همان بخشی که واقعاً گوش داده شد، کم می‌شود.**
+     *
+     * سکوت پیش از رونویسی بریده می‌شود و پولی بابتش نمی‌دهیم، ولی نویز و
+     * موسیقی بریده نمی‌شوند و سرویس رونویسی کلشان را از ما می‌گیرد. بازپرداختِ
+     * کامل یعنی آن هزینه را ما بدهیم — و راهی برای رونویسیِ مجانیِ هر فایلِ
+     * بی‌کلام. پس همان مدتِ پس از حذفِ سکوت کم می‌شود و بقیه برمی‌گردد.
+     */
     case "no_speech":
       return [
-        "❌ تو این فایل صدای حرف‌زدن پیدا نکردم 😕 سکه‌هات کامل برگشت.",
+        chargedSec > 0
+          ? `❌ تو این فایل صدای حرف‌زدن پیدا نکردم 😕 ${toFaDigits(fmtDuration(chargedSec * 1000))} ازش گوش داده شد و هزینهٔ همون (${fmtCost(chargedSec)}) کم شد؛ بقیه‌ش برگشت.`
+          : "❌ تو این فایل صدای حرف‌زدن پیدا نکردم 😕 سکه‌هات کامل برگشت.",
         "",
         "مطمئنی فایل درستیه؟ اگه ضبط خیلی آروم بوده، دفعهٔ بعد گوشی رو رو میز و نزدیک‌تر بذار.",
       ].join("\n");
@@ -1011,6 +1032,22 @@ export function lowBalanceMessage(
   ].join("\n");
 }
 
+// ─── درسِ جلسه ───────────────────────────────────────────────────────────────
+
+export const COURSE_BTN = "📘 درس این جلسه";
+
+export const COURSE_PICK_PROMPT =
+  "📘 <b>این جلسه مال کدوم درسه؟</b>\n\n" +
+  "<i>درس رو که بدونم، اصطلاح‌های تخصصیش رو جلسه‌به‌جلسه یاد می‌گیرم و متن کلاس دقیق‌تر درمیاد.</i>";
+
+export const COURSE_LOCKED = "کار این فایل شروع شده؛ درسش دیگه عوض نمیشه.";
+
+export function coursePickedMessage(name: string | null): string {
+  return name
+    ? `✅ درس این جلسه: <b>${escapeHtml(name)}</b>\n\n<i>برگرد به پیام فایلت و دکمه‌ش رو بزن.</i>`
+    : "✅ این جلسه بدون درس میره.\n\n<i>برگرد به پیام فایلت و دکمه‌ش رو بزن.</i>";
+}
+
 // ─── پرداخت همین فایل، و اولین صوتِ رایگان ───────────────────────────────────
 
 export const FILE_BTN = {
@@ -1051,11 +1088,13 @@ export function firstFileMessage(
     "",
     `مدت: <b>${toFaDigits(fmtDuration(neededSec * 1000))}</b>`,
     "",
-    `🎁 <b>اولین صوتت رایگانه</b>، تا ${toFaDigits(offer.minutes)} دقیقه. این هدیه برای هر حساب فقط یه باره.`,
+    // سقفِ دقیقه فقط وقتی گفته می‌شود که به این فایل بخورد؛ برای بقیه «رایگانه» کافی است
+    // و عددِ ۱۲۰ فقط این سؤال را می‌سازد که «پس اگه بلندتر بود چی؟».
+    "🎁 <b>اولین صوتت رایگانه.</b> این هدیه برای هر حساب فقط یه باره.",
   ];
   if (neededSec > freeSec) {
     lines.push(
-      `این فایل بلندتره: ${toFaDigits(offer.minutes)} دقیقه‌ش رایگانه و برای بقیه‌ش ${fmtCost(neededSec - freeSec)} لازمه.`,
+      `این فایل از ${toFaDigits(offer.minutes)} دقیقه بلندتره؛ ${toFaDigits(offer.minutes)} دقیقه‌ش رایگانه و برای بقیه‌ش ${fmtCost(neededSec - freeSec)} لازمه.`,
     );
   }
   lines.push(

@@ -26,6 +26,7 @@ import {
   type SessionMode,
 } from "../db/index.js";
 import type { PipelineOutput } from "../pipeline.js";
+import { JobFailure } from "../util/job-failure.js";
 
 export interface JobSpec {
   sessionId: string;
@@ -64,7 +65,7 @@ export interface JobSpec {
 export function startJob(job: JobSpec): void {
   const free = job.mode === "free_trial";
   const pooled = Boolean(job.groupBuy) && !free;
-  const reservedSec = free ? 0 : Math.max(60, job.declaredDurationSec);
+  const reservedSec = free ? 0 : job.declaredDurationSec > 0 ? job.declaredDurationSec : 60;
 
   if (!free && !pooled) reserve(job.userId, reservedSec, job.sessionId);
 
@@ -104,7 +105,15 @@ export function startJob(job: JobSpec): void {
       logger.error({ sessionId: job.sessionId, err: message }, "pipeline failed");
       updateSession(job.sessionId, { status: "error", error: message.slice(0, 500) });
       if (pooled) refundGroupBuy(job.sessionId, "کار ناموفق بود");
-      else if (!free) refund(job.userId, reservedSec, job.sessionId, "کار ناموفق بود");
+      else if (!free) {
+        // بی‌کلام: همان بخشی که به رونویسی رفت کم می‌شود — چرایی در `jobFailedMessage`.
+        const heardSec =
+          e instanceof JobFailure && e.kind === "no_speech"
+            ? Math.min(reservedSec, Math.round((getSession(job.sessionId)?.billed_ms ?? 0) / 1000))
+            : 0;
+        if (heardSec > 0) commit(job.userId, reservedSec, heardSec, job.sessionId);
+        else refund(job.userId, reservedSec, job.sessionId, "کار ناموفق بود");
+      }
       await job.onError?.(message);
     }
   });
