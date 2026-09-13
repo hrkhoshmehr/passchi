@@ -30,7 +30,7 @@ check("پیش از bot.start هیچ await روی baleStatus نیست", !/await\s
 // فقط سطح بالای فایل؛ `await` داخلِ بدنهٔ `baleStatus` راه‌اندازی را نگه نمی‌دارد.
 check("پیش از bot.start هیچ await سطح‌بالایی روی baleBot نیست", !/^await\s+baleBot/m.test(before));
 check("بلهٔ خودش هم بی await شروع می‌شود", /^void startBaleWithRetry\(\);/m.test(before));
-// grammY اگر getMe اولِ start به شبکه نرسد یک بار پرتاب می‌کند و دیگر polling نمی‌کند.
+// خطای شبکه را خودِ grammY دوباره تلاش می‌کند؛ ولی ۴۰۱/۴۰۹ را پرتاب می‌کند و polling می‌ایستد.
 check(
   "شروعِ بله پس از شکست دوباره تلاش می‌کند",
   /async function startBaleWithRetry[\s\S]*for \(let attempt[\s\S]*baleBot\.start\([\s\S]*catch[\s\S]*setTimeout/.test(before),
