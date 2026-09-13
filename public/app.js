@@ -41,9 +41,31 @@ const api = {
     if (ms > 0 && !opt.signal) {
       opt = { ...opt, signal: AbortSignal.timeout(ms) };
     }
-    const res = await fetch(path, { ...opt, headers });
-    const text = await res.text();
-    const data = text ? JSON.parse(text) : {};
+    /**
+     * هیچ خطای انگلیسیِ کتابخانه‌ای نباید از اینجا بیرون برود.
+     *
+     * سه چیز پیش‌تر مستقیم به صفحه می‌رسید: `signal timed out` از مهلت،
+     * `Failed to fetch` از قطعی، و `Unexpected token <` وقتی CDN به‌جای JSON
+     * یک صفحهٔ HTMLِ خطا می‌داد. حالا هر سه به یک خطای «شبکه» بی‌`status`
+     * تبدیل می‌شوند و `friendlyError` متن فارسی‌اش را می‌گذارد.
+     */
+    const netErr = () => Object.assign(new Error("اینترنت قطع و وصل شد."), { network: true });
+    let res;
+    let text = "";
+    try {
+      res = await fetch(path, { ...opt, headers });
+      text = await res.text();
+    } catch {
+      throw netErr();
+    }
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      // بدنهٔ غیرJSON یعنی پراکسی یا CDN جواب داده، نه سرورِ ما
+      if (res.ok) throw netErr();
+      data = {};
+    }
     if (!res.ok) throw Object.assign(new Error(data.error || "خطایی رخ داد."), { data, status: res.status });
     return data;
   },
@@ -108,6 +130,32 @@ function fail(el, message) {
   show(el, Boolean(message));
 }
 
+/**
+ * هر خطا، به یک جملهٔ فارسی با قدمِ بعدی.
+ *
+ * **تنها جایی که متنِ خطا ساخته می‌شود.** پیش‌تر هر `catch` خودش
+ * `err.message` را نشان می‌داد و آن پیام از هرجا می‌توانست بیاید: tus،
+ * `AbortSignal.timeout`، یا `JSON.parse` روی صفحهٔ خطای CDN. کاربر
+ * «Unexpected token <» می‌دید و نمی‌دانست چه کند.
+ *
+ * قاعده: پیامِ فارسیِ **سرورِ خودمان** (که `status` و `data.error` دارد)
+ * می‌ماند، چون همان جوابِ درست است — «فایل خیلی بزرگ است»، «مدت خوانده
+ * نشد». هر چیز دیگر یعنی شبکه، و جوابش یک جملهٔ ثابت است.
+ *
+ * `kind` فقط قدمِ بعدی را عوض می‌کند: در آپلود «همین فایل رو دوباره انتخاب
+ * کن» (tus از همان‌جا ادامه می‌دهد)، جای دیگر «دوباره امتحان کن».
+ */
+function friendlyError(err, kind = "upload") {
+  const e = err || {};
+  if (e.canceled) return "آپلود لغو شد.";
+  if (e.status === 401) return "ورودت منقضی شده. این صفحه رو ببند و از داخل ربات دوباره بازش کن.";
+  const said = e.data && typeof e.data.error === "string" ? e.data.error.trim() : "";
+  if (e.status && said && !/[A-Za-z]/.test(said)) return said;
+  return kind === "upload"
+    ? "اینترنت قطع و وصل شد. همین فایل رو دوباره انتخاب کن — از همون‌جایی که مونده بود ادامه می‌ده، نه از اول."
+    : "اینترنت قطع و وصل شد. یه بار دیگه امتحان کن.";
+}
+
 // ─── مسیریابی صفحه‌ها ───────────────────────────────────────────────────────
 
 let current = "auth";
@@ -130,6 +178,8 @@ for (const t of document.querySelectorAll(".tab")) {
   t.addEventListener("click", () => {
     go(t.dataset.go);
     if (t.dataset.go === "acct") loadAccount();
+    // برگشتن از «حساب» همان لحظه‌ای است که فایلِ منتظر باید دوباره پیشنهاد شود
+    if (t.dataset.go === "send") checkPending();
   });
 }
 $("balance").addEventListener("click", () => {
@@ -248,6 +298,15 @@ let me = null;
 async function loadMe() {
   me = await api.call("/api/me");
   $("coins").textContent = faGroup(me.coins);
+  /**
+   * معنای موجودی، بالای کادرِ صوت.
+   *
+   * عددِ کنارِ 🪙 به‌تنهایی نمی‌گوید با آن چه می‌شود فرستاد؛ کاربرِ تازه با
+   * ۲۰ سکه نباید یک کلاس ۹۰ دقیقه‌ای انتخاب کند و تازه سرِ تأیید بفهمد.
+   */
+  const rate = me.coinsPerMinute === 1 ? "هر دقیقه صوت یه سکه" : `هر دقیقه صوت ${fa(me.coinsPerMinute)} سکه`;
+  $("send-meta").textContent = `${faGroup(me.coins)} سکه داری · ${rate} · نتیجه توی چت ربات میاد`;
+  show($("send-meta"), true);
   return me;
 }
 
@@ -257,7 +316,95 @@ async function afterLogin(token) {
   await loadMe();
   await loadCourses();
   go("send");
+  checkPending();
 }
+
+// ─── فایلِ منتظرِ تأیید ──────────────────────────────────────────────────────
+//
+// آپلودی که به صفحهٔ تأیید رسید ولی تأیید نشد — معمولاً چون سکه کم بود —
+// روی سرور با فایلش می‌ماند. پیش‌تر مینی‌اپ فقط در یک متغیرِ صفحه به یادش
+// داشت، پس کاربری که برای شارژ بیرون می‌رفت دیگر راهی به آن نداشت و باید
+// کل فایل را دوباره روی اینترنت موبایل می‌فرستاد. حالا منبع، خودِ سرور است.
+
+/** جلسه‌ای که کارتِ «ادامه بدیم؟» پیشنهاد داده. */
+let resumable = null;
+
+const DISMISS_KEY = "passchi_dismissed_pending";
+
+/** کاربر گفت «بی‌خیال»؛ همان فایل دوباره پیشنهاد نشود. */
+function dismissPending(id) {
+  try {
+    localStorage.setItem(DISMISS_KEY, String(id));
+  } catch {
+    /* بی‌ماندگاری، فقط تا بستنِ صفحه یادش نمی‌ماند */
+  }
+}
+
+function dismissedPending() {
+  try {
+    return localStorage.getItem(DISMISS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * از سرور بپرس فایلِ منتظری هست یا نه، و اگر بود کارتش را باز کن.
+ *
+ * شکستِ این درخواست بی‌صداست: نبودنِ پیشنهاد نباید جلوی آپلودِ تازه را بگیرد.
+ */
+async function checkPending() {
+  let pending = null;
+  try {
+    ({ pending = null } = await api.call("/api/uploads/pending", { method: "GET" }));
+  } catch {
+    pending = null;
+  }
+  const offer = Boolean(pending && pending.sessionId && pending.sessionId !== dismissedPending());
+  resumable = offer ? pending : null;
+  if (offer) {
+    $("resume-meta").textContent = `${faDuration(pending.durationSec)} · ${faGroup(pending.costCoins)} سکه`;
+  }
+  show($("resume"), offer);
+  return offer;
+}
+
+$("resume-go").addEventListener("click", () => {
+  if (!resumable) return;
+  const out = resumable;
+  show($("resume"), false);
+  askConfirm(out, "فایلی که قبلاً فرستادی");
+});
+
+$("resume-skip").addEventListener("click", () => {
+  if (resumable) dismissPending(resumable.sessionId);
+  resumable = null;
+  show($("resume"), false);
+});
+
+/**
+ * برگشتن به صفحه — مثلاً بعد از شارژ در ربات — عددها را تازه می‌کند.
+ *
+ * روی صفحهٔ تأیید یعنی «حالا سکه‌ات می‌رسد؟»؛ روی صفحهٔ ارسال یعنی «فایلی
+ * منتظر هست؟». حین آپلود کاری نمی‌کند.
+ */
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState !== "visible" || !me) return;
+  if (current === "send" && !drop.classList.contains("busy")) {
+    loadMe().catch(() => {});
+    checkPending();
+  } else if (current === "confirm" && pendingSession) {
+    try {
+      const { pending = null } = await api.call("/api/uploads/pending", { method: "GET" });
+      if (pending && pending.sessionId === pendingSession) {
+        await loadMe().catch(() => {});
+        askConfirm(pending, $("confirm-file").textContent, true);
+      }
+    } catch {
+      /* عددهای قبلی می‌مانند؛ دکمه همچنان سرور را صدا می‌زند */
+    }
+  }
+});
 
 /**
  * ورود خودکار داخل مینی‌اپ.
@@ -272,6 +419,7 @@ async function boot() {
       await loadMe();
       await loadCourses();
       go("send");
+      checkPending();
       return;
     } catch {
       api.clear(); // توکن منقضی شده
@@ -328,7 +476,7 @@ async function boot() {
  * اگر خواندن پیکربندی شکست بخورد، **بسته** فرض می‌شود: پیش‌فرضِ امن آن است
  * که کاربر را به ربات بفرستیم، نه به فرمی که احتمالاً جواب نمی‌دهد.
  */
-async function showAuthScreen() {
+async function showAuthScreen({ slow = false } = {}) {
   let phoneLogin = false;
   let bots = {};
   try {
@@ -337,12 +485,32 @@ async function showAuthScreen() {
     console.warn("config fetch failed, assuming phone login is off:", e.message);
   }
 
+  /**
+   * اگر در همین فاصله ورود جا افتاد، صفحهٔ ورود را روی آن نکش.
+   *
+   * تورِ نجاتِ شش‌ثانیه‌ای همین تابع را صدا می‌زند در حالی که `boot` هنوز
+   * دارد تلاش می‌کند. اگر `/api/config` بعد از ورودِ موفق برسد، بدون این شرط
+   * کاربر از صفحهٔ آپلود به صفحهٔ ورود پرت می‌شد.
+   */
+  if (me) return;
+
+  /**
+   * داخل مینی‌اپی که سکویش معلوم است، فقط رباتِ همان سکو.
+   *
+   * کاربر بله‌ای که «باز کردن در تلگرام» را دکمهٔ اصلی می‌دید، به جایی فرستاده
+   * می‌شد که بی‌فیلترشکن باز نمی‌شود و حسابش هم آنجا نیست.
+   */
+  const knownHere = miniApp ? miniApp.platform || platformOfSession : null;
   // هر دکمه فقط وقتی نشان داده می‌شود که آدرسش را داشته باشیم؛ دکمه‌ای که
   // به هیچ‌جا نبرد، بدتر از نبودنش است.
-  for (const [id, url] of [["open-tg", bots.telegram], ["open-bale", bots.bale]]) {
+  for (const [id, key, url] of [["open-tg", "telegram", bots.telegram], ["open-bale", "bale", bots.bale]]) {
     const el = $(id);
     if (url) el.href = url;
-    show(el, Boolean(url));
+    show(el, Boolean(url) && (!knownHere || knownHere === key));
+    if (knownHere === key) {
+      el.classList.add("btn-primary");
+      el.classList.remove("btn-ghost");
+    }
   }
 
   show($("form-phone"), phoneLogin);
@@ -368,6 +536,24 @@ async function showAuthScreen() {
     // «خوش اومدی» برای کسی که همین الان به بن‌بست خورده، پاسخ نیست.
     $("auth-mark").textContent = "📱";
     $("auth-title").textContent = "با گوشی بیا";
+    /**
+     * دکمه نه، ولی **اسم**: چیزی که بتواند روی گوشی جست‌وجو کند.
+     *
+     * بدون این، کاربرِ کامپیوتر می‌دانست باید با گوشی بیاید ولی نمی‌دانست
+     * دنبال چه بگردد. نام از همان آدرس‌های `getMe` درمی‌آید، نه از HTML.
+     */
+    const names = [["تلگرام", bots.telegram], ["بله", bots.bale]]
+      .map(([label, url]) => {
+        const handle = url ? String(url).replace(/\/+$/, "").split("/").pop() : "";
+        return handle
+          ? `<p class="dim" style="margin-top:8px">${label}</p><p dir="ltr" style="font-weight:700">@${esc(handle)}</p>`
+          : "";
+      })
+      .join("");
+    $("auth-names").innerHTML = names
+      ? `<p class="dim">توی گوشی، این اسم رو توی تلگرام یا بله جست‌وجو کن:</p>${names}`
+      : "";
+    show($("auth-names"), Boolean(names));
   }
 
   $("auth-lead").textContent = phoneLogin
@@ -375,7 +561,10 @@ async function showAuthScreen() {
     : strandedOnDesktop
       ? "فعلاً آپلود صوت فقط با گوشی کار می‌کنه. ربات رو روی موبایلت باز کن و همون‌جا دکمهٔ «📤 آپلود فایل» رو بزن. نسخهٔ کامپیوتر بعداً اضافه می‌شه."
       : miniApp
-        ? "ورود خودکار انجام نشد. مینی‌اپ رو ببند و از داخل ربات دوباره بازش کن."
+        ? slow
+          // تورِ نجات است، نه شکست: `boot` هنوز دارد تلاش می‌کند.
+          ? "اینترنت کنده، یه کم صبر کن… اگه باز نشد، این صفحه رو ببند و از داخل ربات دوباره بازش کن."
+          : "نشد وارد شی. این صفحه رو ببند و از داخل ربات دوباره بازش کن."
         // روی گوشی، دکمه‌های زیر واقعاً کار می‌کنند — پس متن باید به همان‌ها
         // اشاره کند، نه به یک «از داخل تلگرام وارد شو»ِ مبهم.
         : "یکی از دکمه‌های زیر رو بزن تا وارد ربات بشی — صوت کلاستو همون‌جا می‌فرستی.";
@@ -400,7 +589,7 @@ $("form-phone").addEventListener("submit", async (e) => {
     // تنظیم باشد، پس دیگر حالتی نیست که کد در پاسخ برگردد.
     $("code").focus();
   } catch (err) {
-    fail($("phone-err"), err.message);
+    fail($("phone-err"), friendlyError(err, "general"));
   } finally {
     btn.disabled = false;
     btn.textContent = "ارسال کد";
@@ -420,7 +609,7 @@ $("form-code").addEventListener("submit", async (e) => {
     });
     await afterLogin(token);
   } catch (err) {
-    fail($("code-err"), err.message);
+    fail($("code-err"), friendlyError(err, "general"));
   } finally {
     btn.disabled = false;
     btn.textContent = "ورود";
@@ -483,7 +672,7 @@ $("course-cancel").addEventListener("click", () => closeCourseForm());
 
 $("course-save").addEventListener("click", async () => {
   const name = $("course-name").value.trim();
-  if (!name) return fail($("course-err"), "اسم درس را بنویس.");
+  if (!name) return fail($("course-err"), "اسم درس رو بنویس.");
 
   const btn = $("course-save");
   btn.disabled = true;
@@ -495,7 +684,7 @@ $("course-save").addEventListener("click", async () => {
     await loadCourses(course.id);
     closeCourseForm(String(course.id));
   } catch (err) {
-    fail($("course-err"), err.message || "ساختن درس نشد. دوباره امتحان کن.");
+    fail($("course-err"), friendlyError(err, "general"));
   } finally {
     btn.disabled = false;
   }
@@ -1069,10 +1258,20 @@ async function upload(file) {
    * توهم را می‌سازد که کار شروع شده.
    */
   drop.classList.add("busy");
+  // درس همین حالا خوانده شد؛ عوض‌کردنش وسط آپلود بی‌اثر است، پس قفل می‌شود.
+  $("course").disabled = true;
+  /**
+   * دو خط جدا: مگابایت (`up-note`) عوض می‌شود، هشدار **ثابت** می‌ماند.
+   *
+   * پیش‌تر هشدار و مگابایت یک خط بودند و اولین گزارشِ پیشرفت هشدار را پاک
+   * می‌کرد — یعنی کاربر درست در همان دقیقه‌هایی که ممکن بود از اپ بیرون برود،
+   * دیگر نمی‌دید که نباید برود.
+   */
   drop.innerHTML =
     '<h3 id="up-title">در حال فرستادن…</h3>' +
     '<div class="bar"><div class="bar-fill" id="up-fill"></div></div>' +
-    '<p class="dim" id="up-note">صفحه رو نبند تا آپلود تمام شود.</p>';
+    '<p class="dim" id="up-note">&nbsp;</p>' +
+    '<p class="dim" style="margin-top:6px">تا تموم نشده از بله یا تلگرام بیرون نرو و گوشی رو قفل نکن.</p>';
 
   /**
    * پیش از فرستادنِ یک بایت بپرس که این فایل پذیرفته می‌شود یا نه.
@@ -1105,13 +1304,10 @@ async function upload(file) {
     if (err.status) {
       resetDrop();
       if (err.status === 402) {
-        const d = err.data || {};
-        fail(
-          $("send-err"),
-          `اعتبارت کم است — این جلسه ${faGroup(d.needCoins ?? 0)} سکه می‌خواهد و ${faGroup(d.haveCoins ?? 0)} سکه داری.`,
-        );
+        // اینجا هنوز چیزی آپلود نشده، پس «فایلت می‌مونه» درست نیست.
+        fail($("send-err"), shortBeforeUpload(err.data));
       } else {
-        fail($("send-err"), err.message);
+        fail($("send-err"), friendlyError(err));
       }
       return;
     }
@@ -1183,13 +1379,9 @@ async function upload(file) {
     resetDrop();
     // کمبود اعتبار پیام مخصوص خودش را دارد، با عددها
     if (err.status === 402) {
-      const d = err.data || {};
-      fail(
-        $("send-err"),
-        `اعتبارت کم است — این جلسه ${faGroup(d.needCoins ?? 0)} سکه می‌خواهد و ${faGroup(d.haveCoins ?? 0)} سکه داری.`,
-      );
+      fail($("send-err"), shortBeforeUpload(err.data));
     } else {
-      fail($("send-err"), err.message);
+      fail($("send-err"), friendlyError(err));
     }
     return;
   }
@@ -1199,14 +1391,27 @@ async function upload(file) {
   askConfirm(out, file.name);
 }
 
+/**
+ * سکهٔ کم **پیش از** رسیدنِ فایل — از precheck یا ردِ همان ابتدای آپلود.
+ *
+ * فایلی روی سرور نمانده، پس برخلافِ صفحهٔ تأیید نمی‌شود گفت «فایلت می‌مونه».
+ */
+function shortBeforeUpload(d = {}) {
+  const need = d.needCoins ?? 0;
+  const have = d.haveCoins ?? 0;
+  return `این فایل ${faGroup(need)} سکه می‌خواد و ${faGroup(have)} سکه داری. از «🪙 حساب» شارژ کن و بعد دوباره انتخابش کن.`;
+}
+
 /** ناحیهٔ رهاکردن فایل را به حالت اولش برگردان. */
 function resetDrop() {
   drop.classList.remove("busy");
+  $("course").disabled = false;
   drop.innerHTML =
     '<div class="drop-ico">🎧</div>' +
     "<h3>برای انتخاب صوت کلاس بزن</h3>" +
     "<p>یا فایل رو بکش و همین‌جا رها کن</p>" +
-    '<p class="dim" style="margin-top:9px">mp3 · m4a · ogg · wav · mp4 — تا ۵۰۰ مگابایت</p>' +
+    '<p class="dim" style="margin-top:9px">هر صوت یا ویدیوی کلاس — تا ۵۰۰ مگابایت</p>' +
+    '<p class="dim" dir="ltr">mp3 · m4a · ogg · wav · mp4</p>' +
     '<p class="dim">ویدیوی کلاس آنلاین هم قبوله؛ فقط صداش برداشته می‌شه</p>';
 }
 
@@ -1227,8 +1432,38 @@ function faDuration(sec) {
 
 let pendingSession = null;
 
-function askConfirm(out, filename) {
+/** هزینهٔ جلسهٔ روی صفحهٔ تأیید، برای حسابِ «نفری n سکه». */
+let confirmCost = 0;
+
+/**
+ * سهمِ هر هم‌کلاسی — **همان** `shareBack` در `billing/coins.ts`.
+ *
+ * سقفِ بازگشت نصفِ هزینه است و تعداد کفِ پنج دارد. اینجا تکرار شده چون
+ * صفحهٔ تأیید پیش از هر درخواستی باید عدد را نشان دهد؛ برای اینکه از سرور
+ * عقب نماند، `scripts/test-pending-resume.mjs` این تابع را کنارِ خودِ
+ * `shareBack` اجرا و مقایسه می‌کند. صفر یعنی «عددی نداریم» — آن‌وقت جمله
+ * بی‌عدد می‌آید، نه با عددِ ساختگی.
+ */
+function shareSeat(costCoins, people) {
+  const cap = Math.floor((Number(costCoins) || 0) * 0.5);
+  if (cap <= 0) return 0;
+  return Math.max(1, Math.ceil(cap / Math.max(5, Math.round(Number(people) || 10))));
+}
+
+function paintShareHow() {
+  const seat = shareSeat(confirmCost, $("confirm-share-n").value);
+  $("confirm-share-how").textContent = seat
+    ? `هر کی با لینک جزوه رو بگیره یه سهم کوچیک می‌ده (نفری ${fa(seat)} سکه) که میاد تو حساب تو، تا نصف هزینه. بعدش برای بقیه مجانیه.`
+    : "هر کی با لینک جزوه رو بگیره یه سهم کوچیک می‌ده که میاد تو حساب تو، تا نصف هزینه. بعدش برای بقیه مجانیه.";
+}
+
+/**
+ * `keep` برای تازه‌کردنِ همان صفحه است (برگشت از شارژ): تیکِ تقسیم و تعدادی
+ * که کاربر همین حالا انتخاب کرده نباید زیر دستش پاک شود.
+ */
+function askConfirm(out, filename, keep = false) {
   pendingSession = out.sessionId;
+  confirmCost = out.costCoins;
   $("confirm-file").textContent = filename || "";
   $("confirm-dur").textContent = faDuration(out.durationSec);
   $("confirm-cost").textContent = `${faGroup(out.costCoins)} 🪙`;
@@ -1236,19 +1471,35 @@ function askConfirm(out, filename) {
   fail($("confirm-err"), "");
   // هر فایل تصمیم خودش را دارد؛ تیکِ جلسهٔ قبلی نباید بی‌خبر روی این یکی
   // بنشیند — این تصمیم دربارهٔ سکه‌های کاربر است.
-  $("confirm-share").checked = false;
-  $("confirm-share-box").classList.add("hidden");
+  if (!keep) {
+    $("confirm-share").checked = false;
+    $("confirm-share-box").classList.add("hidden");
+  }
+  paintShareHow();
 
-  // موجودی کم؟ دکمه را نبند — بگو چقدر کم دارد و بگذار برود شارژ کند.
+  // دکمه خودش می‌گوید سکه کم می‌شود — «تحلیلش کن» این را نمی‌گفت.
+  $("confirm-go").textContent = `شروع کن — ${faGroup(out.costCoins)} سکه کم میشه`;
+
+  /**
+   * موجودی کم؟ بگو چقدر کم دارد و که **فایل نمی‌رود**.
+   *
+   * «دوباره بفرست» پیش‌تر درست بود چون راهِ برگشتی نبود. حالا سرور فایل را
+   * نگه می‌دارد و `checkPending` هنگامِ برگشت همان را پیشنهاد می‌دهد.
+   */
   const short = Math.max(0, out.costCoins - out.haveCoins);
   $("confirm-go").disabled = !out.enough;
   if (!out.enough) {
-    fail($("confirm-err"), `${faGroup(short)} سکه کم داری. از تب «حساب» شارژ کن و دوباره بفرست.`);
+    fail(
+      $("confirm-err"),
+      `${faGroup(short)} سکه کم داری. فایلت همین‌جا می‌مونه — از «🪙 حساب» شارژ کن و برگرد همین صفحه.`,
+    );
   }
   go("confirm");
 }
 
 $("confirm-cancel").addEventListener("click", () => {
+  // «بی‌خیال» یعنی همین فایل دوباره پیشنهاد نشود.
+  if (pendingSession) dismissPending(pendingSession);
   pendingSession = null;
   go("send");
 });
@@ -1258,6 +1509,7 @@ $("confirm-cancel").addEventListener("click", () => {
 $("confirm-share").addEventListener("change", () => {
   $("confirm-share-box").classList.toggle("hidden", !$("confirm-share").checked);
 });
+$("confirm-share-n").addEventListener("change", paintShareHow);
 
 $("confirm-go").addEventListener("click", async () => {
   if (!pendingSession) return;
@@ -1279,12 +1531,13 @@ $("confirm-go").addEventListener("click", async () => {
     btn.disabled = false;
     if (err.status === 402) {
       const d = err.data || {};
+      const short = Math.max(0, (d.needCoins ?? 0) - (d.haveCoins ?? 0));
       fail(
         $("confirm-err"),
-        `اعتبارت کم است — ${faGroup(d.needCoins ?? 0)} سکه لازم است و ${faGroup(d.haveCoins ?? 0)} سکه داری.`,
+        `${faGroup(short)} سکه کم داری. فایلت همین‌جا می‌مونه — از «🪙 حساب» شارژ کن و برگرد همین صفحه.`,
       );
     } else {
-      fail($("confirm-err"), err.message);
+      fail($("confirm-err"), friendlyError(err, "general"));
     }
     return;
   }
@@ -1313,8 +1566,9 @@ async function handedOff() {
   await loadMe().catch(() => {});
 
   let url = null;
+  let bots = {};
   try {
-    const { bots = {} } = await api.call("/api/config");
+    ({ bots = {} } = await api.call("/api/config"));
     /**
      * رباتِ همان سکویی که کاربر از آن آمده.
      *
@@ -1329,10 +1583,24 @@ async function handedOff() {
   const link = $("go-bot");
   if (url) link.href = url;
   show(link, Boolean(url));
+  /**
+   * سکو نامعلوم؟ هر دو، هرکدام با نامِ خودش — نه هیچ‌کدام.
+   *
+   * حدس‌زدن کاربر بله را به تلگرام می‌برد (باگِ قبلی)، ولی پنهان‌کردن هم
+   * راهِ برگشت به جایی که نتیجه می‌آید را می‌بندد.
+   */
+  for (const [id, target] of [["go-bot-bale", bots.bale], ["go-bot-tg", bots.telegram]]) {
+    const el = $(id);
+    if (target) el.href = target;
+    show(el, !url && Boolean(target));
+  }
   go("prog");
 }
 
-$("send-another").addEventListener("click", () => go("send"));
+$("send-another").addEventListener("click", () => {
+  go("send");
+  checkPending();
+});
 
 /**
  * برچسب فارسی وضعیت — برای نوار پیشرفت.
@@ -1372,12 +1640,13 @@ async function loadAccount() {
         </div>
         <p class="muted" style="font-size:14px">سکه</p>
         <p class="dim" style="margin-top:10px">
-          ${u.coinsPerMinute === 1 ? "هر سکه = یک دقیقه صوت" : `هر دقیقه صوت ${fa(u.coinsPerMinute)} سکه`}
+          ${u.coinsPerMinute === 1 ? "هر سکه یعنی یه دقیقه صوت" : `هر دقیقه صوت ${fa(u.coinsPerMinute)} سکه`}
         </p>
       </div>
 
       <div>
-        <h3 style="font-size:16px;margin-bottom:12px">🪙 شارژ حساب</h3>
+        <h3 style="font-size:16px;margin-bottom:8px">🪙 شارژ حساب</h3>
+        <p class="dim" style="margin-bottom:12px">${accountWhere()}</p>
         <div class="stack">
           ${packages
             .map(
@@ -1403,8 +1672,8 @@ async function loadAccount() {
         <p class="dim" id="pkg-note" style="margin-top:12px">
           ${
             gateway
-              ? "روی پکیج بزن؛ صفحهٔ بانک باز می‌شود و بعد از پرداخت، سکه‌ها خودکار به حسابت می‌آید."
-              : "برای شارژ، از ربات تلگرام یا بله اقدام کن — پرداخت آنجا انجام می‌شود."
+              ? "روی یه پکیج بزن؛ صفحهٔ بانک باز می‌شه و بعد از پرداخت، سکه‌ها خودکار میاد تو حسابت."
+              : "برای شارژ برو توی چت ربات — پرداخت همون‌جاست."
           }
         </p>
       </div>
@@ -1426,7 +1695,7 @@ async function loadAccount() {
       btn.addEventListener("click", async () => {
         const note = $("pkg-note");
         if (!gateway) {
-          note.textContent = "پرداخت آنلاین فعال نیست — از ربات شارژ کن.";
+          note.textContent = "پرداخت آنلاین الان فعال نیست — از توی چت ربات شارژ کن.";
           return;
         }
         btn.disabled = true;
@@ -1439,7 +1708,7 @@ async function loadAccount() {
           location.href = payUrl;
         } catch (e) {
           btn.disabled = false;
-          note.textContent = e.message;
+          note.textContent = friendlyError(e, "general");
         }
       });
     }
@@ -1450,8 +1719,21 @@ async function loadAccount() {
       location.reload();
     });
   } catch (e) {
-    box.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    box.innerHTML = `<div class="err">${esc(friendlyError(e, "general"))}</div>`;
   }
+}
+
+/**
+ * این حساب مالِ کدام سکوست — یک خط، بالای شارژ.
+ *
+ * حساب بله و تلگرام از هم جدایند و سکه میانشان نمی‌رود. کاربری که در تلگرام
+ * شارژ کند و در بله آپلود، سکه‌اش را «گم‌شده» می‌بیند.
+ */
+function accountWhere() {
+  const tail = "سکه‌های بله و تلگرام از هم جدان — همون‌جایی شارژ کن که فایل می‌فرستی.";
+  if (platformOfSession === "bale") return `این حسابت توی بله‌ست. ${tail}`;
+  if (platformOfSession === "telegram") return `این حسابت توی تلگرامه. ${tail}`;
+  return tail;
 }
 
 // ─── شروع ───────────────────────────────────────────────────────────────────
@@ -1483,6 +1765,7 @@ boot().catch(async (e) => {
 setTimeout(() => {
   if (current === "auth" && $("auth-lead").textContent.trim() === "یه لحظه…") {
     console.warn("boot did not settle in time; forcing auth screen");
-    showAuthScreen().catch(() => go("auth"));
+    // `slow`: شاید `boot` هنوز دارد تلاش می‌کند — متن نباید بگوید «نشد».
+    showAuthScreen({ slow: true }).catch(() => go("auth"));
   }
 }, 6000);
