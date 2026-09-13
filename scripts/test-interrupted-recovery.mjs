@@ -142,9 +142,7 @@ fs.rmSync(tmp, { recursive: true, force: true });
 // می‌کرد و آن قول دروغ درمی‌آمد. ولی معافیت سقف دارد: `expiredAudio` جلسهٔ
 // `queued` را پاک نمی‌کند، پس آپلودی که از `KEEP_AUDIO_DAYS` گذشته باید مثل
 // قبل جمع شود تا فایلش روزی پاک شود.
-const fs = (await import("node:fs")).default;
-const os = (await import("node:os")).default;
-const path = (await import("node:path")).default;
+// `fs`، `os` و `path` بالای همین فایل وارد شده‌اند.
 const { config } = await import("../src/config.ts");
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "passchi-orphan-"));
 const liveFile = path.join(tmpDir, "upload.m4a");
