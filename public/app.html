@@ -282,14 +282,21 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
       وقتی ورود با شماره خاموش است، این جای فرم را می‌گیرد. کاربر باید بداند
       کجا برود، نه اینکه با فرمی روبه‌رو شود که سرور جوابش را رد می‌کند.
     -->
-    <div id="auth-bots" class="stack hidden">
+    <div id="auth-bots" class="stack hidden" style="margin-top:22px">
       <a class="btn btn-primary btn-block hidden" id="open-tg" target="_blank" rel="noopener">
-        باز کردن در تلگرام
+        باز کردن ربات توی تلگرام
       </a>
       <a class="btn btn-ghost btn-block hidden" id="open-bale" target="_blank" rel="noopener">
-        باز کردن در بله
+        باز کردن ربات توی بله
       </a>
     </div>
+
+    <!--
+      کاربرِ کامپیوتر دکمه‌ای نمی‌گیرد (او را به همان حلقه برمی‌گرداند)، ولی
+      باید چیزی داشته باشد که روی گوشی جست‌وجو کند: نام ربات‌ها، هرکدام روی
+      خط خودش و چپ‌به‌راست.
+    -->
+    <div id="auth-names" class="hidden" style="margin-top:18px"></div>
 
     <form id="form-phone" class="stack hidden">
       <div>
@@ -318,6 +325,64 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
     <div class="stack">
 
       <!--
+        ─── فایلی که پیش‌تر آپلود شده و منتظر تأیید مانده ─────────────────
+
+        کاربری که سکه‌اش کم بود و برای شارژ بیرون رفت، باید بتواند به همان
+        فایل برگردد، نه اینکه دوباره آپلودش کند. سرور جلسه را نگه می‌دارد
+        (`GET /api/uploads/pending`)؛ این کارت فقط راهِ برگشت به آن است.
+        بسته شروع می‌شود و فقط وقتی چنین فایلی هست باز می‌شود.
+      -->
+      <div id="resume" class="card hidden" style="padding:16px 18px">
+        <div style="font-weight:700">📎 یه فایل آماده داری — ادامه بدیم؟</div>
+        <p class="dim" id="resume-meta" style="margin-top:4px"></p>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-primary" type="button" id="resume-go" style="flex:1">ادامه بده</button>
+          <button class="btn btn-ghost" type="button" id="resume-skip">بی‌خیال</button>
+        </div>
+      </div>
+
+      <!--
+        معنای موجودی، پیش از انتخابِ فایل: چند سکه داری، هر سکه چقدر صوت است،
+        و نتیجه کجا می‌آید. عددها از `/api/me` پر می‌شوند.
+      -->
+      <p class="dim hidden" id="send-meta" style="text-align:center"></p>
+
+      <!--
+        انتخابگر درس همیشه دیده می‌شود، حتی وقتی کاربر هیچ درسی ندارد.
+
+        پیش‌تر با `hidden` شروع می‌شد و فقط وقتی `courses.length > 0` بود باز
+        می‌شد — یعنی کاربر تازه هرگز آن را نمی‌دید و تنها راه ساختن درس، رفتن
+        به ربات بود. ولی همان کاربر تازه دقیقاً کسی است که باید درس بسازد:
+        یادگیری اصطلاح‌ها فقط وقتی کار می‌کند که جلسه به درسی وصل باشد.
+
+        **بالای کادرِ صوت است، نه زیرش.** زدنِ کادر همان لحظه آپلود را شروع
+        می‌کند و درس همان لحظه خوانده می‌شود؛ درسی که بعدش انتخاب شود بی‌صدا
+        نادیده گرفته می‌شد.
+      -->
+      <div id="course-pick">
+        <label for="course">درس (اختیاری)</label>
+        <select id="course" style="width:100%;padding:13px 15px;font:inherit;font-size:15px;
+                background:var(--surface);color:var(--text);border:1px solid var(--border-strong);
+                border-radius:var(--radius);margin-top:6px">
+          <option value="">بدون درس</option>
+          <option value="new">➕ درس جدید…</option>
+        </select>
+        <p class="dim" style="margin-top:7px;font-size:13px">
+          درس رو انتخاب کنی، اصطلاح‌هاش رو یادم می‌مونه و جلسهٔ بعد دقیق‌تر درمیاد.
+        </p>
+
+        <div id="course-new" class="hidden" style="margin-top:11px">
+          <input id="course-name" type="text" maxlength="80" placeholder="اسم درس — مثلاً ریاضی مهندسی">
+          <input id="course-prof" type="text" maxlength="80" placeholder="اسم استاد (اختیاری)" style="margin-top:8px">
+          <div class="err hidden" id="course-err"></div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn btn-primary" type="button" id="course-save" style="flex:1">بساز</button>
+            <button class="btn btn-ghost" type="button" id="course-cancel">بی‌خیال</button>
+          </div>
+        </div>
+      </div>
+
+      <!--
         متن روی کاری که کاربر واقعاً می‌کند تکیه دارد: **زدن**.
 
         پیش‌تر تیتر «صوت کلاست رو بذار اینجا» بود و «یا بزن تا انتخاب کنی»
@@ -333,41 +398,16 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
           ویدیو از اول در `accept` بود ولی در این خط نوشته نشده بود — یعنی
           کاربری که ضبط کلاس آنلاینش mp4 بود گمان می‌کرد قبول نمی‌شود.
         -->
-        <p class="dim" style="margin-top:9px">mp3 · m4a · ogg · wav · mp4 — تا ۵۰۰ مگابایت</p>
+        <!--
+          قالب‌ها روی خطِ خودشان و چپ‌به‌راست: نام لاتین وسط جملهٔ فارسی روی
+          گوشی جابه‌جا خوانده می‌شود.
+        -->
+        <p class="dim" style="margin-top:9px">هر صوت یا ویدیوی کلاس — تا ۵۰۰ مگابایت</p>
+        <p class="dim" dir="ltr">mp3 · m4a · ogg · wav · mp4</p>
         <p class="dim">ویدیوی کلاس آنلاین هم قبوله؛ فقط صداش برداشته می‌شه</p>
       </div>
       <input type="file" id="file" accept="audio/*,video/*" class="hidden">
-
-      <!--
-        انتخابگر درس همیشه دیده می‌شود، حتی وقتی کاربر هیچ درسی ندارد.
-
-        پیش‌تر با `hidden` شروع می‌شد و فقط وقتی `courses.length > 0` بود باز
-        می‌شد — یعنی کاربر تازه هرگز آن را نمی‌دید و تنها راه ساختن درس، رفتن
-        به ربات بود. ولی همان کاربر تازه دقیقاً کسی است که باید درس بسازد:
-        یادگیری اصطلاح‌ها فقط وقتی کار می‌کند که جلسه به درسی وصل باشد.
-      -->
-      <div id="course-pick">
-        <label for="course">درس (اختیاری)</label>
-        <select id="course" style="width:100%;padding:13px 15px;font:inherit;font-size:15px;
-                background:var(--surface);color:var(--text);border:1px solid var(--border-strong);
-                border-radius:var(--radius);margin-top:6px">
-          <option value="">بدون درس</option>
-          <option value="new">➕ درس جدید…</option>
-        </select>
-        <p class="dim" style="margin-top:7px;font-size:13px">
-          اگه درس رو انتخاب کنی، اصطلاح‌های تخصصیش رو یاد می‌گیرم — جلسهٔ بعدی همون درس دقیق‌تر پیاده می‌شه.
-        </p>
-
-        <div id="course-new" class="hidden" style="margin-top:11px">
-          <input id="course-name" type="text" maxlength="80" placeholder="اسم درس — مثلاً ریاضی مهندسی">
-          <input id="course-prof" type="text" maxlength="80" placeholder="اسم استاد (اختیاری)" style="margin-top:8px">
-          <div class="err hidden" id="course-err"></div>
-          <div style="display:flex;gap:8px;margin-top:10px">
-            <button class="btn btn-primary" type="button" id="course-save" style="flex:1">بساز</button>
-            <button class="btn btn-ghost" type="button" id="course-cancel">بی‌خیال</button>
-          </div>
-        </div>
-      </div>
+      <p class="dim" style="text-align:center;font-size:13px">قبل از ضبط از استاد اجازه بگیر.</p>
 
       <div class="err hidden" id="send-err"></div>
     </div>
@@ -415,10 +455,10 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
         style="display:flex;align-items:center;gap:9px;margin-top:16px;text-align:right;cursor:pointer"
       >
         <input type="checkbox" id="confirm-share" style="width:18px;height:18px;flex:none" />
-        <span style="font-size:14px">👥 با هم‌کلاسیا تقسیم می‌کنم — تا نصف سکه‌هات برمی‌گرده</span>
+        <span style="font-size:14px">👥 با بچه‌های کلاس شریک می‌شم</span>
       </label>
       <div id="confirm-share-box" class="hidden" style="margin-top:10px;text-align:right">
-        <label class="dim" for="confirm-share-n" style="font-size:13px">چند نفرید؟</label>
+        <label class="dim" for="confirm-share-n" style="font-size:13px">فکر می‌کنی چند نفر از بچه‌ها جزوه رو می‌گیرن؟</label>
         <select id="confirm-share-n" style="width:100%;padding:13px 15px;font:inherit;font-size:15px;
                 background:var(--surface);color:var(--text);border:1px solid var(--border-strong);
                 border-radius:var(--radius);margin-top:6px">
@@ -427,23 +467,34 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
           <option value="20">۲۰ نفر</option>
           <option value="30">۳۰ نفر</option>
         </select>
-        <p class="dim" style="margin-top:6px;font-size:12.5px">
-          سهم هر نفر ثابته و همون به حساب تو برمی‌گرده. لینک دعوت رو توی ربات برات می‌فرستم.
+        <!--
+          «نفری n سکه» از `app.js` پر می‌شود (همان فرمولِ `shareBack`)؛ اگر
+          هزینه معلوم نباشد، جمله بی‌عدد می‌ماند نه با عددِ ساختگی.
+        -->
+        <p class="dim" id="confirm-share-how" style="margin-top:6px;font-size:12.5px">
+          هر کی با لینک جزوه رو بگیره یه سهم کوچیک می‌ده که میاد تو حساب تو، تا نصف هزینه. بعدش برای بقیه مجانیه.
+        </p>
+        <p class="dim" style="margin-top:4px;font-size:12.5px">
+          لینکش رو توی چت ربات برات می‌فرستم که بذاری تو گروه کلاس.
         </p>
       </div>
 
       <div class="err hidden" id="confirm-err" style="margin-top:14px"></div>
 
-      <button class="btn btn-primary btn-block" type="button" id="confirm-go" style="margin-top:18px">
-        تحلیلش کن
+      <!--
+        جای نتیجه **بالای** دکمه است، نه زیرش با خطِ کم‌رنگ: کاربر تا دکمه را
+        زد باید بداند منتظرِ این صفحه نماند.
+      -->
+      <p style="margin-top:16px;font-size:14px;font-weight:600">
+        نتیجه اینجا نمیاد — توی چت ربات برات می‌فرستم.
+      </p>
+
+      <button class="btn btn-primary btn-block" type="button" id="confirm-go" style="margin-top:12px">
+        شروع کن
       </button>
       <button class="btn btn-ghost btn-block" type="button" id="confirm-cancel" style="margin-top:9px">
         بی‌خیال
       </button>
-
-      <p class="dim" style="margin-top:14px;font-size:13px">
-        بعد از تأیید می‌تونی این صفحه رو ببندی — وضعیت و نتیجه رو توی ربات برات می‌فرستم.
-      </p>
     </div>
   </section>
 
@@ -462,11 +513,22 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
       <div style="font-size:40px">✅</div>
       <h2 style="font-size:19px;margin-top:8px">رفت توی صف</h2>
       <p class="muted" style="font-size:14.5px;margin-top:8px">
-        این صفحه رو ببند. وضعیت پردازش و بعدش خلاصه، نکته‌های امتحانی،
-        جزوهٔ PDF و رونوشت — همه رو توی ربات برات می‌فرستم.
+        توی چت ربات یه پیام برات گذاشتم که خودش به‌روز می‌شه. معمولاً چند دقیقه
+        بعد خلاصه، نکته‌های امتحانی و فایل جزوه همون‌جا میاد.
       </p>
+      <p class="dim" style="margin-top:6px">این صفحه رو ببند و برو توی چت.</p>
+      <!--
+        فقط رباتِ سکوی همین نشست. اگر سکو معلوم نیست، هر دو با نامِ روشن —
+        پنهان‌کردنِ راهِ برگشت بدتر از دو دکمه است.
+      -->
       <a class="btn btn-primary btn-block hidden" id="go-bot" style="margin-top:16px" target="_blank" rel="noopener">
-        برگرد به ربات
+        برو به چت پاسچی
+      </a>
+      <a class="btn btn-primary btn-block hidden" id="go-bot-bale" style="margin-top:12px" target="_blank" rel="noopener">
+        برو به چت پاسچی توی بله
+      </a>
+      <a class="btn btn-ghost btn-block hidden" id="go-bot-tg" style="margin-top:9px" target="_blank" rel="noopener">
+        برو به چت پاسچی توی تلگرام
       </a>
       <button class="btn btn-ghost btn-block" type="button" id="send-another" style="margin-top:9px">
         یه صوت دیگه بفرستم
