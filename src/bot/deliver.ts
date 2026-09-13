@@ -21,7 +21,9 @@ import { audioExt } from "../audio/container.js";
 import { logger } from "../util/logger.js";
 import { escapeHtml, transcriptBytes } from "../util/text.js";
 import { transcodeForTelegram } from "../audio/ffmpeg.js";
-import { getCourse, getUser, sessionReport, updateSession, type SessionRow } from "../db/index.js";
+import {
+  getCourse, getUser, memberDelivery, sessionReport, updateSession, type SessionRow,
+} from "../db/index.js";
 import type { Platform } from "../db/identity.js";
 import { deliveryChannel } from "./notify.js";
 import { invitationMessage, shareToggleKeyboard } from "./share.js";
@@ -89,6 +91,13 @@ export interface SendTarget {
   api: Api;
   chatId: number;
   platform: Platform;
+  /**
+   * چه کسی دکمه را زده — مالک یا هم‌کلاسیِ عضو.
+   *
+   * لازم است چون هرکدام صوتِ جلسه را در چتِ خودش با شناسهٔ پیامِ متفاوت دارد؛
+   * `reportReplyTo` از همین می‌فهمد ریپلایِ کدام پیام باشد.
+   */
+  viewerId?: number;
 }
 
 /**
@@ -169,15 +178,32 @@ export function closingKeyboard(s: SessionRow, shareOn: boolean): InlineKeyboard
  * می‌شود و زمان‌ها متن ساده می‌مانند — که بدترین حالتش «کمی کمتر» است، نه
  * ریپلای به پیامِ اشتباه.
  */
-export function reportReplyTo(s: SessionRow, chatId: number): Record<string, unknown> {
+export function reportReplyTo(
+  s: SessionRow,
+  chatId: number,
+  viewerId?: number,
+): Record<string, unknown> {
+  const replyTo = (messageId: number) => ({
+    reply_parameters: { message_id: messageId, allow_sending_without_reply: true },
+  });
+
+  /**
+   * **هم‌کلاسی جفتِ خودش را دارد** — کنارِ عضویتش در `session_members`.
+   *
+   * جلسه‌ای که با عضو تقسیم شده، صوتش را در چتِ خودِ عضو و با شناسهٔ پیامِ
+   * دیگری می‌گیرد؛ آن پاسخ آنجا نوشته شده. اگر عضو جفتی ندارد (صوت نرسید، یا
+   * پیش از این تغییر گرفته) بی‌ریپلای می‌رود و **هرگز** به جفتِ مالک برنمی‌گردد:
+   * جلسه‌های قدیمی `delivered_chat_id` تهی دارند و شرطِ چتِ پایین آن را
+   * نمی‌گیرد — یعنی شناسهٔ پیامِ مالک در چتِ عضو به پیامِ بی‌ربطی می‌چسبید.
+   */
+  if (viewerId !== undefined && viewerId !== s.tg_id) {
+    const mine = memberDelivery(s.id, viewerId);
+    return mine?.audioMessageId && mine.chatId === chatId ? replyTo(mine.audioMessageId) : {};
+  }
+
   if (!s.delivered_audio_message_id) return {};
   if (s.delivered_chat_id !== null && s.delivered_chat_id !== chatId) return {};
-  return {
-    reply_parameters: {
-      message_id: s.delivered_audio_message_id,
-      allow_sending_without_reply: true,
-    },
-  };
+  return replyTo(s.delivered_audio_message_id);
 }
 
 /**
@@ -190,7 +216,7 @@ export function reportReplyTo(s: SessionRow, chatId: number): Record<string, unk
 export async function sendMorePart(to: SendTarget, s: SessionRow, part: MorePart): Promise<boolean> {
   if (part === "timeline") {
     const r = sessionReport(s);
-    const asReply = reportReplyTo(s, to.chatId);
+    const asReply = reportReplyTo(s, to.chatId, to.viewerId);
     // زدنی‌بودنِ زمان‌ها قابلیتِ تلگرام است؛ بله ندارد و نباید وعده‌اش را بخواند.
     const linkable = "reply_parameters" in asReply && to.platform === "telegram";
     const text = r ? S.timelineMessage(r, linkable) : "";

@@ -59,7 +59,7 @@ import {
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
   getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, pendingSessions,
-  countSessions, getGift, getTopup, listGifts, overview, pendingTopups, purgeSession, revokeGift, sessionReport,
+  countHistory, listHistory, getGift, getTopup, listGifts, overview, pendingTopups, purgeSession, revokeGift, sessionReport,
   sessionTimeMap, updateSession,
   type SessionMode,
   type SessionRow,
@@ -313,13 +313,14 @@ const HISTORY_PAGE = 8;
  * تلگرام متن دکمه را در یک خط نشان می‌دهد و بلندش را می‌برد، پس خودمان
  * می‌بریم تا وسط کلمه قطع نشود.
  */
-function sessionLabel(s: SessionRow): string {
+function sessionLabel(s: SessionRow, joined = false): string {
   const icon =
     s.status === "done" ? (isTranscriptOnly(s.mode) ? "📄" : "📋") : s.status === "error" ? "❌" : "⏳";
   const title = (s.title ?? "بدون عنوان").trim();
-  const short = title.length > 32 ? title.slice(0, 31).trimEnd() + "…" : title;
-  const when = s.created_at.slice(5, 10).replace("-", "/");
-  return `${icon} ${short} · ${toFaDigits(when)}`;
+  const short = title.length > 30 ? title.slice(0, 29).trimEnd() + "…" : title;
+  // تاریخ شمسی با نام ماه؛ چرایی در `faDate`.
+  const when = S.faDate(s.created_at);
+  return `${icon} ${joined ? `${S.MEMBER_MARK} ` : ""}${short}${when ? ` · ${when}` : ""}`;
 }
 
 /**
@@ -337,23 +338,20 @@ function sessionLabel(s: SessionRow): string {
 async function historyScreen(ctx: Context, page = 0, edit = false): Promise<void> {
   touchUser(ctx);
   const id = uid(ctx);
-  const total = countSessions(id);
+  // جلسه‌های گرفته‌شده از هم‌کلاسی هم — چرایی در `listHistory`.
+  const total = countHistory(id);
 
   if (total === 0) {
-    await reply(
-      ctx,
-      "هنوز جلسه‌ای نفرستادی 📭\n\nیه فایل صوتی، ویس یا ویدیو بفرست تا شروع کنیم 🎧\n\n" +
-        "<i>کلاست آنلاین بوده؟ ویدیوش هم قبوله.</i>",
-    );
+    await reply(ctx, S.HISTORY_EMPTY);
     return;
   }
 
   const pages = Math.max(1, Math.ceil(total / HISTORY_PAGE));
   const safe = Math.min(Math.max(0, page), pages - 1);
-  const rows = listSessions(id, HISTORY_PAGE, safe * HISTORY_PAGE);
+  const rows = listHistory(id, HISTORY_PAGE, safe * HISTORY_PAGE);
 
   const kb = new InlineKeyboard();
-  for (const s of rows) kb.text(sessionLabel(s), `sess:${s.id}`).row();
+  for (const s of rows) kb.text(sessionLabel(s, Boolean(s.joined)), `sess:${s.id}`).row();
 
   // نوار صفحه‌بندی فقط وقتی که واقعاً بیش از یک صفحه باشد.
   if (pages > 1) {
@@ -362,7 +360,10 @@ async function historyScreen(ctx: Context, page = 0, edit = false): Promise<void
     if (safe < pages - 1) kb.text("بعدی ◀️", `hpage:${safe + 1}`);
   }
 
-  const text = `<b>📚 جلسه‌های تو</b> — ${toFaDigits(total)} جلسه\n\n<i>روی هرکدوم بزنی، بازش می‌کنم.</i>`;
+  const anyJoined = rows.some((s) => s.joined);
+  const text =
+    `<b>📚 جلسه‌های تو</b> — ${toFaDigits(total)} جلسه\n\n<i>روی هرکدوم بزنی، بازش می‌کنم.</i>` +
+    (anyJoined ? `\n<i>${S.MEMBER_MARK} یعنی از هم‌کلاسیت گرفتی.</i>` : "");
 
   if (edit) {
     await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
@@ -404,12 +405,21 @@ function readableSession(ctx: Context, sessionId: string): SessionRow | null {
 }
 
 async function sessionCard(ctx: Context, sessionId: string): Promise<void> {
-  const s = getSession(sessionId);
-  if (!s || s.tg_id !== uid(ctx)) {
+  /**
+   * مالک **یا عضو** — همان `readableSession` که دکمه‌های جزوه و متن دارند.
+   *
+   * کارت پیش‌تر فقط برای مالک باز می‌شد؛ حالا که جلسه‌های گرفته‌شده در فهرست
+   * می‌آیند، زدن رویشان نباید «پیدا نشد» بدهد. دکمه‌های مالک (شروع، ارتقا،
+   * شریک‌شدن) فقط برای مالک ساخته می‌شوند — دست‌کدهایشان هم مالکیت را
+   * می‌سنجند، ولی دکمه‌ای که بزنی و بگوید «مال تو نیست» نباید اصلاً دیده شود.
+   */
+  const s = readableSession(ctx, sessionId);
+  if (!s) {
     await ctx.answerCallbackQuery({ text: "این جلسه پیدا نشد." });
     return;
   }
   await ctx.answerCallbackQuery();
+  const owner = s.tg_id === uid(ctx);
 
   const kb = new InlineKeyboard();
   /**
@@ -417,29 +427,37 @@ async function sessionCard(ctx: Context, sessionId: string): Promise<void> {
    * شروع باشد — وگرنه تنها راهش پیامِ اصلی است و آن پیام در چتِ شلوغ گم
    * می‌شود؛ یعنی کاربر باید فایل را دوباره بفرستد.
    */
-  if ((s.status === "awaiting_confirm" || s.status === "awaiting_credit") && s.original_file) {
+  if (owner && (s.status === "awaiting_confirm" || s.status === "awaiting_credit") && s.original_file) {
     kb.text("✅ شروع کن", `go:${s.id}`).row();
   }
-  if (s.pdf_path) kb.text("📕 جزوه", `pdf:${s.id}`);
-  if (s.report_json) kb.text("📋 تحلیل", `rep:${s.id}`);
-  if (s.transcript_txt) kb.text("📄 رونوشت", `txt:${s.id}`);
-  if (isTranscriptOnly(s.mode) && s.status === "done") {
+  if (s.pdf_path) kb.text("📕 فایل جزوه", `pdf:${s.id}`);
+  if (s.report_json) kb.text("📋 خلاصه و نکته‌ها", `rep:${s.id}`);
+  if (s.transcript_txt) kb.row().text("📄 متن کامل کلاس", `txt:${s.id}`);
+  if (owner && isTranscriptOnly(s.mode) && s.status === "done") {
     kb.row().text("✨ تحلیل کامل این جلسه", `full:${s.id}`);
   }
-  if (s.mode === "full" && s.status === "done") {
+  if (owner && s.mode === "full" && s.status === "done") {
     kb.row().text(
-      s.share_enabled ? "🔗 لینک دعوت" : "👥 تقسیم با هم‌کلاسیا",
+      s.share_enabled ? S.SHARE_BTN.link : S.SHARE_BTN.off,
       s.share_enabled ? `slink:${s.id}` : `son:${s.id}`,
     );
   }
   kb.row().text("↩️ فهرست جلسه‌ها", "hpage:0").text("🏠 منوی اصلی", "home");
 
   const course = s.course_id ? getCourse(s.course_id) : null;
-  const meta = [s.created_at.slice(0, 10), s.original_ms ? fmtDuration(s.original_ms) : null, course?.name]
+  const meta = [
+    S.faDate(s.created_at),
+    s.original_ms ? fmtDuration(s.original_ms) : null,
+    course?.name,
+    owner ? null : `${S.MEMBER_MARK} از هم‌کلاسیت`,
+  ]
     .filter(Boolean)
     .join(" · ");
+  // برچسبِ فارسی، نه نامِ ستون — چرایی در `STATUS_LABEL`.
   const status =
-    s.status === "done" ? "" : s.status === "error" ? " ❌ <i>ناموفق</i>" : ` ⏳ <i>${s.status}</i>`;
+    s.status === "done"
+      ? ""
+      : ` ${s.status === "error" ? "❌" : "⏳"} <i>${S.sessionStatusLabel(s.status)}</i>`;
 
   await ctx.reply(`<b>${escapeHtml(s.title ?? "بدون عنوان")}</b>${status}\n<i>${escapeHtml(meta)}</i>`, {
     parse_mode: "HTML",
@@ -2456,7 +2474,7 @@ handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
   // همان یک جفت ستونِ معتبر که هر دو مسیر تحویل می‌نویسند — نه
   // `audio_message_id` خام، که برای جلسه‌های آمده از مینی‌اپ همیشه تهی است و
   // اینجا بی‌صدا زمان‌ها را از لینکِ پخش می‌انداخت.
-  const asReply = reportReplyTo(s, ctx.chat!.id);
+  const asReply = reportReplyTo(s, ctx.chat!.id, uid(ctx));
   await reply(
     ctx,
     S.recapMessage({
@@ -2519,8 +2537,9 @@ handlers.callbackQuery(
     }
     await ctx.answerCallbackQuery();
     await dropPressedButton(ctx);
+    // `viewerId`: عضو صوت را در چتِ خودش با شناسهٔ دیگری دارد — `reportReplyTo`.
     const ok = await sendMorePart(
-      { api: ctx.api, chatId: ctx.chat!.id, platform: platformOf(ctx) },
+      { api: ctx.api, chatId: ctx.chat!.id, platform: platformOf(ctx), viewerId: uid(ctx) },
       s,
       part,
     );
@@ -2928,7 +2947,8 @@ handlers.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {
     const out = await handleJoin(ctx, sessionId);
     // صفحه‌کلیدِ دعوت همین بالا برداشته شده؛ اگر پاسخ دکمه‌ای دارد (سکهٔ کم)
     // باید همراه پیام برود، وگرنه تازه‌وارد در یک متنِ بی‌راه گیر می‌کند.
-    await reply(ctx, out.message, out.keyboard ? { reply_markup: out.keyboard } : {});
+    // پیامِ خالی یعنی تأییدِ موفق پیش از تحویل رفته — دوباره نفرست.
+    if (out.message) await reply(ctx, out.message, out.keyboard ? { reply_markup: out.keyboard } : {});
   } catch (e) {
     logger.error({ sessionId, err: String(e) }, "join failed");
     await reply(ctx, "پیوستن به این جلسه ممکن نشد. دوباره تلاش کن.");

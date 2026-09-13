@@ -467,6 +467,99 @@ export function getSession(id: string): SessionRow | null {
   return (db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as unknown as SessionRow | undefined) ?? null;
 }
 
+/**
+ * صوتی که گزارشِ این جلسه **در چتِ یک عضو** به آن آویزان است.
+ *
+ * ستون‌های `delivered_*` روی خودِ جلسه فقط یک چت را نگه می‌دارند — چتِ مالک.
+ * هم‌کلاسی‌ای که جلسه را گرفته، صوت را در چتِ *خودش* با شناسهٔ پیامِ دیگری
+ * می‌گیرد، و وقتی بعداً دکمهٔ «کلاس دقیقه‌به‌دقیقه» را می‌زند، آن پیام باید
+ * ریپلایِ همان صوت باشد وگرنه زمان‌هایش لینکِ پخش نمی‌شوند. همان پرسش، یک
+ * پاسخ برای هر گیرنده — پس کنارِ عضویتش نوشته می‌شود.
+ *
+ * مهاجرت اینجاست و نه بالای فایل، چون جدولِ `session_members` در بلوکِ دومِ
+ * طرحواره ساخته می‌شود و `ALTER` پیش از آن روی جدولِ ناموجود می‌افتاد.
+ */
+for (const [column, ddl] of [
+  ["delivered_chat_id", "ALTER TABLE session_members ADD COLUMN delivered_chat_id INTEGER"],
+  [
+    "delivered_audio_message_id",
+    "ALTER TABLE session_members ADD COLUMN delivered_audio_message_id INTEGER",
+  ],
+] as const) {
+  const cols = db.prepare("PRAGMA table_info(session_members)").all() as unknown as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) db.exec(ddl);
+}
+
+export function setMemberDelivery(
+  sessionId: string,
+  tgId: number,
+  chatId: number,
+  audioMessageId: number,
+): void {
+  db.prepare(
+    `UPDATE session_members SET delivered_chat_id = ?, delivered_audio_message_id = ?
+      WHERE session_id = ? AND tg_id = ?`,
+  ).run(chatId, audioMessageId, sessionId, tgId);
+}
+
+export function memberDelivery(
+  sessionId: string,
+  tgId: number,
+): { chatId: number | null; audioMessageId: number | null } | null {
+  const row = db
+    .prepare(
+      `SELECT delivered_chat_id AS chatId, delivered_audio_message_id AS audioMessageId
+         FROM session_members WHERE session_id = ? AND tg_id = ?`,
+    )
+    .get(sessionId, tgId) as unknown as { chatId: number | null; audioMessageId: number | null } | undefined;
+  return row ?? null;
+}
+
+/**
+ * فهرستِ «📚 جلسه‌های من» — جلسه‌هایی که فرستاده **و** جلسه‌هایی که گرفته.
+ *
+ * `listSessions` فقط مالکیت را می‌بیند و همان‌طور می‌ماند: `/forget` و `/cancel`
+ * و حدسِ درس به آن تکیه دارند و نباید به جلسهٔ کسِ دیگری دست بزنند. ولی برای
+ * *دیدن*، هم‌کلاسی‌ای که سکه داده و جلسه را گرفته بود هیچ راهی جز تایپِ
+ * `/shared` نداشت؛ جزوه‌ای که بابتش پرداخته بود از منو نامرئی بود.
+ *
+ * `joined` یعنی از راهِ عضویت آمده، نه مالکیت. ترتیب با لحظهٔ **گرفتن** است
+ * برای عضو و لحظهٔ فرستادن برای مالک — جلسه‌ای که دیروز گرفتی باید بالای
+ * فهرست باشد حتی اگر هم‌کلاسی‌ات هفتهٔ پیش فرستاده باشدش. نقشِ `owner` در
+ * `session_members` کنار گذاشته می‌شود تا جلسهٔ خودت دو بار نیاید.
+ */
+export function listHistory(
+  tgId: number,
+  limit = 10,
+  offset = 0,
+): Array<SessionRow & { joined: number }> {
+  return db
+    .prepare(
+      `SELECT s.*, CASE WHEN s.tg_id = ? THEN 0 ELSE 1 END AS joined
+         FROM sessions s
+         LEFT JOIN session_members m
+           ON m.session_id = s.id AND m.tg_id = ? AND m.role = 'member'
+        WHERE s.tg_id = ? OR m.session_id IS NOT NULL
+        ORDER BY COALESCE(m.joined_at, s.created_at) DESC
+        LIMIT ? OFFSET ?`,
+    )
+    .all(tgId, tgId, tgId, limit, offset) as unknown as Array<SessionRow & { joined: number }>;
+}
+
+/** شمارِ همان فهرست — برای صفحه‌بندی. */
+export function countHistory(tgId: number): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n
+         FROM sessions s
+         LEFT JOIN session_members m
+           ON m.session_id = s.id AND m.tg_id = ? AND m.role = 'member'
+        WHERE s.tg_id = ? OR m.session_id IS NOT NULL`,
+    )
+    .get(tgId, tgId) as unknown as { n: number };
+  return row.n;
+}
+
 export function listSessions(tgId: number, limit = 10, offset = 0): SessionRow[] {
   return db
     .prepare(

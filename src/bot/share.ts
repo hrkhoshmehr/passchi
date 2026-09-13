@@ -3,11 +3,14 @@ import { InlineKeyboard, type Api, type Context } from "grammy";
 import { sendDoc, sendFileTo } from "./bale-upload.js";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
-import { escapeHtml, transcriptBytes } from "../util/text.js";
+import { escapeHtml } from "../util/text.js";
 import { audioExt } from "../audio/container.js";
 import { fmtDuration, toFaDigits } from "../util/time.js";
 import { costCoins, fmtBalance, fmtCoins, fmtCost, shareBack } from "../billing/coins.js";
-import { getCourse, getSession, sessionReport, updateSession, type SessionRow } from "../db/index.js";
+import {
+  getCourse, getSession, sessionReport, setMemberDelivery, updateSession, type SessionRow,
+} from "../db/index.js";
+import { moreKeyboard, reportReplyTo } from "./deliver.js";
 import { InsufficientCredit } from "../billing/ledger.js";
 import {
   AlreadyMember,
@@ -205,7 +208,24 @@ export function joinPreview(
 }
 
 /**
- * تحویل کامل یک جلسه به کسی که تازه پیوسته.
+ * تحویل یک جلسه به کسی که تازه پیوسته — **همان شکلِ تحویلِ مالک**.
+ *
+ * ## دیوارِ هشت پیام
+ *
+ * تحویلِ مالک از هفت پیامِ پشت‌سرهم به چهار چیزِ فوری و بقیه پشتِ دکمه رسید،
+ * ولی این مسیر عقب ماند: هم‌کلاسی هنوز صوت، خلاصه، نکته‌ها، بخش‌بندی، پرسش و
+ * پاسخ، جزوه، رونوشت و SRT را پشت‌سرهم می‌گرفت — و «گرفتیش، n سکه کم شد»
+ * *آخرِ* همه می‌آمد، یعنی هشت پیام بدون اینکه بداند پولی رفت یا نه.
+ *
+ * حالا تأییدِ کوتاه اول می‌آید (`handleJoin`)، بعد همان چهار چیزِ مالک، و
+ * آخر همان `moreKeyboard` و `MORE_CB` و `sendMorePart` که مالک دارد — نه یک
+ * پیاده‌سازیِ موازی که روزی از آن عقب بماند. `closingKeyboard` اینجا
+ * نمی‌آید چون دکمهٔ شریک‌شدنش مالِ مالک است؛ عضو فقط بخش‌های بایگانی را
+ * می‌خواهد.
+ *
+ * شناسهٔ صوتِ فرستاده‌شده کنارِ عضویتِ همین کاربر ذخیره می‌شود
+ * (`setMemberDelivery`) تا دکمهٔ «کلاس دقیقه‌به‌دقیقه» هفته‌ها بعد هم ریپلایِ
+ * همین صوت در همین چت باشد. چرایی در `reportReplyTo`.
  *
  * صوت با `file_id` دوباره فرستاده می‌شود — سکو فایل را نگه داشته، پس نه
  * آپلودی لازم است نه فضایی. بدون این کار، زمان‌های داخل پیام‌ها برای او لینک
@@ -286,11 +306,24 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
     }
   }
 
-  const asReply = audioMessageId
-    ? { reply_parameters: { message_id: audioMessageId, allow_sending_without_reply: true } }
-    : {};
-  // زمان‌های زدنی قابلیتِ تلگرام است و بله ندارد — وعده‌اش را به کاربر بله نده.
-  const linkable = audioMessageId !== null && platformOf(ctx) === "telegram";
+  /**
+   * جفتِ «کدام صوت، کدام چت» برای **همین گیرنده**.
+   *
+   * عضو در `session_members` می‌نشیند و مالک — که فقط از مسیرِ «از قبل مال
+   * خودته» به اینجا می‌رسد — در همان ستون‌های `delivered_*` جلسه، تا هر دو از
+   * همان `reportReplyTo` بخوانند.
+   */
+  const viewer = uid(ctx);
+  const chatId = ctx.chat!.id;
+  if (audioMessageId !== null) {
+    if (viewer === s.tg_id) {
+      updateSession(s.id, { delivered_chat_id: chatId, delivered_audio_message_id: audioMessageId });
+    } else {
+      setMemberDelivery(s.id, viewer, chatId, audioMessageId);
+    }
+  }
+  const fresh = getSession(s.id) ?? s;
+  const asReply = reportReplyTo(fresh, chatId, viewer);
 
   const send = async (text: string, extra: Record<string, unknown> = {}) => {
     if (!text) return;
@@ -299,7 +332,7 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
     }
   };
 
-  // همان سه پیامی که فرستندهٔ اصلی گرفت، به همان ترتیب
+  // همان چیزهای فوریِ مالک، به همان ترتیب: خلاصه، نکته‌ها، پرسش و پاسخ، جزوه
   await send(
     S.recapMessage({
       report: r,
@@ -311,33 +344,35 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
     }),
   );
   await send(S.extractedMessage(r), asReply);
-  await send(S.timelineMessage(r, linkable), asReply);
   // جلسهٔ اشتراکی همان گزارش را می‌گیرد؛ اگر این خط نباشد، هم‌کلاسیِ گیرنده
   // بخشی از خروجیِ همان جلسه را نمی‌بیند. خالی برمی‌گردد وقتی جلسه این پاس
   // را نداشته، پس در حالت پیش‌فرض هیچ پیامی اضافه نمی‌شود.
   await send(S.qaMessage(r), asReply);
 
   // `sendDoc` مسیر بله را دستی می‌فرستد و خطا را لاگ می‌کند؛ توضیح در
-  // `bale-upload.ts`. پیش‌تر اینجا `.catch(() => {})` بود و کاربر بله جزوه و
-  // رونوشتِ جلسهٔ اشتراکی را بی‌صدا از دست می‌داد.
-  if (s.pdf_path) {
-    await sendDoc(ctx, s.pdf_path, "جزوه.pdf", { caption: "📕 جزوهٔ این جلسه" });
+  // `bale-upload.ts`. پیش‌تر اینجا `.catch(() => {})` بود و کاربر بله جزوه را
+  // بی‌صدا از دست می‌داد.
+  if (s.pdf_path && fs.existsSync(s.pdf_path)) {
+    await sendDoc(ctx, s.pdf_path, `${s.title ?? "جزوه"}.pdf`, { caption: S.CAPTION.notes });
   }
-  // PDF ترجیح دارد چون فایل متنی روی موبایل خوانده نمی‌شود؛ `pdf/transcript.ts`.
-  if (s.transcript_pdf && fs.existsSync(s.transcript_pdf)) {
-    await sendDoc(ctx, s.transcript_pdf, "رونوشت کامل.pdf", { caption: "📄 رونوشت کامل" });
-  } else if (s.transcript_txt) {
-    await sendDoc(ctx, transcriptBytes(s.transcript_txt), "رونوشت کامل.txt", {
-      caption: "📄 رونوشت کامل",
+
+  // کلاس دقیقه‌به‌دقیقه، متن کامل و زیرنویس: پشتِ همان دکمه‌های مالک.
+  const more = moreKeyboard(fresh);
+  if (more) {
+    await ctx.reply(S.MORE_PROMPT, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: more,
     });
-  }
-  if (s.transcript_srt && fs.existsSync(s.transcript_srt)) {
-    await sendDoc(ctx, s.transcript_srt, "رونوشت زمان‌دار.srt", { caption: "⏱ نسخهٔ زمان‌دار" });
   }
 }
 
 export interface JoinOutcome {
   ok: boolean;
+  /**
+   * پیامی که صدازننده باید بفرستد — **خالی** وقتی پیوستن موفق بوده، چون
+   * تأییدش خودش پیش از تحویل رفته (چرایی در `handleJoin`).
+   */
   message: string;
   session?: SessionRow;
   /**
@@ -360,8 +395,10 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
   } catch (e) {
     if (e instanceof AlreadyMember) {
       const s = getSession(sessionId);
+      // خبر اول، بعد فایل‌ها — همان قاعدهٔ پایین.
+      await ctx.reply(S.JOIN_AGAIN, { parse_mode: "HTML" });
       if (s) await deliverSession(ctx, s);
-      return { ok: true, message: "این جلسه از قبل مال خودته — دوباره فرستادم 👍" };
+      return { ok: true, message: "" };
     }
     if (e instanceof InsufficientCredit) {
       /**
@@ -375,7 +412,7 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
       return {
         ok: false,
         message: S.lowBalanceMessage(e.needed, e.balance),
-        keyboard: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
+        keyboard: new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup"),
       };
     }
     if (e instanceof NotShareable) return { ok: false, message: e.message };
@@ -383,13 +420,24 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
   }
 
   const s = getSession(sessionId)!;
+
+  /**
+   * **تأییدِ کوتاه پیش از هر فایلی.**
+   *
+   * پیش‌تر «گرفتیش، n سکه کم شد» آخرِ همهٔ پیام‌ها می‌آمد؛ یعنی هم‌کلاسی چند
+   * پیام و فایل می‌گرفت بی‌آنکه بداند پولی رفت یا نه، و خبر زیرِ همه گم می‌شد.
+   * پول اولین سؤالِ کسی است که دکمهٔ «بگیرش» را زده.
+   */
+  await ctx.reply(S.joinedMessage(result.free ? 0 : costCoins(result.chargedSec)), {
+    parse_mode: "HTML",
+  });
   await deliverSession(ctx, s);
 
   // خبر به مالک که سهمش برگشت — این همان چیزی است که آدم را ترغیب می‌کند
   // لینک را پخش کند، پس باید دیده شود.
   if (result.ownerRefundSec > 0) {
     const tail = result.capJustReached
-      ? `\n\n<b>نصفِ هزینه برگشت.</b> از این به بعد هم‌کلاسی‌ها رایگان برش می‌دارن.`
+      ? `\n\n<b>نصف هزینه برگشت.</b> از این به بعد برای بقیه مجانیه.`
       : "";
     /**
      * ⚠️ اینجا `ctx.api.sendMessage(result.ownerTgId, …)` بود و غلط بود.
@@ -406,17 +454,12 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
     await notifyUser(
       result.ownerTgId,
       `💰 <b>${fmtCost(result.ownerRefundSec)}</b> برگشت به حسابت!\n\n` +
-        `یکی «${escapeHtml(s.title ?? "کلاس")}» رو برداشت.${tail}`,
+        `یکی از بچه‌ها «${escapeHtml(s.title ?? "کلاس")}» رو گرفت.${tail}`,
     ).catch(() => {});
   }
 
-  return {
-    ok: true,
-    message: result.free
-      ? "✅ گرفتیش! سهم تو ۰ — هزینهٔ این جلسه قبلاً حساب شده."
-      : `✅ گرفتیش! <b>${fmtCost(result.chargedSec)}</b> کم شد.`,
-    session: s,
-  };
+  // پیام همین بالا رفته؛ خالی یعنی صدازننده چیزی اضافه نفرستد.
+  return { ok: true, message: "", session: s };
 }
 
 /** فرستنده پس از اتمام کار، به‌عنوان مالک با کل هزینه ثبت می‌شود. */
