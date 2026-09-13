@@ -41,7 +41,7 @@ import { setShareEnabled, setShareTarget } from "../billing/sharing.js";
 import { history } from "../billing/ledger.js";
 import {
   createCourse, createSession, getCourse, getSession, getUser, listCourses, listSessions,
-  sessionReport, updateSession, isTranscriptOnly,
+  sessionReport, updateSession, isTranscriptOnly, db,
 } from "../db/index.js";
 import { identitiesOf } from "../db/identity.js";
 
@@ -429,6 +429,52 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
      */
     const prog = uploads.get(uploadKey(uid, id));
     return json(res, 200, { received: prog ? contiguous(prog) : 0 });
+  }
+
+  // ─── فایلِ آپلودشده‌ای که هنوز تأیید نشده ─────────────────────────────────
+  //
+  // **چرا لازم شد:** آپلودِ مینی‌اپ جلسه را `queued` و با فایلش نگه می‌دارد
+  // تا کاربر هزینه را تأیید کند. ولی مینی‌اپ شناسه‌اش را فقط در یک متغیرِ
+  // صفحه داشت؛ کاربری که سکه‌اش کم بود و برای شارژ بیرون رفت، دیگر راهی به
+  // همان فایل نداشت و باید دوباره آپلودش می‌کرد — روی اینترنت موبایل.
+  //
+  // `GET /api/sessions` این را نمی‌گوید: نه نشان می‌دهد فایل هنوز هست، نه
+  // فرق می‌گذارد میان «تأییدنشده» و «تأییدشده و در صفِ پشتِ کار دیگر» — که
+  // هر دو `queued`اند. ملاکِ دومی **رزرو در دفتر** است، همان ملاکی که
+  // `orphanedQueued` هم دارد.
+  //
+  // فقط‌خواندنی، فقط جلسهٔ خودِ کاربر، فقط تازه‌ترینش.
+  if (url.pathname === "/api/uploads/pending" && req.method === "GET") {
+    const uid = requireUser(req, res);
+    if (uid === null) return;
+    const row = db
+      .prepare(
+        `SELECT s.id AS id, s.original_file AS file
+           FROM sessions s
+          WHERE s.tg_id = ? AND s.status = 'queued' AND s.download_route = 'web'
+            AND s.original_file IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM credit_ledger x WHERE x.session_id = s.id)
+          ORDER BY s.created_at DESC LIMIT 1`,
+      )
+      .get(uid) as { id: string; file: string } | undefined;
+    if (!row || !fs.existsSync(row.file)) return json(res, 200, { pending: null });
+    let sec = 0;
+    try {
+      sec = Math.round((await probe(row.file)).durationMs / 1000);
+    } catch {
+      return json(res, 200, { pending: null });
+    }
+    if (sec <= 0) return json(res, 200, { pending: null });
+    const u = getUser(uid)!;
+    return json(res, 200, {
+      pending: {
+        sessionId: row.id,
+        durationSec: sec,
+        costCoins: costCoins(sec),
+        haveCoins: balanceCoins(u.credit_sec),
+        enough: u.credit_sec >= sec,
+      },
+    });
   }
 
   // مسیرهای پارامتردار
