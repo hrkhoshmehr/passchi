@@ -23,7 +23,7 @@
  */
 process.env.BOT_TOKEN ||= "111:aaa";
 
-const { createSession, updateSession, getSession, upsertUser } = await import("../src/db/index.ts");
+const { createSession, updateSession, getSession, upsertUser, db } = await import("../src/db/index.ts");
 const { reserve, commit, currentBalance, danglingReservations } = await import(
   "../src/billing/ledger.ts"
 );
@@ -84,6 +84,45 @@ const afterFirst = currentBalance(USER);
 const second = recoverInterrupted();
 check("بار دوم چیزی برای جمع‌کردن نیست", second === 0, String(second));
 check("موجودی دوبار زیاد نشد", currentBalance(USER) === afterFirst, String(currentBalance(USER)));
+
+// ─── ۵) آپلودِ مینی‌اپ که منتظرِ شارژ است، یتیم نیست ────────────────────────
+//
+// مینی‌اپ آپلودِ تأییدنشده را بعد از شارژ دوباره پیشنهاد می‌دهد
+// (`GET /api/uploads/pending`) و به دانشجو می‌گوید «فایلت همین‌جا می‌مونه».
+// پیش از این رفع، هر ری‌استارت — از جمله هر استقرار — همان جلسه را `error`
+// می‌کرد و آن قول دروغ درمی‌آمد. ولی معافیت سقف دارد: `expiredAudio` جلسهٔ
+// `queued` را پاک نمی‌کند، پس آپلودی که از `KEEP_AUDIO_DAYS` گذشته باید مثل
+// قبل جمع شود تا فایلش روزی پاک شود.
+const fs = (await import("node:fs")).default;
+const os = (await import("node:os")).default;
+const path = (await import("node:path")).default;
+const { config } = await import("../src/config.ts");
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "passchi-orphan-"));
+const liveFile = path.join(tmpDir, "upload.m4a");
+fs.writeFileSync(liveFile, "x");
+
+const seedQueued = (id, route, file, ageSql) => {
+  createSession(id, USER, null);
+  db.prepare(
+    `UPDATE sessions SET status = 'queued', download_route = ?, original_file = ?, created_at = datetime('now', ?) WHERE id = ?`,
+  ).run(route, file, ageSql, id);
+};
+const webWaiting = "0f0000000001";
+const webGone = "0f0000000002";
+const webStale = "0f0000000003";
+const botStuck = "0f0000000004";
+seedQueued(webWaiting, "web", liveFile, "-2 hours");
+seedQueued(webGone, "web", path.join(tmpDir, "missing.m4a"), "-2 hours");
+seedQueued(webStale, "web", liveFile, `-${config.KEEP_AUDIO_DAYS + 1} days`);
+seedQueued(botStuck, "bot-api", null, "-2 hours");
+
+const orphanCount = recoverInterrupted();
+check("آپلودِ مینی‌اپ با فایلِ موجود در صف ماند", getSession(webWaiting).status === "queued", getSession(webWaiting).status);
+check("آپلودِ مینی‌اپِ بی‌فایل جمع شد", getSession(webGone).status === "error", getSession(webGone).status);
+check("آپلودِ مینی‌اپِ کهنه‌تر از مهلتِ صوت جمع شد", getSession(webStale).status === "error", getSession(webStale).status);
+check("جلسهٔ گیرکردهٔ ربات مثل قبل جمع شد", getSession(botStuck).status === "error", getSession(botStuck).status);
+check("دقیقاً سه جلسه جمع شد", orphanCount === 3, String(orphanCount));
+fs.rmSync(tmpDir, { recursive: true, force: true });
 
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
 process.exit(bad === 0 ? 0 : 1);

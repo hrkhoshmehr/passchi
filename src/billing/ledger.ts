@@ -15,6 +15,8 @@
  */
 
 import { db } from "../db/index.js";
+import fs from "node:fs";
+import { config } from "../config.js";
 import { logger } from "../util/logger.js";
 
 export type LedgerReason =
@@ -326,11 +328,21 @@ export function totalShareRefunds(tgId: number): number {
  * ممکن است واقعاً در صف باشد، و جمع‌کردنش یعنی کشتنِ کارِ در جریان. این
  * تابع در راه‌اندازی صدا زده می‌شود که صف حافظه خالی است، ولی مهلت را
  * نگه می‌داریم تا اگر روزی جای دیگری هم صدا زده شد بی‌خطر بماند.
+ *
+ * **آپلودِ مینی‌اپی که فایلش هنوز هست، یتیم نیست.** مینی‌اپ فایل را آپلود و
+ * جلسه را `queued` می‌گذارد تا دانشجو هزینه را تأیید کند؛ اگر سکه‌اش کم باشد
+ * برای شارژ بیرون می‌رود و `GET /api/uploads/pending` با همین ملاک همان فایل را
+ * دوباره پیشنهاد می‌دهد. بی این استثنا هر ری‌استارت — از جمله هر استقرار —
+ * همان جلسه را `error` می‌کرد و قولِ «فایلت همین‌جا می‌مونه» دروغ درمی‌آمد.
+ *
+ * استثنا سقف دارد: `expiredAudio` جلسهٔ `queued` را پاک نمی‌کند، پس آپلودی که
+ * از `KEEP_AUDIO_DAYS` گذشته مثل قبل جمع می‌شود تا فایلش بالاخره پاک شود.
  */
 export function orphanedQueued(olderThanMinutes = 30): Array<{ id: string; tgId: number }> {
-  return db
+  const rows = db
     .prepare(
-      `SELECT s.id AS id, s.tg_id AS tgId
+      `SELECT s.id AS id, s.tg_id AS tgId, s.download_route AS route, s.original_file AS file,
+              julianday('now') - julianday(s.created_at) AS ageDays
          FROM sessions s
         WHERE s.status = 'queued'
           AND s.created_at < datetime('now', ?)
@@ -341,7 +353,16 @@ export function orphanedQueued(olderThanMinutes = 30): Array<{ id: string; tgId:
     .all(`-${Math.max(1, Math.round(olderThanMinutes))} minutes`) as unknown as Array<{
     id: string;
     tgId: number;
+    route: string | null;
+    file: string | null;
+    ageDays: number;
   }>;
+  return rows
+    .filter(
+      (r) =>
+        !(r.route === "web" && r.file && r.ageDays < config.KEEP_AUDIO_DAYS && fs.existsSync(r.file)),
+    )
+    .map(({ id, tgId }) => ({ id, tgId }));
 }
 
 export function danglingReservations(): Array<{
