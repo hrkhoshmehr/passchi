@@ -91,6 +91,20 @@ const mk = (sid, sec) => {
   check("سکه کم: هیچ سکه‌ای رزرو نشد", getUser(U).credit_sec === 50, String(getUser(U).credit_sec));
 }
 
+// ─── ۱ب) مسیری که بررسیِ بالای `resumeSession` را دور می‌زند ────────────────
+//
+// «🎁 اولین صوت رایگان» آن بررسی را عمداً رد می‌کند (رایگان هنوز واریز نشده).
+// اگر رایگان رد شود و سکه کم باشد، فقط بررسیِ **پیش از شروع** جلوی بایگانی و
+// بن‌بستِ `reserve` را می‌گیرد — همان بررسی که پیش‌تر نبود.
+{
+  const sid = mk("aaaa0000aaaa0004", 100);
+  const cs = await press(`ff:${sid}`, PID);
+  check("رایگانِ ردشده و سکهٔ کم: صوت به بایگانی نرفت", archived(cs).length === 0, cs.map((c) => c.method).join(" "));
+  check("… «پرداخت همین فایل» روی صفحه", btns(cs).includes(`pf:${sid}`), btns(cs).join(" "));
+  check("… و جلسه منتظرِ شارژ است", getSession(sid).status === "awaiting_credit", getSession(sid).status);
+  check("… و هیچ سکه‌ای رزرو نشد", getUser(U).credit_sec === 50, String(getUser(U).credit_sec));
+}
+
 // ─── ۵) درس، پیش از شروع ─────────────────────────────────────────────────────
 {
   const c = createCourse(U, "ریاضی مهندسی", null);
