@@ -39,6 +39,7 @@ import { db } from "../db/index.js";
 import { logger } from "../util/logger.js";
 import { SHARE_TARGET, SHARE_TARGET_MIN, coinsToSec, costCoins, shareBack } from "./coins.js";
 import { InsufficientCredit, move } from "./ledger.js";
+import { groupBuyOwnerPaidSec } from "./group-buy.js";
 
 export interface Member {
   session_id: string;
@@ -117,6 +118,18 @@ export function setShareTarget(sessionId: string, people: number): void {
   );
 }
 
+/**
+ * هزینه‌ای که سهم و سقفِ برگشت از آن حساب می‌شود.
+ *
+ * برای جلسهٔ معمولی کلِ هزینه است، چون مالک کلش را داده. برای **خرید
+ * گروهی** فقط آنچه مالک خودش داد: او یک سهم داده، و اگر مبنا کلِ جلسه بود
+ * هم‌کلاسی‌های دیرآمده تا نصفِ **کل** هزینه به او برمی‌گرداندند — بیش از
+ * آنچه پرداخته، یعنی سود. همان سقفِ پنجاه درصد می‌ماند، روی سهمِ خودش.
+ */
+function shareBasisSec(s: { id: string; original_ms: number }): number {
+  return groupBuyOwnerPaidSec(s.id) ?? Math.round(s.original_ms / 1000);
+}
+
 interface SessionCost {
   id: string;
   tg_id: number;
@@ -149,7 +162,7 @@ export function joinSession(sessionId: string, tgId: number): JoinResult {
   if (!s.share_enabled) throw new NotShareable("صاحب این جلسه اشتراک‌گذاری را روشن نکرده است.");
   if (isMember(sessionId, tgId)) throw new AlreadyMember();
 
-  const costSec = Math.round(s.original_ms / 1000);
+  const costSec = shareBasisSec(s);
   const totalCoins = costCoins(costSec);
   const { seat: seatCoins, cap: capCoins } = shareBack(costSec, s.share_target ?? SHARE_TARGET);
   const seatSec = coinsToSec(seatCoins);
@@ -245,7 +258,7 @@ export function shareStatus(sessionId: string): ShareStatus | null {
     .get(sessionId) as unknown as SessionCost | undefined;
   if (!s) return null;
 
-  const costSec = Math.round(s.original_ms / 1000);
+  const costSec = shareBasisSec(s);
   const totalCoins = costCoins(costSec);
   const target = s.share_target ?? SHARE_TARGET;
   const { seat, cap } = shareBack(costSec, target);

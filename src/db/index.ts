@@ -236,6 +236,42 @@ CREATE TABLE IF NOT EXISTS pending_joins (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- خرید گروهی: هزینهٔ یک جلسه پیش از پردازش، برابر میان چند نفر.
+--
+-- تا پرشدن هیچ سکه‌ای خرج نمی‌شود؛ سهم هر نفر فقط رزرو است و سطرش در
+-- group_buy_seats است. پر که شد کار شروع می‌شود، و اگر تا expires_at پر
+-- نشد همهٔ رزروها برمی‌گردند. origin می‌گوید جلسه پس از انقضا به کدام
+-- وضعیت برگردد: ربات منتظر شارژ، مینی‌اپ آپلودِ تأییدنشده.
+CREATE TABLE IF NOT EXISTS group_buys (
+  session_id     TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  owner_id       INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+  seats          INTEGER NOT NULL,
+  seat_sec       INTEGER NOT NULL,
+  cost_sec       INTEGER NOT NULL,
+  origin         TEXT NOT NULL,
+  -- open | started | done | failed | expired | cancelled
+  status         TEXT NOT NULL,
+  -- آنچه مالک در پایان واقعاً داد؛ مبنای سقفِ برگشتِ شریک‌شدنِ پس از تحویل
+  owner_paid_sec INTEGER,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at     TEXT NOT NULL,
+  closed_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_group_buys_open ON group_buys(status, expires_at);
+
+-- هر نفر یک سطر. reserved_sec برای مالک می‌تواند بیش از یک سهم باشد، وقتی
+-- «بقیه‌اش رو خودم می‌دم» را زده. gift_sec بخشی از رزرو است که با سکهٔ
+-- هدیه داده شده؛ سقفِ هفتگی روی جمعِ همین ستون است.
+CREATE TABLE IF NOT EXISTS group_buy_seats (
+  session_id   TEXT NOT NULL REFERENCES group_buys(session_id) ON DELETE CASCADE,
+  tg_id        INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+  role         TEXT NOT NULL,
+  reserved_sec INTEGER NOT NULL,
+  gift_sec     INTEGER NOT NULL DEFAULT 0,
+  joined_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (session_id, tg_id)
+);
 `);
 
 
@@ -395,9 +431,15 @@ export function mergeCourseTerms(courseId: number, newTerms: string[]): string[]
  * «بله»ی کاربریم. فایل روی دیسک است و هیچ سکه‌ای هنوز رزرو نشده.
  *
  * هیچ‌کدام از این دو در صف نیستند، پس `orphanedQueued` سراغشان نمی‌رود.
+ *
+ * `awaiting_group` یعنی خرید گروهیِ باز: سهمِ چند نفر **رزرو** شده و منتظر
+ * بقیه‌ایم. عمداً وضعیتِ جداست، چون هر جایی که «رزروِ بی‌تسویه» را آویزان
+ * می‌شمارد (`danglingReservations`) یا «`queued`ِ بی‌رزرو» را آپلودِ
+ * تأییدنشده (`orphanedQueued`، `GET /api/uploads/pending`) باید از آن بگذرد.
  */
 export type SessionStatus =
-  | "queued" | "awaiting_credit" | "awaiting_confirm" | "preprocess" | "stt" | "analyze" | "pdf"
+  | "queued" | "awaiting_credit" | "awaiting_confirm" | "awaiting_group"
+  | "preprocess" | "stt" | "analyze" | "pdf"
   | "done" | "error" | "cancelled";
 
 export interface SessionRow {
@@ -491,6 +533,22 @@ export function takePendingJoin(tgId: number, maxAgeDays = 7): string | null {
   return row?.session_id ?? null;
 }
 
+/**
+ * شرطِ SQL برای «این جلسه هیچ سکهٔ رزروشدهٔ بازی ندارد».
+ *
+ * پیش‌تر ملاک «هیچ سطری در دفتر ندارد» بود. خرید گروهیِ مینی‌اپ که پر نشود
+ * سکه‌هایش برمی‌گردد و جلسه به `queued` برمی‌گردد تا مالک خودش بپردازد — ولی
+ * سطرهای رزرو و برگشتش در دفتر مانده. با ملاکِ قدیمی همان فایل دیگر هرگز به
+ * او پیشنهاد نمی‌شد. ملاکِ درست خالصِ رزرو و برگشت است، و نبودنِ تسویه.
+ */
+export function unreservedSql(alias: string): string {
+  return (
+    `COALESCE((SELECT SUM(x.delta_sec) FROM credit_ledger x WHERE x.session_id = ${alias}.id ` +
+    `AND x.reason IN ('reserve', 'refund')), 0) >= 0 ` +
+    `AND NOT EXISTS (SELECT 1 FROM credit_ledger x WHERE x.session_id = ${alias}.id AND x.reason = 'commit')`
+  );
+}
+
 /** تازه‌ترین آپلودِ مینی‌اپ که هنوز تأیید نشده — همان ملاکِ `GET /api/uploads/pending`. */
 export function pendingWebUploadId(tgId: number): string | null {
   const row = db
@@ -498,7 +556,7 @@ export function pendingWebUploadId(tgId: number): string | null {
       `SELECT s.id AS id, s.original_file AS file FROM sessions s
         WHERE s.tg_id = ? AND s.status = 'queued' AND s.download_route = 'web'
           AND s.original_file IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM credit_ledger x WHERE x.session_id = s.id)
+          AND ${unreservedSql("s")}
         ORDER BY s.created_at DESC LIMIT 1`,
     )
     .get(tgId) as unknown as { id: string; file: string } | undefined;

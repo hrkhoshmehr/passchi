@@ -14,7 +14,7 @@
  * خطا باز می‌کند.
  */
 
-import { db } from "../db/index.js";
+import { db, unreservedSql } from "../db/index.js";
 import fs from "node:fs";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
@@ -62,39 +62,60 @@ const writeRow = db.prepare(
    VALUES (?, ?, ?, ?, ?, ?)`,
 );
 
+/** همان حرکت، بی تراکنشِ خودش — فقط از داخل `move` یا `atomic` صدا زده می‌شود. */
+function applyMove(opt: MoveOptions): number {
+  const row = balanceOf.get(opt.tgId) as unknown as { credit_sec: number } | undefined;
+  if (!row) throw new Error(`کاربر ${opt.tgId} وجود ندارد.`);
+
+  const balance = row.credit_sec;
+  const next = balance + opt.deltaSec;
+  if (next < 0) {
+    if (opt.strict !== false) throw new InsufficientCredit(balance, -opt.deltaSec);
+  }
+  const clamped = Math.max(0, next);
+  const actualDelta = clamped - balance;
+
+  applyDelta.run(clamped, opt.tgId);
+  if (actualDelta < 0) bumpUsed.run(-actualDelta, opt.tgId);
+  writeRow.run(
+    opt.tgId,
+    actualDelta,
+    clamped,
+    opt.reason,
+    opt.sessionId ?? null,
+    opt.note ?? null,
+  );
+  logger.debug(
+    { tgId: opt.tgId, delta: actualDelta, balance: clamped, reason: opt.reason },
+    "credit move",
+  );
+  return clamped;
+}
+
 /** یک حرکت اعتبار، اتمیک، با سطر دفتر کل در همان تراکنش. */
 export function move(opt: MoveOptions): number {
-  const run = db.prepare("BEGIN IMMEDIATE");
-  run.run();
+  return atomic((m) => m(opt));
+}
+
+export type Mover = (opt: MoveOptions) => number;
+
+/**
+ * چند حرکت و چند نوشتنِ دیگر، **یک** تراکنش.
+ *
+ * خرید گروهی یک جلسه را میان چند حساب پخش می‌کند: ثبتِ صندلی و رزروِ سکهٔ
+ * همان نفر، یا برگشتِ سکهٔ همهٔ نفرات و بستنِ گروه. اگر هرکدام تراکنشِ خودش
+ * را داشت، مردنِ پروسه وسطِ کار گروهی نیمه‌باز می‌گذاشت که یا سکه‌اش دو بار
+ * برمی‌گشت یا هرگز. همان قاعدهٔ `moveBetween`، برای هر تعداد حرکت.
+ *
+ * `fn` حرکت را از آرگومانش می‌گیرد نه از بیرون، تا نوشتنِ بی‌تراکنش در دسترس
+ * هیچ جای دیگری نباشد. هر پرتابی کلِ کار را برمی‌گرداند.
+ */
+export function atomic<T>(fn: (m: Mover) => T): T {
+  db.prepare("BEGIN IMMEDIATE").run();
   try {
-    const row = balanceOf.get(opt.tgId) as unknown as { credit_sec: number } | undefined;
-    if (!row) throw new Error(`کاربر ${opt.tgId} وجود ندارد.`);
-
-    const balance = row.credit_sec;
-    const next = balance + opt.deltaSec;
-    if (next < 0) {
-      if (opt.strict !== false) throw new InsufficientCredit(balance, -opt.deltaSec);
-    }
-    const clamped = Math.max(0, next);
-    const actualDelta = clamped - balance;
-
-    applyDelta.run(clamped, opt.tgId);
-    if (actualDelta < 0) bumpUsed.run(-actualDelta, opt.tgId);
-    writeRow.run(
-      opt.tgId,
-      actualDelta,
-      clamped,
-      opt.reason,
-      opt.sessionId ?? null,
-      opt.note ?? null,
-    );
-
+    const out = fn(applyMove);
     db.prepare("COMMIT").run();
-    logger.debug(
-      { tgId: opt.tgId, delta: actualDelta, balance: clamped, reason: opt.reason },
-      "credit move",
-    );
-    return clamped;
+    return out;
   } catch (e) {
     db.prepare("ROLLBACK").run();
     throw e;
@@ -346,9 +367,7 @@ export function orphanedQueued(olderThanMinutes = 30): Array<{ id: string; tgId:
          FROM sessions s
         WHERE s.status = 'queued'
           AND s.created_at < datetime('now', ?)
-          AND NOT EXISTS (
-            SELECT 1 FROM credit_ledger x WHERE x.session_id = s.id
-          )`,
+          AND ${unreservedSql("s")}`,
     )
     .all(`-${Math.max(1, Math.round(olderThanMinutes))} minutes`) as unknown as Array<{
     id: string;
@@ -370,25 +389,45 @@ export function danglingReservations(): Array<{
   tgId: number;
   reservedSec: number;
 }> {
+  /**
+   * **حسابِ خالصِ هر نفر در هر جلسه**، نه «آیا جلسه هیچ برگشتی دارد».
+   *
+   * نسخهٔ قبلی جلسه‌ای را که *یک* سطر `refund` یا `commit` داشت کلاً رها
+   * می‌کرد. با خرید گروهی دو دام از همین درمی‌آمد: گروهی که پر نشد و سکه‌اش
+   * برگشت و بعد مالک تنها پرداخت — سطرِ برگشتِ قدیمی رزروِ تازه را پنهان
+   * می‌کرد و ری‌استارت وسطِ کار سکه‌اش را می‌بلعید؛ و چند نفر روی یک جلسه،
+   * که تسویهٔ یکی رزروِ بقیه را پنهان می‌کرد. همان دام برای «دوباره تلاش کن»
+   * پس از شکست هم بود.
+   *
+   * پس خالصِ رزرو و برگشتِ **همان نفر** سنجیده می‌شود، و تسویه فقط وقتی حساب
+   * را می‌بندد که پس از آخرین رزروِ همان نفر نوشته شده باشد.
+   *
+   * ⚠️ `commit` وقتی تفاوت صفر باشد **هیچ سطری نمی‌نویسد**، پس نبودِ سطر
+   * به‌تنهایی یعنی «ناتمام» نیست. جلسه‌ای که به سرانجام رسیده هرگز آویزان
+   * نیست، هر چه در دفتر باشد.
+   *
+   * `awaiting_group` هم آویزان نیست: رزروِ گروهی که هنوز پر نشده **عمداً**
+   * باز است و تا ۴۸ ساعت باز می‌ماند. بدون این استثنا هر ری‌استارت — از جمله
+   * هر استقرار — همهٔ گروه‌های باز را خالی می‌کرد.
+   */
   return db
     .prepare(
-      `SELECT r.session_id AS sessionId, r.tg_id AS tgId, -SUM(r.delta_sec) AS reservedSec
+      `SELECT r.session_id AS sessionId, r.tg_id AS tgId,
+              -SUM(CASE WHEN r.reason IN ('reserve', 'refund') THEN r.delta_sec ELSE 0 END) AS reservedSec
          FROM credit_ledger r
-        WHERE r.reason = 'reserve' AND r.session_id IS NOT NULL
+         JOIN sessions s ON s.id = r.session_id
+        WHERE r.session_id IS NOT NULL
+          AND s.status NOT IN ('done', 'error', 'cancelled', 'awaiting_group')
+        GROUP BY r.session_id, r.tg_id
+       HAVING reservedSec > 0
           AND NOT EXISTS (
-            SELECT 1 FROM credit_ledger x
-             WHERE x.session_id = r.session_id
-               AND x.reason IN ('refund', 'commit')
-          )
-          -- ⚠️ commit وقتی تفاوت صفر باشد **هیچ سطری نمی‌نویسد**، پس
-          -- نبودِ سطر به‌تنهایی یعنی «ناتمام» نیست. جلسه‌ای که به سرانجام
-          -- رسیده هرگز آویزان نیست، هر چه در دفتر باشد.
-          AND EXISTS (
-            SELECT 1 FROM sessions s
-             WHERE s.id = r.session_id
-               AND s.status NOT IN ('done', 'error', 'cancelled')
-          )
-        GROUP BY r.session_id, r.tg_id`,
+            SELECT 1 FROM credit_ledger c
+             WHERE c.session_id = r.session_id AND c.tg_id = r.tg_id AND c.reason = 'commit'
+               AND c.id > (
+                 SELECT MAX(m.id) FROM credit_ledger m
+                  WHERE m.session_id = r.session_id AND m.tg_id = r.tg_id AND m.reason = 'reserve'
+               )
+          )`,
     )
     .all() as unknown as Array<{ sessionId: string; tgId: number; reservedSec: number }>;
 }
