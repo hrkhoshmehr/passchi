@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
+import { JobFailure } from "../util/job-failure.js";
 import {
   analyze,
   buildKeepRegions,
@@ -134,14 +135,28 @@ function assessQuality(m: SampledMeasurement, info: AudioInfo): QualityReport {
   const clipping = truePeakDb !== null && Number.isFinite(truePeakDb) && truePeakDb > -0.3;
   const tooQuiet = speechLufs !== null && Number.isFinite(speechLufs) && speechLufs < -34;
 
+  /**
+   * هشدارها **توصیهٔ ضبط** نوشته می‌شوند، نه گزارشِ فنی.
+   *
+   * اولینشان زیر خلاصهٔ کلاس به دانشجو نشان داده می‌شود. «clipping» و «بیت‌ریت»
+   * برای او هیچ معنایی ندارد — و واژهٔ لاتین وسط خط فارسی روی گوشی جابه‌جا
+   * چیده می‌شود. چیزی که از این هشدار به کارش می‌آید فقط این است که دفعهٔ بعد
+   * گوشی را کجا بگذارد. همین متن به مدل هم می‌رود و معنایش برای او هم کافی است.
+   *
+   * نرخ نمونه‌برداری و بیت‌ریتِ پایین یک توصیه‌اند نه دو تا: دانشجو هر دو را
+   * با یک کار درست می‌کند (کیفیت برنامهٔ ضبط را بالا ببرد).
+   */
   if (clipping)
-    warnings.push("سیگنال در منبع بریده (clipping) شده — بلندترین قسمت‌ها اعوجاج دارند.");
+    warnings.push("صدا جاهایی ترکیده و خش داره؛ دفعهٔ بعد گوشی رو خیلی نزدیک بلندگو نذار.");
   if (tooQuiet)
-    warnings.push("سطح گفتار خیلی پایین است — گوشی احتمالاً داخل کیف یا دور از استاد بوده.");
-  if (info.sampleRate > 0 && info.sampleRate < 12000)
-    warnings.push("نرخ نمونه‌برداری منبع پایین است؛ دقت تشخیص کلمات فنی کمتر خواهد بود.");
-  if (info.bitRate > 0 && info.bitRate < 16000)
-    warnings.push("بیت‌ریت منبع خیلی پایین است؛ کیفیت متن استخراجی محدود می‌شود.");
+    warnings.push("صدای ضبط خیلی آروم بود؛ دفعهٔ بعد گوشی رو رو میز و نزدیک‌تر بذار، نه تو کیف.");
+  const lowSampleRate = info.sampleRate > 0 && info.sampleRate < 12000;
+  const lowBitRate = info.bitRate > 0 && info.bitRate < 16000;
+  if (lowSampleRate || lowBitRate)
+    warnings.push(
+      "کیفیت ضبط پایین بود و ممکنه بعضی اصطلاح‌ها درست درنیومده باشه؛ " +
+        "اگه برنامهٔ ضبطت تنظیم کیفیت داره، بالاترینش رو انتخاب کن.",
+    );
 
   if (m.sampledSilenceRatio > 0.4)
     notes.push("بخش زیادی از نمونه‌ها سکوت بود — شاید ضبط جای اشتباهی روشن مانده.");
@@ -182,9 +197,15 @@ export async function preprocess(inputFile: string, jobId: string): Promise<Prep
   const steps: string[] = [];
   const source = await probe(inputFile);
 
-  if (source.durationMs <= 0) throw new Error("مدت فایل صوتی قابل تشخیص نیست.");
+  // نوعِ شکست همراه خطا می‌رود تا ربات به دانشجو بگوید با فایلش چه کند؛
+  // متنِ خطا برای لاگ و مسیر وب همان است که بود. چرایی در `util/job-failure.ts`.
+  if (source.durationMs <= 0)
+    throw new JobFailure("unreadable", "مدت فایل صوتی قابل تشخیص نیست.");
   if (source.durationMs > config.MAX_AUDIO_MINUTES * 60_000)
-    throw new Error(`فایل طولانی‌تر از سقف مجاز (${config.MAX_AUDIO_MINUTES} دقیقه) است.`);
+    throw new JobFailure(
+      "too_long",
+      `فایل طولانی‌تر از سقف مجاز (${config.MAX_AUDIO_MINUTES} دقیقه) است.`,
+    );
 
   const highpassHz = 80;
   const analyzeOpts = {

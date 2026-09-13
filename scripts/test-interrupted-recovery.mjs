@@ -68,11 +68,57 @@ check(
   dangling.join(","),
 );
 
+// فایلِ جلسهٔ مُرده روی دیسک است، پس خبرش باید دکمهٔ «دوباره» داشته باشد.
+const fs = await import("node:fs");
+const os = await import("node:os");
+const path = await import("node:path");
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "passchi-recover-"));
+const deadFile = path.join(tmp, "class.m4a");
+fs.writeFileSync(deadFile, "x");
+updateSession(dead, { original_file: deadFile });
+
+// جلسهٔ مُردهٔ دوم، که فایلش دیگر نیست — خبرش نباید دکمهٔ بی‌اثر داشته باشد.
+const gone = "gonesess0001";
+createSession(gone, USER, null);
+updateSession(gone, { status: "stt", original_file: path.join(tmp, "missing.m4a") });
+reserve(USER, 120, gone);
+const beforeRecoverAll = currentBalance(USER);
+
 // ─── ۳) جمع‌کردن ────────────────────────────────────────────────────────────
-const n = recoverInterrupted();
+/** جاسوسِ خبررسانی — ربات واقعی بالا نمی‌آید. */
+const notified = [];
+const spy = async (userId, text, extra = {}) => {
+  notified.push({ userId, text, extra });
+  return true;
+};
+const n = recoverInterrupted(spy);
+check("سکهٔ هر دو جلسهٔ مُرده برگشت", currentBalance(USER) === beforeRecoverAll + 600 + 120);
+
+// ─── ۳ب) دانشجو خبردار شد ───────────────────────────────────────────────────
+//
+// باگی که این بخش نگه می‌دارد: سکه برمی‌گشت ولی هیچ پیامی نمی‌رفت، و دانشجو
+// تا ابد منتظر نتیجه‌ای می‌ماند که هرگز نمی‌آمد.
+const retryOf = (x) =>
+  (x?.extra?.reply_markup?.inline_keyboard ?? []).flat().map((b) => b.callback_data);
+const aboutDead = notified.find((x) => retryOf(x).includes(`retry:${dead}`));
+const aboutGone = notified.filter((x) => !retryOf(x).length);
+check("برای هر جلسهٔ مُرده یک خبر رفت", notified.length === 2, String(notified.length));
+check("خبر به صاحبِ جلسه رفت", notified.every((x) => x.userId === USER));
+check(
+  "خبر می‌گوید کار قطع شد و سکه برگشت",
+  notified.every((x) => x.text.includes("وسط راه قطع شد") && x.text.includes("سکه‌هات کامل برگشت")),
+);
+check("جلسه‌ای که فایلش هست دکمهٔ «دوباره» دارد", Boolean(aboutDead));
+check(
+  "جلسه‌ای که فایلش نیست دکمه ندارد و می‌گوید دوباره بفرست",
+  aboutGone.length === 1 && aboutGone[0].text.includes("دوباره همین‌جا بفرست"),
+);
+check("جلسهٔ تمام‌شده خبری نگرفت", !notified.some((x) => retryOf(x).includes(`retry:${okSess}`)));
 check("دست‌کم یک جلسه جمع شد", n >= 1, String(n));
 check(
   "سکهٔ جلسهٔ مُرده برگشت",
+  // `beforeRecover` پیش از رزروِ ۱۲۰ ثانیه‌ایِ جلسهٔ دوم گرفته شده، پس
+  // برگشتِ آن ۱۲۰ فقط همان رزرو را خنثی می‌کند.
   currentBalance(USER) === beforeRecover + 600,
   `${currentBalance(USER)} (انتظار ${beforeRecover + 600})`,
 );
@@ -81,9 +127,12 @@ check("جلسهٔ تمام‌شده دست‌نخورده ماند", getSession(
 
 // ─── ۴) اجرای دوباره نباید دوباره پول بدهد ──────────────────────────────────
 const afterFirst = currentBalance(USER);
-const second = recoverInterrupted();
+notified.length = 0;
+const second = recoverInterrupted(spy);
 check("بار دوم چیزی برای جمع‌کردن نیست", second === 0, String(second));
 check("موجودی دوبار زیاد نشد", currentBalance(USER) === afterFirst, String(currentBalance(USER)));
+check("بار دوم خبرِ تکراری نرفت", notified.length === 0, String(notified.length));
+fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log(bad === 0 ? "\nهمه سبز ✅" : `\n${bad} بررسی شکست خورد ❌`);
 process.exit(bad === 0 ? 0 : 1);

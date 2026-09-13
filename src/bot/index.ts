@@ -69,6 +69,7 @@ import { platformOf, setBaleApi, uid } from "./identity.js";
 import { sendDoc } from "./bale-upload.js";
 import { notifyUser } from "./notify.js";
 import { extractUrl, fetchUrlToFile, UrlFetchError, type FetchUrlResult } from "./fetch-url.js";
+import { JobFailure } from "../util/job-failure.js";
 
 export const bot = new Bot(
   requireKey("BOT_TOKEN"),
@@ -2636,12 +2637,19 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
             .then(() => true)
             .catch(() => false)
         : false;
+      /**
+       * متنِ خطا به دانشجو نشان داده **نمی‌شود** — در لاگ و بایگانی مانده.
+       * چرایی و سه حالتِ «مشکل از خودِ فایل است» در `jobFailedMessage`.
+       *
+       * دکمهٔ «دوباره» فقط برای شکستِ عمومی: فایلی که صدا ندارد یا از سقف
+       * بلندتر است، دوباره هم همان نتیجه را می‌دهد.
+       */
+      const kind = e instanceof JobFailure ? e.kind : null;
+      const offerRetry = canRetry && kind === null;
       await edit(
-        `❌ <b>پردازش ناموفق بود</b>\n\n${escapeHtml(message)}\n\n` +
-          "<i>سکه‌های رزروشده کامل برگشت.</i>" +
-          (canRetry ? "\n\n<i>فایلت همین‌جا نگه داشته شده — لازم نیست دوباره بفرستی.</i>" : ""),
-        canRetry
-          ? { reply_markup: new InlineKeyboard().text("🔄 دوباره تلاش کن", `retry:${sessionId}`) }
+        S.jobFailedMessage(kind, offerRetry),
+        offerRetry
+          ? { reply_markup: new InlineKeyboard().text(S.RETRY_BTN, `retry:${sessionId}`) }
           : {},
       );
     }
@@ -2736,13 +2744,8 @@ export async function sendResults(
       parse_mode: "HTML",
     });
   } else if (out.notesError) {
-    // تحلیل سالم است؛ فقط مدلِ جزوه در دسترس نبود
-    await reply(
-      ctx,
-      "⚠️ <b>جزوه ساخته نشد</b> ولی تحلیل بالا کامل است.\n\n" +
-        `<i>مدل تولید جزوه در دسترس نبود. از «${BTN.history}» می‌توانی بعداً دوباره درخواستش کنی — ` +
-        "رونویسی کش شده و دوباره هزینه‌ای ندارد.</i>",
-    );
+    // تحلیل سالم است؛ فقط جزوه نیامد. چرا متن به دکمه‌ای اشاره نمی‌کند: `NOTES_FAILED`.
+    await reply(ctx, S.NOTES_FAILED);
   }
 
   /**
