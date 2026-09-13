@@ -29,7 +29,7 @@ import {
   accessibleSessions, isMember, registerOwner, setShareEnabled, setShareTarget, shareStatus,
 } from "../billing/sharing.js";
 import {
-  handleJoin, invitationMessage, joinPreview, shareTargetKeyboard, shareToggleKeyboard,
+  SHARE_CANCEL_CB, handleJoin, invitationMessage, joinPreview, shareTargetKeyboard, shareToggleKeyboard,
 } from "./share.js";
 import {
   BTN, HOW_IT_WORKS, WELCOME, WELCOME_CB, mainKeyboard, menuActionOf, packagesKeyboard,
@@ -53,13 +53,13 @@ import {
   mintGift, refusalMessage,
 } from "./gift.js";
 import {
-  RATE_LINE, SHARE_TARGET, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtBalance, fmtCoins,
+  RATE_LINE, SHARE_TARGET, balanceCoins, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtBalance, fmtCoins,
   fmtCost, fmtToman,
 } from "../billing/coins.js";
 import {
   clearAudioPath, courseTerms, createCourse, createSession, expiredAudio,
   getCourse, getSession, getUser, isTranscriptOnly, listCourses, listSessions, pendingSessions,
-  countSessions, getGift, getTopup, listGifts, overview, pendingTopups, purgeSession, revokeGift, sessionReport,
+  countHistory, listHistory, getGift, getTopup, listGifts, overview, pendingTopups, purgeSession, revokeGift, sessionReport,
   sessionTimeMap, updateSession,
   type SessionMode,
   type SessionRow,
@@ -69,6 +69,7 @@ import { platformOf, setBaleApi, uid } from "./identity.js";
 import { sendDoc } from "./bale-upload.js";
 import { notifyUser } from "./notify.js";
 import { extractUrl, fetchUrlToFile, UrlFetchError, type FetchUrlResult } from "./fetch-url.js";
+import { JobFailure } from "../util/job-failure.js";
 
 export const bot = new Bot(
   requireKey("BOT_TOKEN"),
@@ -268,6 +269,17 @@ async function accountScreen(ctx: Context): Promise<void> {
   const u = touchUser(ctx);
   if (!u) return;
   const done = listSessions(u.tg_id, 500).filter((s) => s.status === "done").length;
+  const transferable = transferableSec(u.tg_id);
+  /**
+   * دکمه‌های حساب: شارژ، سکه دادن، پشتیبانی.
+   *
+   * «سکه بده» فقط وقتی هست که واقعاً سکهٔ خریداری‌شده‌ای برای دادن باشد —
+   * همان قاعدهٔ متنِ `accountMessage`. پشتیبانی اینجاست چون صفحهٔ حساب
+   * همان جایی است که آدم با «سکه‌ام کجا رفت؟» می‌رسد.
+   */
+  const kb = new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup");
+  if (balanceCoins(transferable) > 0) kb.row().text(S.GIVE_BTN, "give");
+  kb.row().text(BTN.support, "support");
   await reply(
     ctx,
     S.accountMessage({
@@ -275,11 +287,23 @@ async function accountScreen(ctx: Context): Promise<void> {
       usedSec: u.total_used_sec,
       refundedSec: totalShareRefunds(u.tg_id),
       sessionCount: done,
-      transferableSec: transferableSec(u.tg_id),
+      transferableSec: transferable,
     }),
-    { reply_markup: withBack(new InlineKeyboard().text("🪙 شارژ حساب", "topup")) },
+    { reply_markup: withBack(kb) },
   );
 }
+
+async function supportScreen(ctx: Context): Promise<void> {
+  const platform = platformOf(ctx);
+  await reply(ctx, supportMessage(platform), {
+    reply_markup: withBack(supportKeyboard(platform) ?? new InlineKeyboard()),
+  });
+}
+
+handlers.callbackQuery("support", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await supportScreen(ctx);
+});
 
 async function topupScreen(ctx: Context): Promise<void> {
   touchUser(ctx);
@@ -312,13 +336,14 @@ const HISTORY_PAGE = 8;
  * تلگرام متن دکمه را در یک خط نشان می‌دهد و بلندش را می‌برد، پس خودمان
  * می‌بریم تا وسط کلمه قطع نشود.
  */
-function sessionLabel(s: SessionRow): string {
+function sessionLabel(s: SessionRow, joined = false): string {
   const icon =
     s.status === "done" ? (isTranscriptOnly(s.mode) ? "📄" : "📋") : s.status === "error" ? "❌" : "⏳";
   const title = (s.title ?? "بدون عنوان").trim();
-  const short = title.length > 32 ? title.slice(0, 31).trimEnd() + "…" : title;
-  const when = s.created_at.slice(5, 10).replace("-", "/");
-  return `${icon} ${short} · ${toFaDigits(when)}`;
+  const short = title.length > 30 ? title.slice(0, 29).trimEnd() + "…" : title;
+  // تاریخ شمسی با نام ماه؛ چرایی در `faDate`.
+  const when = S.faDate(s.created_at);
+  return `${icon} ${joined ? `${S.MEMBER_MARK} ` : ""}${short}${when ? ` · ${when}` : ""}`;
 }
 
 /**
@@ -336,23 +361,20 @@ function sessionLabel(s: SessionRow): string {
 async function historyScreen(ctx: Context, page = 0, edit = false): Promise<void> {
   touchUser(ctx);
   const id = uid(ctx);
-  const total = countSessions(id);
+  // جلسه‌های گرفته‌شده از هم‌کلاسی هم — چرایی در `listHistory`.
+  const total = countHistory(id);
 
   if (total === 0) {
-    await reply(
-      ctx,
-      "هنوز جلسه‌ای نفرستادی 📭\n\nیه فایل صوتی، ویس یا ویدیو بفرست تا شروع کنیم 🎧\n\n" +
-        "<i>کلاست آنلاین بوده؟ ویدیوش هم قبوله.</i>",
-    );
+    await reply(ctx, S.HISTORY_EMPTY);
     return;
   }
 
   const pages = Math.max(1, Math.ceil(total / HISTORY_PAGE));
   const safe = Math.min(Math.max(0, page), pages - 1);
-  const rows = listSessions(id, HISTORY_PAGE, safe * HISTORY_PAGE);
+  const rows = listHistory(id, HISTORY_PAGE, safe * HISTORY_PAGE);
 
   const kb = new InlineKeyboard();
-  for (const s of rows) kb.text(sessionLabel(s), `sess:${s.id}`).row();
+  for (const s of rows) kb.text(sessionLabel(s, Boolean(s.joined)), `sess:${s.id}`).row();
 
   // نوار صفحه‌بندی فقط وقتی که واقعاً بیش از یک صفحه باشد.
   if (pages > 1) {
@@ -361,7 +383,10 @@ async function historyScreen(ctx: Context, page = 0, edit = false): Promise<void
     if (safe < pages - 1) kb.text("بعدی ◀️", `hpage:${safe + 1}`);
   }
 
-  const text = `<b>📚 جلسه‌های تو</b> — ${toFaDigits(total)} جلسه\n\n<i>روی هرکدوم بزنی، بازش می‌کنم.</i>`;
+  const anyJoined = rows.some((s) => s.joined);
+  const text =
+    `<b>📚 جلسه‌های تو</b> — ${toFaDigits(total)} جلسه\n\n<i>روی هرکدوم بزنی، بازش می‌کنم.</i>` +
+    (anyJoined ? `\n<i>${S.MEMBER_MARK} یعنی از هم‌کلاسیت گرفتی.</i>` : "");
 
   if (edit) {
     await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
@@ -403,12 +428,21 @@ function readableSession(ctx: Context, sessionId: string): SessionRow | null {
 }
 
 async function sessionCard(ctx: Context, sessionId: string): Promise<void> {
-  const s = getSession(sessionId);
-  if (!s || s.tg_id !== uid(ctx)) {
+  /**
+   * مالک **یا عضو** — همان `readableSession` که دکمه‌های جزوه و متن دارند.
+   *
+   * کارت پیش‌تر فقط برای مالک باز می‌شد؛ حالا که جلسه‌های گرفته‌شده در فهرست
+   * می‌آیند، زدن رویشان نباید «پیدا نشد» بدهد. دکمه‌های مالک (شروع، ارتقا،
+   * شریک‌شدن) فقط برای مالک ساخته می‌شوند — دست‌کدهایشان هم مالکیت را
+   * می‌سنجند، ولی دکمه‌ای که بزنی و بگوید «مال تو نیست» نباید اصلاً دیده شود.
+   */
+  const s = readableSession(ctx, sessionId);
+  if (!s) {
     await ctx.answerCallbackQuery({ text: "این جلسه پیدا نشد." });
     return;
   }
   await ctx.answerCallbackQuery();
+  const owner = s.tg_id === uid(ctx);
 
   const kb = new InlineKeyboard();
   /**
@@ -416,29 +450,37 @@ async function sessionCard(ctx: Context, sessionId: string): Promise<void> {
    * شروع باشد — وگرنه تنها راهش پیامِ اصلی است و آن پیام در چتِ شلوغ گم
    * می‌شود؛ یعنی کاربر باید فایل را دوباره بفرستد.
    */
-  if ((s.status === "awaiting_confirm" || s.status === "awaiting_credit") && s.original_file) {
+  if (owner && (s.status === "awaiting_confirm" || s.status === "awaiting_credit") && s.original_file) {
     kb.text("✅ شروع کن", `go:${s.id}`).row();
   }
-  if (s.pdf_path) kb.text("📕 جزوه", `pdf:${s.id}`);
-  if (s.report_json) kb.text("📋 تحلیل", `rep:${s.id}`);
-  if (s.transcript_txt) kb.text("📄 رونوشت", `txt:${s.id}`);
-  if (isTranscriptOnly(s.mode) && s.status === "done") {
+  if (s.pdf_path) kb.text("📕 فایل جزوه", `pdf:${s.id}`);
+  if (s.report_json) kb.text("📋 خلاصه و نکته‌ها", `rep:${s.id}`);
+  if (s.transcript_txt) kb.row().text("📄 متن کامل کلاس", `txt:${s.id}`);
+  if (owner && isTranscriptOnly(s.mode) && s.status === "done") {
     kb.row().text("✨ تحلیل کامل این جلسه", `full:${s.id}`);
   }
-  if (s.mode === "full" && s.status === "done") {
+  if (owner && s.mode === "full" && s.status === "done") {
     kb.row().text(
-      s.share_enabled ? "🔗 لینک دعوت" : "👥 تقسیم با هم‌کلاسیا",
+      s.share_enabled ? S.SHARE_BTN.link : S.SHARE_BTN.off,
       s.share_enabled ? `slink:${s.id}` : `son:${s.id}`,
     );
   }
   kb.row().text("↩️ فهرست جلسه‌ها", "hpage:0").text("🏠 منوی اصلی", "home");
 
   const course = s.course_id ? getCourse(s.course_id) : null;
-  const meta = [s.created_at.slice(0, 10), s.original_ms ? fmtDuration(s.original_ms) : null, course?.name]
+  const meta = [
+    S.faDate(s.created_at),
+    s.original_ms ? fmtDuration(s.original_ms) : null,
+    course?.name,
+    owner ? null : `${S.MEMBER_MARK} از هم‌کلاسیت`,
+  ]
     .filter(Boolean)
     .join(" · ");
+  // برچسبِ فارسی، نه نامِ ستون — چرایی در `STATUS_LABEL`.
   const status =
-    s.status === "done" ? "" : s.status === "error" ? " ❌ <i>ناموفق</i>" : ` ⏳ <i>${s.status}</i>`;
+    s.status === "done"
+      ? ""
+      : ` ${s.status === "error" ? "❌" : "⏳"} <i>${S.sessionStatusLabel(s.status)}</i>`;
 
   await ctx.reply(`<b>${escapeHtml(s.title ?? "بدون عنوان")}</b>${status}\n<i>${escapeHtml(meta)}</i>`, {
     parse_mode: "HTML",
@@ -514,24 +556,11 @@ async function sendPrompt(ctx: Context): Promise<void> {
   const forwardLine = Number.isFinite(limit)
     ? `معمولاً تا حدود ${toFaDigits(Math.floor(limit / 1024 / 1024))} مگ.`
     : "هر حجمی.";
-  await ctx.reply(
-    [
-      "🎧 <b>صوت کلاستو برسون</b>",
-      "",
-      `• <b>تو همین پیام‌رسان داریش؟</b> فورواردش کن همین‌جا — ${forwardLine}`,
-      "• <b>تو گوشیته؟</b> دکمهٔ پایین — تا ۵۰۰ مگ، و اگه وسطش قطع شه از همون‌جا ادامه می‌ده.",
-      "• <b>لینک؟</b> فقط لینک مستقیم فایل. صفحهٔ ضبط جلسه و یوتیوب نمیشه.",
-      "",
-      "ویدیو هم قبوله؛ فقط صداشو برمی‌دارم و بابت تصویر سکه نمی‌گیرم.",
-      "",
-      // موجودی و نرخ **پیش از** آپلود گفته می‌شود، وگرنه کاربر صوت ۹۰
-      // دقیقه‌ای را می‌فرستد و آن‌سرِ کار «سکه‌هات کم میاد» می‌گیرد.
-      `💰 موجودیت: <b>${fmtBalance(balanceSec)}</b> — ${RATE_LINE}.`,
-      "",
-      "<i>گوشی رو بذار رو میز نه تو کیف، و هرچی به استاد نزدیک‌تر بهتر.</i>",
-    ].join("\n"),
-    { parse_mode: "HTML", reply_markup: withBack(kb) },
-  );
+  // متن در strings است تا پیش‌نمایش هم همان را ببیند؛ جملهٔ اجازه هم آنجاست.
+  await ctx.reply(S.sendPromptMessage(forwardLine, balanceSec), {
+    parse_mode: "HTML",
+    reply_markup: withBack(kb),
+  });
 }
 
 // ─── دستورها ────────────────────────────────────────────────────────────────
@@ -560,7 +589,14 @@ handlers.command("start", async (ctx) => {
       await reply(ctx, refusalMessage(out.reason));
       return;
     }
-    await reply(ctx, claimedMessage(out.coins, out.balanceSec));
+    // لینکِ هدیه از خوش‌آمد و تورِ نمونه رد می‌شود؛ پس نمونه همین‌جا پیشنهاد
+    // می‌شود، پیش از آنکه گیرنده بی‌آنکه خروجی را دیده باشد صوت بفرستد.
+    await reply(ctx, claimedMessage(out.coins, out.balanceSec), {
+      reply_markup: new InlineKeyboard()
+        .text(S.START_BTN.sample, WELCOME_CB)
+        .row()
+        .text(S.START_BTN.send, "startnow"),
+    });
     await notifyGiftClaimed(ctx, code, id, out.coins);
     return;
   }
@@ -597,16 +633,18 @@ handlers.command("start", async (ctx) => {
     const sessionId = payload.slice(2);
     const s = getSession(sessionId);
     if (!s || s.status !== "done" || !s.share_enabled) {
-      await reply(ctx, "این لینک معتبر نیست یا صاحبش اشتراک‌گذاری را خاموش کرده.");
+      await reply(ctx, "این لینک دیگه کار نمی‌کنه؛ یا جلسه آماده نیست، یا صاحبش شریکی رو خاموش کرده.", {
+        reply_markup: mainKeyboard,
+      });
       return;
     }
     if (s.tg_id === uid(ctx)) {
-      await reply(ctx, `این جلسهٔ خودت است. از «${BTN.history}» بازش کن.`);
+      await reply(ctx, `این جلسهٔ خودته؛ از «${BTN.history}» بازش کن.`, { reply_markup: mainKeyboard });
       return;
     }
-    const preview = joinPreview(s);
+    const preview = joinPreview(s, u?.credit_sec ?? 0);
     if (!preview) {
-      await reply(ctx, "این جلسه در دسترس نیست.");
+      await reply(ctx, "این جلسه الان در دسترس نیست.", { reply_markup: mainKeyboard });
       return;
     }
     await ctx.reply(preview.text, { parse_mode: "HTML", reply_markup: preview.keyboard });
@@ -626,16 +664,20 @@ handlers.command("start", async (ctx) => {
    * بود و کسی که آماده بود، مجبور بود از تور رد شود تا به کار برسد.
    *
    * ترتیب عمدی است: «نمونه» اول می‌آید چون بیشترِ کاربران تازه هنوز چیزی
-   * ندیده‌اند و اثباتِ کار، قوی‌ترین دلیل ماندن است.
+   * ندیده‌اند و اثباتِ کار، قوی‌ترین دلیل ماندن است. (این توضیح مدتی اینجا
+   * بود در حالی که دکمهٔ نمونه اصلاً روی صفحه‌کلید نبود — «صوت می‌فرستم» اول
+   * بود و «چطور کار می‌کنه» دوم، و نمونه فقط پشتِ دومی پیدا می‌شد.)
    */
   await ctx.reply("سلام 👋", { reply_markup: mainKeyboard });
   await ctx.reply(WELCOME, {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
     reply_markup: new InlineKeyboard()
-      .text("🎧 صوت می‌فرستم", "startnow")
+      .text(S.START_BTN.sample, WELCOME_CB)
       .row()
-      .text("❓ چطور کار می‌کنه", "howto"),
+      .text(S.START_BTN.send, "startnow")
+      .row()
+      .text(BTN.how, "howto"),
   });
 });
 
@@ -648,7 +690,7 @@ handlers.command("start", async (ctx) => {
  */
 async function howtoScreen(ctx: Context): Promise<void> {
   await reply(ctx, HOW_IT_WORKS, {
-    reply_markup: withBack(new InlineKeyboard().text("👀 نمونهٔ یه کلاس واقعی", WELCOME_CB)),
+    reply_markup: withBack(new InlineKeyboard().text(S.START_BTN.sample, WELCOME_CB)),
   });
 }
 
@@ -729,9 +771,18 @@ handlers.callbackQuery(DEMO_CB.recap, async (ctx) => {
     ? null
     : await ctx
     .replyWithAudio(fileId, {
+      /**
+       * وعدهٔ «رو زمان بزنی پخش میشه» فقط روی تلگرام.
+       *
+       * زمان‌های زدنی قابلیتِ تلگرام است و فقط در پیامی که ریپلایِ همین صوت
+       * است — که گام‌های بعدیِ تور هستند. کاربر بله همان جمله را می‌خواند،
+       * می‌زد و هیچ اتفاقی نمی‌افتاد؛ برای او فقط گفته می‌شود آن عددها چه‌اند.
+       */
       caption:
         `🎧 <b>صوت همین جلسه</b> — ${escapeHtml(SAMPLE_COURSE)}\n` +
-        "<i>نگهش دار؛ پایین رو زمان‌ها که بزنی، از همون‌جا پخش می‌شه.</i>",
+        (platform === "telegram"
+          ? "<i>نگهش دار؛ پایین رو زمان‌ها که بزنی، از همون‌جا پخش می‌شه.</i>"
+          : "<i>زمان‌هایی که پایین می‌بینی، دقیقه‌های همین صوته.</i>"),
       parse_mode: "HTML",
     })
     .catch((e: unknown) => {
@@ -773,16 +824,17 @@ handlers.callbackQuery(new RegExp(String.raw`^${DEMO_CB.extracted}(?::\d+)?$`), 
     ...demoReplyTo(ctx),
     reply_markup: stepKeyboard(
       DEMO_CB.timeline + (audioId ? `:${audioId}` : ""),
-      "بعدی: بخش‌بندی کلاس ←",
+      "بعدی: کلاس دقیقه‌به‌دقیقه ←",
     ),
   });
 });
 
 handlers.callbackQuery(new RegExp(String.raw`^${DEMO_CB.timeline}(?::\d+)?$`), async (ctx) => {
   await advance(ctx);
-  // زمان‌ها فقط وقتی لینک می‌شوند که پیام واقعاً ریپلایِ صوت باشد.
+  // زمان‌ها فقط وقتی لینک می‌شوند که پیام واقعاً ریپلایِ صوت باشد — و فقط روی
+  // تلگرام؛ بله قابلیتش را ندارد و نباید وعده‌اش را بخواند.
   const audioId = demoAudioIdOf(ctx);
-  await reply(ctx, S.timelineMessage(SAMPLE_REPORT, audioId !== null), {
+  await reply(ctx, S.timelineMessage(SAMPLE_REPORT, audioId !== null && platformOf(ctx) === "telegram"), {
     ...demoReplyTo(ctx),
     reply_markup: stepKeyboard(DEMO_CB.outro, "بعدی: جزوهٔ این جلسه ←"),
   });
@@ -793,15 +845,15 @@ handlers.callbackQuery(DEMO_CB.outro, async (ctx) => {
 
   // جزوه و رونوشتِ همان جلسهٔ نمونه — دو تکهٔ آخرِ خروجی واقعی.
   await sendDoc(ctx, SAMPLE_PDF_PATH, "نمونه-جزوه.pdf", {
-    caption: "📕 <b>جزوهٔ همین جلسه</b>\n<i>فقط محتوای درس؛ نکته‌های امتحانی داخل متن رنگی‌اند.</i>",
+    caption: "📕 <b>فایل جزوهٔ همین جلسه</b>\n<i>فقط محتوای درس؛ نکته‌های امتحانی داخل متن رنگی‌اند.</i>",
     parse_mode: "HTML",
   });
-  await sendDoc(ctx, SAMPLE_TRANSCRIPT_PATH, "نمونه-رونوشت.txt", {
-    caption: "📄 رونوشت کامل با مهر زمانی",
+  await sendDoc(ctx, SAMPLE_TRANSCRIPT_PATH, "نمونه-متن کامل کلاس.txt", {
+    caption: "📄 متن کامل همین کلاس",
   });
 
   await reply(ctx, outroMessage(config.SUPPORT_USERNAME), {
-    reply_markup: withBack(new InlineKeyboard().text("🎧 صوت می‌فرستم", "startnow")),
+    reply_markup: withBack(new InlineKeyboard().text(S.START_BTN.send, "startnow")),
   });
   demoAudioMsg.delete(uid(ctx));
 });
@@ -848,7 +900,17 @@ handlers.command("send", async (ctx) => {
     return;
   }
 
-  // ── جهت دوم: مستقیم، وقتی شناسه در دست است ────────────────────────────────
+  /**
+   * ── جهت دوم: مستقیم با شناسه — **فقط ادمین** ──────────────────────────────
+   *
+   * شناسهٔ داخلی را هیچ دانشجویی ندارد و هیچ صفحه‌ای نشانش نمی‌دهد؛ این جهت
+   * برای او فقط یک راهِ اشتباه‌تایپ‌کردن بود. ادمین شناسه را از `/gift` و
+   * لاگ دارد و همچنان می‌تواند. دو عدد از دانشجو یعنی راهنما، نه انتقال.
+   */
+  if (target !== null && !isAdmin(ctx)) {
+    await reply(ctx, S.SEND_USAGE);
+    return;
+  }
   if (target !== null) {
     const out = sendDirect(me, target, coins);
     if (!out.ok) {
@@ -874,6 +936,46 @@ handlers.command("send", async (ctx) => {
     await reply(ctx, S.sendTooMuchMessage(minted.availableCoins));
     return;
   }
+  await reply(ctx, S.transferLinkMessage(minted.transfer.coins, minted.link));
+});
+
+/**
+ * «🎁 سکه بده به هم‌کلاسی» از صفحهٔ حساب — همان کارِ `/send`، بدون تایپ.
+ *
+ * تا امروز تنها راه تایپِ `/send 20` بود، که دانشجوی سال‌اولی نه می‌شناسد نه
+ * روی صفحه‌کلیدِ فارسی راحت می‌زند. مقدارها دکمه‌اند و فقط آن‌هایی می‌آیند که
+ * واقعاً قابل دادن‌اند؛ اگر کمتر از کوچک‌ترینشان مانده، همان عدد یک دکمه
+ * می‌شود — وگرنه صفحه‌ای بی‌دکمه می‌ماند.
+ */
+handlers.callbackQuery("give", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  touchUser(ctx);
+  const available = balanceCoins(transferableSec(uid(ctx)));
+  if (available <= 0) {
+    await reply(ctx, S.sendTooMuchMessage(0), { reply_markup: withBack(new InlineKeyboard()) });
+    return;
+  }
+  const amounts = S.GIVE_AMOUNTS.filter((n) => n <= available);
+  const kb = new InlineKeyboard();
+  for (const n of amounts.length ? amounts : [available]) {
+    kb.text(`${toFaDigits(n)} سکه`, `give:${n}`);
+  }
+  await reply(ctx, S.givePrompt(available), { reply_markup: withBack(kb) });
+});
+
+handlers.callbackQuery(/^give:(\d+)$/, async (ctx) => {
+  const coins = Number(ctx.match![1]);
+  touchUser(ctx);
+  await ctx.answerCallbackQuery();
+  if (!Number.isFinite(coins) || coins <= 0) return;
+  // همان مسیرِ `/send`: سقفِ «فقط سکهٔ خریداری‌شده» در `mintTransfer` است، نه
+  // در دکمه — دکمه‌ای که از پیامِ قدیمی زده شود ممکن است دیگر پوشش نداشته باشد.
+  const minted = await mintTransfer(ctx.api, { fromId: uid(ctx), coins });
+  if ("error" in minted) {
+    await reply(ctx, S.sendTooMuchMessage(minted.availableCoins));
+    return;
+  }
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   await reply(ctx, S.transferLinkMessage(minted.transfer.coins, minted.link));
 });
 
@@ -1245,7 +1347,7 @@ handlers.on("message:text", async (ctx) => {
           : "فعلاً نسخهٔ تحت وب فعال نیست. همین‌جا صوتت را بفرست 🎧",
       ));
     }
-    return void (await reply(ctx, supportMessage(), { reply_markup: withBack(supportKeyboard(platformOf(ctx)) ?? new InlineKeyboard()) }));
+    return void (await supportScreen(ctx));
   }
 
   const state = convo.get(id);
@@ -1767,18 +1869,24 @@ function confirmKeyboard(sessionId: string): InlineKeyboard {
 }
 
 /**
- * همان صفحه، وقتی سکه کم است: شارژ، و راهِ ادامه پس از شارژ.
+ * همان صفحه، وقتی سکه کم است: شارژ، و راهِ ادامه پس از شارژ — و **فقط همین**.
  *
- * تقسیم اینجا هم پیشنهاد می‌شود — کسی که سکه کم دارد بیشترین انگیزه را
- * دارد که نصفش برگردد.
+ * دکمهٔ «با بچه‌های کلاس شریک می‌شم» اینجا بود، با این استدلال که کسی که سکه
+ * کم دارد بیشترین انگیزه را دارد. ولی زیرِ «۷۰ سکه کم داری» آن دکمه مثل راهِ
+ * دور زدنِ کسری خوانده می‌شد: «شریک می‌شم، پس کمتر می‌دم». در حالی که کلِ
+ * هزینه همچنان پیش از شروع از حسابِ خودش می‌رود و سهمِ هم‌کلاسی‌ها *بعد* از
+ * تحویل برمی‌گردد. دکمه‌ای که انتظارِ غلط می‌سازد بدتر از نبودنش است؛ پس از
+ * شارژ، همان پیشنهاد روی صفحهٔ تأیید هست.
+ *
+ * صادر شده تا آزمون همین را قفل کند.
  */
-function lowBalanceKeyboard(sessionId: string, resumeData = `go:${sessionId}`): InlineKeyboard {
-  return new InlineKeyboard()
-    .text(S.CONFIRM_BTN.topup, "topup")
-    .row()
-    .text("▶️ ادامه بده", resumeData)
-    .row()
-    .text(S.CONFIRM_BTN.share, `spre:${sessionId}`);
+export function lowBalanceKeyboard(sessionId: string, resumeData = `go:${sessionId}`): InlineKeyboard {
+  return new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup").row().text("▶️ ادامه بده", resumeData);
+}
+
+/** وضعیتِ شریک‌شدنِ یک جلسه، به شکلی که صفحهٔ تأیید می‌خواهد. */
+function shareOf(s: SessionRow | null): { people: number } | null {
+  return s?.share_enabled ? { people: s.share_target ?? SHARE_TARGET } : null;
 }
 
 /** درسی که خودمان حدس می‌زنیم — بدون پرسیدن از کاربر. */
@@ -2265,9 +2373,10 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
         if (costCoins(realSec) > costCoins(durationSec) + 1) {
           if (u.credit_sec < realSec) {
             updateSession(sessionId, { status: "awaiting_credit" });
+            // «فرستنده» خودِ دانشجوست؛ عددِ اشتباه را سکو گفته بود نه او.
             await reply(
               ctx,
-              `مدت واقعی این فایل <b>${toFaDigits(fmtDuration(realSec * 1000))}</b> بود، نه چیزی که فرستنده اعلام کرده بود.\n\n` +
+              `این فایل در واقع <b>${toFaDigits(fmtDuration(realSec * 1000))}</b> بود، بیشتر از چیزی که اول نشون داده شد.\n\n` +
                 S.lowBalanceMessage(realSec, u.credit_sec),
               { reply_markup: lowBalanceKeyboard(sessionId) },
             );
@@ -2276,8 +2385,8 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
           updateSession(sessionId, { status: "awaiting_confirm" });
           await reply(
             ctx,
-            `مدت واقعی بیشتر از چیزی بود که سکو اعلام کرده بود.\n\n` +
-              S.confirmCostMessage(realSec, u.credit_sec),
+            `این فایل بلندتر از چیزی بود که اول نشون داده شد، پس هزینه‌ش هم بیشتره.\n\n` +
+              S.confirmCostMessage(realSec, u.credit_sec, shareOf(getSession(sessionId))),
             { reply_markup: confirmKeyboard(sessionId) },
           );
           return;
@@ -2395,8 +2504,8 @@ handlers.callbackQuery(/^txt:([a-f0-9]+)$/, async (ctx) => {
     await ctx.reply("رونوشت این جلسه موجود نیست.");
     return;
   }
-  await sendDoc(ctx, transcriptBytes(s.transcript_txt), "رونوشت کامل.txt", {
-    caption: "📄 رونوشت کامل با مهر زمانی",
+  await sendDoc(ctx, transcriptBytes(s.transcript_txt), S.FILE_NAME.transcriptTxt, {
+    caption: S.CAPTION.transcript,
   });
 });
 
@@ -2431,8 +2540,8 @@ handlers.callbackQuery(/^pdf:([a-f0-9]+)$/, async (ctx) => {
     await ctx.reply("جزوهٔ این جلسه موجود نیست.");
     return;
   }
-  if (!(await sendDoc(ctx, s.pdf_path, "جزوه.pdf", { caption: "📕 جزوهٔ این جلسه" }))) {
-    await ctx.reply("فرستادن جزوه ممکن نشد. دوباره امتحان کن یا به پشتیبانی بگو.");
+  if (!(await sendDoc(ctx, s.pdf_path, "جزوه.pdf", { caption: S.CAPTION.notes }))) {
+    await ctx.reply(`فایل جزوه نرفت 😕 یه بار دیگه بزن؛ اگه باز نشد از «${BTN.support}» بگو.`);
   }
 });
 
@@ -2448,7 +2557,7 @@ handlers.callbackQuery(/^rep:([a-f0-9]+)$/, async (ctx) => {
   // همان یک جفت ستونِ معتبر که هر دو مسیر تحویل می‌نویسند — نه
   // `audio_message_id` خام، که برای جلسه‌های آمده از مینی‌اپ همیشه تهی است و
   // اینجا بی‌صدا زمان‌ها را از لینکِ پخش می‌انداخت.
-  const asReply = reportReplyTo(s, ctx.chat!.id);
+  const asReply = reportReplyTo(s, ctx.chat!.id, uid(ctx));
   await reply(
     ctx,
     S.recapMessage({
@@ -2511,8 +2620,9 @@ handlers.callbackQuery(
     }
     await ctx.answerCallbackQuery();
     await dropPressedButton(ctx);
+    // `viewerId`: عضو صوت را در چتِ خودش با شناسهٔ دیگری دارد — `reportReplyTo`.
     const ok = await sendMorePart(
-      { api: ctx.api, chatId: ctx.chat!.id, platform: platformOf(ctx) },
+      { api: ctx.api, chatId: ctx.chat!.id, platform: platformOf(ctx), viewerId: uid(ctx) },
       s,
       part,
     );
@@ -2636,12 +2746,19 @@ async function startJob(ctx: Context, job: JobRequest): Promise<void> {
             .then(() => true)
             .catch(() => false)
         : false;
+      /**
+       * متنِ خطا به دانشجو نشان داده **نمی‌شود** — در لاگ و بایگانی مانده.
+       * چرایی و سه حالتِ «مشکل از خودِ فایل است» در `jobFailedMessage`.
+       *
+       * دکمهٔ «دوباره» فقط برای شکستِ عمومی: فایلی که صدا ندارد یا از سقف
+       * بلندتر است، دوباره هم همان نتیجه را می‌دهد.
+       */
+      const kind = e instanceof JobFailure ? e.kind : null;
+      const offerRetry = canRetry && kind === null;
       await edit(
-        `❌ <b>پردازش ناموفق بود</b>\n\n${escapeHtml(message)}\n\n` +
-          "<i>سکه‌های رزروشده کامل برگشت.</i>" +
-          (canRetry ? "\n\n<i>فایلت همین‌جا نگه داشته شده — لازم نیست دوباره بفرستی.</i>" : ""),
-        canRetry
-          ? { reply_markup: new InlineKeyboard().text("🔄 دوباره تلاش کن", `retry:${sessionId}`) }
+        S.jobFailedMessage(kind, offerRetry),
+        offerRetry
+          ? { reply_markup: new InlineKeyboard().text(S.RETRY_BTN, `retry:${sessionId}`) }
           : {},
       );
     }
@@ -2736,13 +2853,8 @@ export async function sendResults(
       parse_mode: "HTML",
     });
   } else if (out.notesError) {
-    // تحلیل سالم است؛ فقط مدلِ جزوه در دسترس نبود
-    await reply(
-      ctx,
-      "⚠️ <b>جزوه ساخته نشد</b> ولی تحلیل بالا کامل است.\n\n" +
-        `<i>مدل تولید جزوه در دسترس نبود. از «${BTN.history}» می‌توانی بعداً دوباره درخواستش کنی — ` +
-        "رونویسی کش شده و دوباره هزینه‌ای ندارد.</i>",
-    );
+    // تحلیل سالم است؛ فقط جزوه نیامد. چرا متن به دکمه‌ای اشاره نمی‌کند: `NOTES_FAILED`.
+    await reply(ctx, S.NOTES_FAILED);
   }
 
   /**
@@ -2770,7 +2882,13 @@ export async function sendResults(
   const shareOn = Boolean(getSession(sessionId)?.share_enabled);
   // یک پیامِ پایانی، نه دو تا — چرایش در `closingKeyboard`.
   if (s && (u || moreKeyboard(s))) {
-    await ctx.reply(u ? S.settlementMessage(cost, u.credit_sec, shareOn) : S.MORE_PROMPT, {
+    const closingText = u
+      ? S.settlementMessage(cost, u.credit_sec, shareOn, {
+          people: s.share_target,
+          hasArchive: moreKeyboard(s) !== null,
+        })
+      : S.MORE_PROMPT;
+    await ctx.reply(closingText, {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
       reply_markup: closingKeyboard(s, shareOn),
@@ -2796,9 +2914,27 @@ handlers.callbackQuery(/^spre:([a-f0-9]+)$/, async (ctx) => {
     return;
   }
   await ctx.answerCallbackQuery();
-  await ctx.reply(S.shareTargetPrompt(Math.round(s.original_ms / 1000)), {
+  const costSec = Math.round(s.original_ms / 1000);
+  await ctx.reply(S.shareTargetPrompt(costSec), {
     parse_mode: "HTML",
-    reply_markup: shareTargetKeyboard(sessionId, "sontp"),
+    reply_markup: shareTargetKeyboard(sessionId, "sontp", costSec),
+  });
+});
+
+/**
+ * «بی‌خیال» زیر پرسشِ تعداد — فقط پیام را برمی‌دارد.
+ *
+ * هیچ حالتی عوض نمی‌شود: اگر شریک‌شدن از قبل روشن بود و کاربر فقط آمده بود
+ * تعداد را عوض کند، «بی‌خیال» نباید خاموشش کند. مالکیت هم لازم نیست سنجیده
+ * شود، چون تنها اثرش روی پیامی در چتِ خودِ همان کاربر است.
+ *
+ * اگر پاک‌کردن نشد (پیامِ قدیمی، یا سکویی که رد می‌کند) دکمه‌ها برداشته
+ * می‌شوند تا دست‌کم دوباره زده نشوند.
+ */
+handlers.callbackQuery(new RegExp(String.raw`^${SHARE_CANCEL_CB}:([a-f0-9]+)$`), async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.deleteMessage().catch(async () => {
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   });
 });
 
@@ -2835,9 +2971,10 @@ handlers.callbackQuery(/^son:([a-f0-9]+)$/, async (ctx) => {
     return;
   }
   await ctx.answerCallbackQuery();
-  await ctx.reply(S.shareTargetPrompt(Math.round(s.original_ms / 1000)), {
+  const costSec = Math.round(s.original_ms / 1000);
+  await ctx.reply(S.shareTargetPrompt(costSec), {
     parse_mode: "HTML",
-    reply_markup: shareTargetKeyboard(sessionId),
+    reply_markup: shareTargetKeyboard(sessionId, "sont", costSec),
   });
 });
 
@@ -2874,11 +3011,15 @@ async function sendInvitation(ctx: Context, sessionId: string): Promise<void> {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
   });
-  const tail = st?.capReached
-    ? "نصفِ هزینه برگشته و از این به بعد هم‌کلاسی‌ها رایگان برش می‌دارن."
-    : `هر کی از این لینک بیاد <b>${fmtCost(st?.seatSec ?? 0)}</b> می‌ده و همون به حسابت برمی‌گرده، ` +
-      `تا نصفِ هزینه. تا الان <b>${fmtCost(st?.ownerRefundedSec ?? 0)}</b> پس گرفته‌ای.`;
-  await ctx.reply(`☝️ این پیام را در گروه درس فوروارد کن.\n\n${tail}`, { parse_mode: "HTML" });
+  await ctx.reply(
+    S.invitationTail({
+      costSec: Math.round(s.original_ms / 1000),
+      seatCoins: costCoins(st?.seatSec ?? 0),
+      refundedCoins: costCoins(st?.ownerRefundedSec ?? 0),
+      capReached: Boolean(st?.capReached),
+    }),
+    { parse_mode: "HTML" },
+  );
 }
 
 handlers.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {
@@ -2889,7 +3030,8 @@ handlers.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {
     const out = await handleJoin(ctx, sessionId);
     // صفحه‌کلیدِ دعوت همین بالا برداشته شده؛ اگر پاسخ دکمه‌ای دارد (سکهٔ کم)
     // باید همراه پیام برود، وگرنه تازه‌وارد در یک متنِ بی‌راه گیر می‌کند.
-    await reply(ctx, out.message, out.keyboard ? { reply_markup: out.keyboard } : {});
+    // پیامِ خالی یعنی تأییدِ موفق پیش از تحویل رفته — دوباره نفرست.
+    if (out.message) await reply(ctx, out.message, out.keyboard ? { reply_markup: out.keyboard } : {});
   } catch (e) {
     logger.error({ sessionId, err: String(e) }, "join failed");
     await reply(ctx, "پیوستن به این جلسه ممکن نشد. دوباره تلاش کن.");
@@ -2898,7 +3040,7 @@ handlers.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {
 
 handlers.callbackQuery(/^jno:([a-f0-9]+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText("باشد، منصرف شدی. هر وقت خواستی دوباره روی لینک بزن.");
+  await ctx.editMessageText("باشه. هر وقت خواستی دوباره رو لینک بزن.").catch(() => {});
 });
 
 handlers.command("shared", async (ctx) => {

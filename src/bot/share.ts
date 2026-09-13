@@ -3,11 +3,14 @@ import { InlineKeyboard, type Api, type Context } from "grammy";
 import { sendDoc, sendFileTo } from "./bale-upload.js";
 import { config } from "../config.js";
 import { logger } from "../util/logger.js";
-import { escapeHtml, transcriptBytes } from "../util/text.js";
+import { escapeHtml } from "../util/text.js";
 import { audioExt } from "../audio/container.js";
 import { fmtDuration, toFaDigits } from "../util/time.js";
-import { fmtCost } from "../billing/coins.js";
-import { getCourse, getSession, sessionReport, updateSession, type SessionRow } from "../db/index.js";
+import { costCoins, fmtBalance, fmtCoins, fmtCost, shareBack } from "../billing/coins.js";
+import {
+  getCourse, getSession, sessionReport, setMemberDelivery, updateSession, type SessionRow,
+} from "../db/index.js";
+import { moreKeyboard, reportReplyTo } from "./deliver.js";
 import { InsufficientCredit } from "../billing/ledger.js";
 import {
   AlreadyMember,
@@ -49,26 +52,54 @@ export async function shareLink(api: Api, sessionId: string): Promise<string> {
   return `${host}/${usernames[platform]}?start=j_${sessionId}`;
 }
 
+/**
+ * هزینهٔ یک هم‌کلاسی، به زبانِ کسی که ربات را نمی‌شناسد.
+ *
+ * برای تازه‌وارد «۵ سکه» به‌تنهایی هیچ نمی‌گوید و به نظر پول می‌آید. ولی
+ * واقعیت این است که هر حسابِ تازه `FREE_TRIAL_COINS` سکه هدیه می‌گیرد؛ اگر
+ * سهم از آن کمتر است، عملاً چیزی از جیبش نمی‌رود — و این دقیقاً همان جمله‌ای
+ * است که او را به زدنِ لینک راضی می‌کند.
+ *
+ * فقط وقتی گفته می‌شود که **واقعاً** درست است: سهمی بزرگ‌تر از هدیه، یا
+ * سروری که هدیه را خاموش کرده، جمله‌ای ساده به سکه می‌گیرد نه وعده.
+ */
+function classmateCost(seatCoins: number, capReached: boolean): string {
+  if (capReached) return "💰 برای تو مجانیه؛ هزینه‌ش قبلاً جمع شده.";
+  const gift = config.FREE_TRIAL_COINS;
+  if (gift > 0 && seatCoins <= gift) {
+    // نیم‌فاصله پیش از «ست»؛ بی آن «سکهست» چسبیده خوانده می‌شود.
+    return `💰 ${fmtCoins(seatCoins)}‌ست؛ هر کی تازه بیاد ${fmtCoins(gift)} هدیه می‌گیره، پس برات مجانی درمیاد.`;
+  }
+  return `💰 ${fmtCoins(seatCoins)}‌ست. هر سکه یعنی یه دقیقه صوت.`;
+}
+
+/**
+ * «n نفر تا حالا گرفتنش» — و **نه وقتی صفر است**.
+ *
+ * «۰ نفر برداشتن» روی کارتِ دعوت یعنی «هیچ‌کس اعتماد نکرده»؛ همان عددی که
+ * قرار بود اعتبار بدهد، اولین خواننده را فراری می‌داد.
+ */
+function takenLine(memberCount: number): string {
+  return memberCount > 0 ? `👥 ${toFaDigits(memberCount)} نفر تا حالا گرفتنش` : "";
+}
+
 /** پیام دعوتی که فرستنده در گروه درس فوروارد می‌کند. */
 export async function invitationMessage(api: Api, s: SessionRow): Promise<string> {
   const link = await shareLink(api, s.id);
   const st = shareStatus(s.id);
   const course = s.course_id ? getCourse(s.course_id) : null;
-  const seat = st ? st.seatSec : Math.round(s.original_ms / 1000);
-  const taken = toFaDigits(st?.memberCount ?? 0);
+  const seatCoins = costCoins(st ? st.seatSec : Math.round(s.original_ms / 1000));
 
   return [
     `📓 <b>${escapeHtml(s.title ?? "جلسهٔ کلاس")}</b>`,
     course ? `<i>${escapeHtml(course.name)}</i>` : "",
     "",
-    `خلاصهٔ کلاس، نکات امتحانی با عین حرف استاد${s.pdf_path ? "، و جزوهٔ کامل PDF" : ""}.`,
+    `خلاصهٔ کلاس، نکته‌های امتحانی با عین حرف استاد${s.pdf_path ? "، و فایل جزوه" : ""}.`,
     "",
-    st?.capReached
-      ? `👥 ${taken} نفر برداشتن · <b>رایگان</b> — هزینه‌اش قبلاً حساب شده`
-      : `👥 ${taken} نفر برداشتن · سهم تو: <b>${fmtCost(seat)}</b>`,
+    classmateCost(seatCoins, Boolean(st?.capReached)),
+    takenLine(st?.memberCount ?? 0),
     "",
-    "<i>سهم هرکس ثابته. وقتی نصف هزینه برگشت، بقیه رایگان می‌گیرنش.</i>",
-    "",
+    // لینک خطِ خودش را دارد: نشانیِ لاتین وسط خط فارسی روی گوشی جابه‌جا چیده می‌شود.
     link,
   ]
     .filter((l) => l !== "")
@@ -77,10 +108,13 @@ export async function invitationMessage(api: Api, s: SessionRow): Promise<string
 
 export function shareToggleKeyboard(sessionId: string, enabled: boolean): InlineKeyboard {
   return new InlineKeyboard().text(
-    enabled ? "🔗 لینک دعوت" : "👥 تقسیم با هم‌کلاسیا",
+    enabled ? S.SHARE_BTN.link : S.SHARE_BTN.off,
     enabled ? `slink:${sessionId}` : `son:${sessionId}`,
   );
 }
+
+/** دکمهٔ «بی‌خیال» زیر پرسشِ تعداد — فقط پیام را برمی‌دارد، هیچ حالتی را عوض نمی‌کند. */
+export const SHARE_CANCEL_CB = "shx";
 
 /**
  * انتخابِ تعدادِ کلاس — سهمِ ثابتِ هر نفر از همین درمی‌آید.
@@ -97,30 +131,56 @@ export function shareToggleKeyboard(sessionId: string, enabled: boolean): Inline
 export function shareTargetKeyboard(
   sessionId: string,
   prefix: "sont" | "sontp" = "sont",
+  costSec?: number,
 ): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("۵ نفر", `${prefix}:${sessionId}:5`)
-    .text("۱۰ نفر", `${prefix}:${sessionId}:10`)
-    .row()
-    .text("۲۰ نفر", `${prefix}:${sessionId}:20`)
-    .text("۳۰ نفر", `${prefix}:${sessionId}:30`);
+  /**
+   * سهمِ هر نفر **روی خودِ دکمه**: «۵ نفر · نفری ۹ سکه».
+   *
+   * عددِ نفر به‌تنهایی جوابِ سؤالی بود که کاربر نداشت. سؤالِ واقعی «هم‌کلاسیم
+   * چقدر می‌ده؟» است و باید کنارِ همان انتخابی باشد که عوضش می‌کند. همان
+   * `shareBack` که `joinSession` با آن کم می‌کند، پس دکمه و کسرِ واقعی از هم
+   * جدا نمی‌افتند.
+   */
+  const label = (n: number) =>
+    costSec === undefined
+      ? `${toFaDigits(n)} نفر`
+      : `${toFaDigits(n)} نفر · نفری ${fmtCoins(shareBack(costSec, n).seat)}`;
+  const kb = new InlineKeyboard();
+  S.SHARE_COUNTS.forEach((n, i) => {
+    if (i && i % 2 === 0) kb.row();
+    kb.text(label(n), `${prefix}:${sessionId}:${n}`);
+  });
+  // راهِ بیرون‌آمدن بدون انتخاب — وگرنه تنها کارِ ممکن زدنِ یکی از چهار عدد بود.
+  return kb.row().text("✖️ بی‌خیال", `${SHARE_CANCEL_CB}:${sessionId}`);
 }
 
-/** پیش‌نمایشی که تازه‌وارد پیش از پرداخت می‌بیند. */
-export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyboard } | null {
+/**
+ * پیش‌نمایشی که تازه‌وارد پیش از پرداخت می‌بیند.
+ *
+ * `balanceSec` لازم است چون جملهٔ «هزینه: ۵ سکه» بی موجودی نصفِ جواب است: کسی
+ * که از لینکِ گروه آمده نمی‌داند اصلاً سکه‌ای دارد یا نه، و بدون عددِ کنارش
+ * یا از دکمه می‌ترسد یا روی دیوارِ «سکه‌هات کم میاد» می‌خورد.
+ */
+export function joinPreview(
+  s: SessionRow,
+  balanceSec: number,
+): { text: string; keyboard: InlineKeyboard } | null {
   const st = shareStatus(s.id);
   if (!st) return null;
   const r = sessionReport(s);
   const course = s.course_id ? getCourse(s.course_id) : null;
+  const meta = [course?.name ? escapeHtml(course.name) : null, s.original_ms ? fmtDuration(s.original_ms) : null]
+    .filter(Boolean)
+    .join(" · ");
 
   const text = [
     `📓 <b>${escapeHtml(s.title ?? "جلسهٔ کلاس")}</b>`,
-    course ? `<i>${escapeHtml(course.name)} · ${fmtDuration(s.original_ms)}</i>` : "",
+    meta ? `<i>${meta}</i>` : "",
     "",
     r?.headline ? escapeHtml(r.headline) : "",
     "",
     "<b>چی گیرت میاد</b>",
-    "• خلاصهٔ کلاس در یک نگاه",
+    "• خلاصهٔ کلاس",
     /**
      * فهرست خالی را **تبلیغ نکن**.
      *
@@ -131,27 +191,42 @@ export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyb
     (r?.key_points.length ?? 0) > 0
       ? `• ${toFaDigits(r!.key_points.length)} نکتهٔ کلیدی با عین حرف استاد`
       : "• نکته‌های کلاس با عین حرف استاد",
-    s.pdf_path ? "• جزوهٔ کامل PDF" : "",
-    "• صوت و رونوشت کامل",
+    s.pdf_path ? "• فایل جزوه" : "",
+    "• صوت کلاس، متن کامل کلاس و کلاس دقیقه‌به‌دقیقه",
     "",
-    st.capReached
-      ? `👥 ${toFaDigits(st.memberCount)} نفر برداشتن · سهم تو <b>رایگان</b> — هزینه‌اش قبلاً حساب شده`
-      : `👥 ${toFaDigits(st.memberCount)} نفر برداشتن · سهم تو <b>${fmtCost(st.seatSec)}</b>`,
+    `هزینه: <b>${st.capReached ? "مجانی" : fmtCost(st.seatSec)}</b> · موجودیت: <b>${fmtBalance(balanceSec)}</b>`,
+    // اولین جایی که تازه‌وارد واژهٔ «سکه» را می‌بیند؛ لینکِ دعوت از خوش‌آمد رد می‌شود.
+    "<i>هر سکه یعنی یه دقیقه صوت.</i>",
+    takenLine(st.memberCount),
   ]
     .filter((l) => l !== "")
     .join("\n");
 
   return {
     text,
-    keyboard: new InlineKeyboard()
-      .text(st.capReached ? "✅ رایگان برش می‌دارم" : "✅ برش می‌دارم", `jdo:${s.id}`)
-      .row()
-      .text("فعلاً نه", `jno:${s.id}`),
+    keyboard: new InlineKeyboard().text("✅ بگیرش", `jdo:${s.id}`).row().text("فعلاً نه", `jno:${s.id}`),
   };
 }
 
 /**
- * تحویل کامل یک جلسه به کسی که تازه پیوسته.
+ * تحویل یک جلسه به کسی که تازه پیوسته — **همان شکلِ تحویلِ مالک**.
+ *
+ * ## دیوارِ هشت پیام
+ *
+ * تحویلِ مالک از هفت پیامِ پشت‌سرهم به چهار چیزِ فوری و بقیه پشتِ دکمه رسید،
+ * ولی این مسیر عقب ماند: هم‌کلاسی هنوز صوت، خلاصه، نکته‌ها، بخش‌بندی، پرسش و
+ * پاسخ، جزوه، رونوشت و SRT را پشت‌سرهم می‌گرفت — و «گرفتیش، n سکه کم شد»
+ * *آخرِ* همه می‌آمد، یعنی هشت پیام بدون اینکه بداند پولی رفت یا نه.
+ *
+ * حالا تأییدِ کوتاه اول می‌آید (`handleJoin`)، بعد همان چهار چیزِ مالک، و
+ * آخر همان `moreKeyboard` و `MORE_CB` و `sendMorePart` که مالک دارد — نه یک
+ * پیاده‌سازیِ موازی که روزی از آن عقب بماند. `closingKeyboard` اینجا
+ * نمی‌آید چون دکمهٔ شریک‌شدنش مالِ مالک است؛ عضو فقط بخش‌های بایگانی را
+ * می‌خواهد.
+ *
+ * شناسهٔ صوتِ فرستاده‌شده کنارِ عضویتِ همین کاربر ذخیره می‌شود
+ * (`setMemberDelivery`) تا دکمهٔ «کلاس دقیقه‌به‌دقیقه» هفته‌ها بعد هم ریپلایِ
+ * همین صوت در همین چت باشد. چرایی در `reportReplyTo`.
  *
  * صوت با `file_id` دوباره فرستاده می‌شود — سکو فایل را نگه داشته، پس نه
  * آپلودی لازم است نه فضایی. بدون این کار، زمان‌های داخل پیام‌ها برای او لینک
@@ -232,11 +307,24 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
     }
   }
 
-  const asReply = audioMessageId
-    ? { reply_parameters: { message_id: audioMessageId, allow_sending_without_reply: true } }
-    : {};
-  // زمان‌های زدنی قابلیتِ تلگرام است و بله ندارد — وعده‌اش را به کاربر بله نده.
-  const linkable = audioMessageId !== null && platformOf(ctx) === "telegram";
+  /**
+   * جفتِ «کدام صوت، کدام چت» برای **همین گیرنده**.
+   *
+   * عضو در `session_members` می‌نشیند و مالک — که فقط از مسیرِ «از قبل مال
+   * خودته» به اینجا می‌رسد — در همان ستون‌های `delivered_*` جلسه، تا هر دو از
+   * همان `reportReplyTo` بخوانند.
+   */
+  const viewer = uid(ctx);
+  const chatId = ctx.chat!.id;
+  if (audioMessageId !== null) {
+    if (viewer === s.tg_id) {
+      updateSession(s.id, { delivered_chat_id: chatId, delivered_audio_message_id: audioMessageId });
+    } else {
+      setMemberDelivery(s.id, viewer, chatId, audioMessageId);
+    }
+  }
+  const fresh = getSession(s.id) ?? s;
+  const asReply = reportReplyTo(fresh, chatId, viewer);
 
   const send = async (text: string, extra: Record<string, unknown> = {}) => {
     if (!text) return;
@@ -245,7 +333,7 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
     }
   };
 
-  // همان سه پیامی که فرستندهٔ اصلی گرفت، به همان ترتیب
+  // همان چیزهای فوریِ مالک، به همان ترتیب: خلاصه، نکته‌ها، پرسش و پاسخ، جزوه
   await send(
     S.recapMessage({
       report: r,
@@ -257,33 +345,35 @@ export async function deliverSession(ctx: Context, s: SessionRow): Promise<void>
     }),
   );
   await send(S.extractedMessage(r), asReply);
-  await send(S.timelineMessage(r, linkable), asReply);
   // جلسهٔ اشتراکی همان گزارش را می‌گیرد؛ اگر این خط نباشد، هم‌کلاسیِ گیرنده
   // بخشی از خروجیِ همان جلسه را نمی‌بیند. خالی برمی‌گردد وقتی جلسه این پاس
   // را نداشته، پس در حالت پیش‌فرض هیچ پیامی اضافه نمی‌شود.
   await send(S.qaMessage(r), asReply);
 
   // `sendDoc` مسیر بله را دستی می‌فرستد و خطا را لاگ می‌کند؛ توضیح در
-  // `bale-upload.ts`. پیش‌تر اینجا `.catch(() => {})` بود و کاربر بله جزوه و
-  // رونوشتِ جلسهٔ اشتراکی را بی‌صدا از دست می‌داد.
-  if (s.pdf_path) {
-    await sendDoc(ctx, s.pdf_path, "جزوه.pdf", { caption: "📕 جزوهٔ این جلسه" });
+  // `bale-upload.ts`. پیش‌تر اینجا `.catch(() => {})` بود و کاربر بله جزوه را
+  // بی‌صدا از دست می‌داد.
+  if (s.pdf_path && fs.existsSync(s.pdf_path)) {
+    await sendDoc(ctx, s.pdf_path, `${s.title ?? "جزوه"}.pdf`, { caption: S.CAPTION.notes });
   }
-  // PDF ترجیح دارد چون فایل متنی روی موبایل خوانده نمی‌شود؛ `pdf/transcript.ts`.
-  if (s.transcript_pdf && fs.existsSync(s.transcript_pdf)) {
-    await sendDoc(ctx, s.transcript_pdf, "رونوشت کامل.pdf", { caption: "📄 رونوشت کامل" });
-  } else if (s.transcript_txt) {
-    await sendDoc(ctx, transcriptBytes(s.transcript_txt), "رونوشت کامل.txt", {
-      caption: "📄 رونوشت کامل",
+
+  // کلاس دقیقه‌به‌دقیقه، متن کامل و زیرنویس: پشتِ همان دکمه‌های مالک.
+  const more = moreKeyboard(fresh);
+  if (more) {
+    await ctx.reply(S.MORE_PROMPT, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      reply_markup: more,
     });
-  }
-  if (s.transcript_srt && fs.existsSync(s.transcript_srt)) {
-    await sendDoc(ctx, s.transcript_srt, "رونوشت زمان‌دار.srt", { caption: "⏱ نسخهٔ زمان‌دار" });
   }
 }
 
 export interface JoinOutcome {
   ok: boolean;
+  /**
+   * پیامی که صدازننده باید بفرستد — **خالی** وقتی پیوستن موفق بوده، چون
+   * تأییدش خودش پیش از تحویل رفته (چرایی در `handleJoin`).
+   */
   message: string;
   session?: SessionRow;
   /**
@@ -306,8 +396,10 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
   } catch (e) {
     if (e instanceof AlreadyMember) {
       const s = getSession(sessionId);
+      // خبر اول، بعد فایل‌ها — همان قاعدهٔ پایین.
+      await ctx.reply(S.JOIN_AGAIN, { parse_mode: "HTML" });
       if (s) await deliverSession(ctx, s);
-      return { ok: true, message: "این جلسه از قبل مال خودته — دوباره فرستادم 👍" };
+      return { ok: true, message: "" };
     }
     if (e instanceof InsufficientCredit) {
       /**
@@ -321,7 +413,7 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
       return {
         ok: false,
         message: S.lowBalanceMessage(e.needed, e.balance),
-        keyboard: new InlineKeyboard().text("🪙 شارژ حساب", "topup"),
+        keyboard: new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup"),
       };
     }
     if (e instanceof NotShareable) return { ok: false, message: e.message };
@@ -329,13 +421,24 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
   }
 
   const s = getSession(sessionId)!;
+
+  /**
+   * **تأییدِ کوتاه پیش از هر فایلی.**
+   *
+   * پیش‌تر «گرفتیش، n سکه کم شد» آخرِ همهٔ پیام‌ها می‌آمد؛ یعنی هم‌کلاسی چند
+   * پیام و فایل می‌گرفت بی‌آنکه بداند پولی رفت یا نه، و خبر زیرِ همه گم می‌شد.
+   * پول اولین سؤالِ کسی است که دکمهٔ «بگیرش» را زده.
+   */
+  await ctx.reply(S.joinedMessage(result.free ? 0 : costCoins(result.chargedSec)), {
+    parse_mode: "HTML",
+  });
   await deliverSession(ctx, s);
 
   // خبر به مالک که سهمش برگشت — این همان چیزی است که آدم را ترغیب می‌کند
   // لینک را پخش کند، پس باید دیده شود.
   if (result.ownerRefundSec > 0) {
     const tail = result.capJustReached
-      ? `\n\n<b>نصفِ هزینه برگشت.</b> از این به بعد هم‌کلاسی‌ها رایگان برش می‌دارن.`
+      ? `\n\n<b>نصف هزینه برگشت.</b> از این به بعد برای بقیه مجانیه.`
       : "";
     /**
      * ⚠️ اینجا `ctx.api.sendMessage(result.ownerTgId, …)` بود و غلط بود.
@@ -352,17 +455,12 @@ export async function handleJoin(ctx: Context, sessionId: string): Promise<JoinO
     await notifyUser(
       result.ownerTgId,
       `💰 <b>${fmtCost(result.ownerRefundSec)}</b> برگشت به حسابت!\n\n` +
-        `یکی «${escapeHtml(s.title ?? "کلاس")}» رو برداشت.${tail}`,
+        `یکی از بچه‌ها «${escapeHtml(s.title ?? "کلاس")}» رو گرفت.${tail}`,
     ).catch(() => {});
   }
 
-  return {
-    ok: true,
-    message: result.free
-      ? "✅ گرفتیش! سهم تو ۰ — هزینهٔ این جلسه قبلاً حساب شده."
-      : `✅ گرفتیش! <b>${fmtCost(result.chargedSec)}</b> کم شد.`,
-    session: s,
-  };
+  // پیام همین بالا رفته؛ خالی یعنی صدازننده چیزی اضافه نفرستد.
+  return { ok: true, message: "", session: s };
 }
 
 /** فرستنده پس از اتمام کار، به‌عنوان مالک با کل هزینه ثبت می‌شود. */

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 import { logger } from "./util/logger.js";
+import { JobFailure } from "./util/job-failure.js";
 import { fmtDuration } from "./util/time.js";
 import { preprocess } from "./audio/preprocess.js";
 import { TimeMap, trimTo } from "./audio/ffmpeg.js";
@@ -163,7 +164,8 @@ export async function runPipeline(inp: PipelineInput): Promise<PipelineOutput> {
   }
 
   const built = buildTranscript(stt.tokens, pre.timeMap);
-  if (built.utterances.length === 0) throw new Error("هیچ گفتاری در فایل تشخیص داده نشد.");
+  if (built.utterances.length === 0)
+    throw new JobFailure("no_speech", "هیچ گفتاری در فایل تشخیص داده نشد.");
 
   const transcriptPath = path.join(config.outDir, `${sessionId}.transcript.txt`);
   await fs.mkdir(config.outDir, { recursive: true });

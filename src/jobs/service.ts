@@ -12,7 +12,10 @@
  * تا کلاینت با نظرسنجی بخواند.
  */
 
+import fs from "node:fs";
 import { logger } from "../util/logger.js";
+import { notifyUser } from "../bot/notify.js";
+import { RETRY_BTN, interruptedMessage } from "../bot/strings.js";
 import { runPipeline, type Stage } from "../pipeline.js";
 import { enqueue } from "../queue.js";
 import { commit, danglingReservations, orphanedQueued, refund, reserve, InsufficientCredit } from "../billing/ledger.js";
@@ -109,7 +112,14 @@ export { InsufficientCredit, getSession };
  * اینکه اجرای خودکارِ چیزی که همین حالا سرور را کشته راهِ خوبی برای کشتنِ
  * دوبارهٔ آن است. سکه برمی‌گردد و کاربر خودش تصمیم می‌گیرد.
  */
-export function recoverInterrupted(): number {
+/** امضای `notifyUser` — تا آزمون بتواند جایش جاسوس بگذارد بی‌آنکه رباتی بالا بیاید. */
+export type Notify = (
+  userId: number,
+  text: string,
+  extra?: Record<string, unknown>,
+) => Promise<unknown>;
+
+export function recoverInterrupted(notify: Notify = notifyUser): number {
   const dangling = danglingReservations();
   for (const d of dangling) {
     refund(d.tgId, d.reservedSec, d.sessionId, "سرور وسط پردازش متوقف شد");
@@ -121,6 +131,38 @@ export function recoverInterrupted(): number {
       { sessionId: d.sessionId, tgId: d.tgId, sec: d.reservedSec },
       "جلسهٔ نیمه‌کاره جمع شد و سکه برگشت",
     );
+
+    /**
+     * **به خودِ دانشجو هم بگو.**
+     *
+     * تا امروز سکه برمی‌گشت و خطا در پایگاه‌داده می‌نشست، ولی هیچ پیامی
+     * نمی‌رفت. آخرین چیزی که دانشجو دیده بود «دارم گوش می‌دم…» بود، پس
+     * منتظر نتیجه‌ای می‌ماند که هرگز نمی‌آمد — و وقتی بالاخره حسابش را نگاه
+     * می‌کرد، سکه‌ای می‌دید که بی‌توضیح برگشته.
+     *
+     * دکمهٔ «دوباره تلاش کن» فقط وقتی می‌آید که فایل واقعاً روی دیسک باشد —
+     * همان شرطِ دست‌کدِ `retry:`. دکمه‌ای که بزنی و بگوید «فایل نیست» از
+     * نبودنش بدتر است؛ آن‌وقت می‌گوییم فایل را دوباره بفرستد.
+     *
+     * منتظرِ ارسال نمی‌مانیم: این تابع پیش از بالاآمدن ربات صدا زده می‌شود و
+     * سکوی کندی که جواب نمی‌دهد نباید راه‌اندازی را نگه دارد. شکست هم
+     * بلعیده می‌شود، چون سکه برگشته و درست‌ترین کار انجام شده.
+     */
+    const s = getSession(d.sessionId);
+    const canRetry = Boolean(s?.original_file && fs.existsSync(s.original_file));
+    void notify(
+      d.tgId,
+      interruptedMessage(canRetry),
+      canRetry
+        ? {
+            reply_markup: {
+              inline_keyboard: [[{ text: RETRY_BTN, callback_data: `retry:${d.sessionId}` }]],
+            },
+          }
+        : {},
+    ).catch((e: unknown) => {
+      logger.warn({ sessionId: d.sessionId, err: String(e) }, "خبرِ جلسهٔ نیمه‌کاره نرسید");
+    });
   }
 
   /**

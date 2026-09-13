@@ -85,8 +85,18 @@ check(
 );
 
 // و هیچ گزینه‌ای روی صفحه‌کلید نباید از این بدتر باشد
-const buttons = shareTargetKeyboard(SESSION).inline_keyboard.flat();
+// دکمهٔ «بی‌خیال» تعداد نیست؛ گزینه‌ها فقط دکمه‌های عددی‌اند.
+const isCount = (b) => !b.callback_data.startsWith("shx:");
+const allButtons = shareTargetKeyboard(SESSION, "sont", CLASS_SEC).inline_keyboard.flat();
+const buttons = allButtons.filter(isCount);
 const options = buttons.map((b) => Number(b.callback_data.split(":").pop()));
+check("راهِ «بی‌خیال» هست", allButtons.some((b) => b.callback_data === `shx:${SESSION}`));
+// سهمِ روی دکمه باید همان باشد که `joinSession` واقعاً کم می‌کند.
+for (const b of buttons) {
+  const n = Number(b.callback_data.split(":").pop());
+  const faSeat = String(shareBack(CLASS_SEC, n).seat).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[d]);
+  check(`دکمهٔ «${n} نفر» سهمِ واقعی را می‌گوید`, b.text.includes(`نفری ${faSeat} سکه`), b.text);
+}
 console.log(`گزینه‌های صفحه‌کلید: ${options.join(" · ")}\n`);
 check("گزینهٔ «۱ نفر» حذف شده", !options.includes(1));
 check("کمترین گزینه، خودِ کف است", Math.min(...options) === SHARE_TARGET_MIN);
@@ -100,7 +110,7 @@ for (const n of options) {
 check("ردیف خالی ندارد", !shareTargetKeyboard(SESSION).inline_keyboard.some((r) => r.length === 0));
 
 // مسیرِ پیش از پرداخت، دست‌کدِ خودش را دارد و با مسیرِ پس از تحویل قاطی نمی‌شود
-const pre = shareTargetKeyboard(SESSION, "sontp").inline_keyboard.flat();
+const pre = shareTargetKeyboard(SESSION, "sontp").inline_keyboard.flat().filter(isCount);
 check("انتخابِ پیش از پرداخت دست‌کد جدا دارد", pre.every((b) => b.callback_data.startsWith("sontp:")));
 check(
   "دست‌کدِ پس از تحویل با پیش از پرداخت اشتباه نمی‌شود",
