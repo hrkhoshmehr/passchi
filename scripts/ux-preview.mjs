@@ -205,6 +205,32 @@ line("هدیه — کسی که از قبل سکه داشت");
 show(claimedMessage(20, coinsToSec(50)));
 line("هدیه — مقدار بزرگ");
 show(claimedMessage(120, coinsToSec(120)));
+// ── صفحه‌های تازهٔ این دسته: دکمه‌ها هم چاپ می‌شوند، چون بخشی از متن‌اند ────
+const { sendPromptMessage, START_BTN, SHARE_COUNTS, invitationTail } = await import("../src/bot/strings.ts");
+const { shareBack } = await import("../src/billing/coins.ts");
+const { BTN } = await import("../src/bot/menu.ts");
+const faN = (n) => String(n).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[d]);
+
+line("خوش‌آمد — دکمه‌ها");
+console.log(`[ ${START_BTN.sample} ]\n[ ${START_BTN.send} ]\n[ ${BTN.how} ]`);
+line("ارسال صوت");
+show(sendPromptMessage("معمولاً تا حدود ۲۰ مگ.", coinsToSec(20)));
+line("تأیید هزینه، با شریکی روشن (۱۰ نفر)");
+show(confirmCostMessage(90 * 60, coinsToSec(120), { people: 10 }));
+line("چند نفر — با دکمه‌ها");
+show(shareTargetPrompt(90 * 60));
+console.log(
+  "\n" +
+    SHARE_COUNTS.map((n) => `[ ${faN(n)} نفر · نفری ${faN(shareBack(5400, n).seat)} سکه ]`).join(" ") +
+    "\n[ ✖️ بی‌خیال ]",
+);
+line("پیام پایانی — شریکی خاموش");
+show(settlementMessage(5400, coinsToSec(30), false, { hasArchive: true }));
+line("پیام پایانی — شریکی روشن (۱۰ نفر)");
+show(settlementMessage(5400, coinsToSec(30), true, { people: 10, hasArchive: true }));
+line("زیر دعوت — فقط برای فرستنده");
+show(invitationTail({ costSec: 5400, seatCoins: 5, refundedCoins: 0, capReached: false }));
+
 line("هدیه — پیام‌های رد");
 for (const r of ["unknown", "revoked", "expired", "already", "exhausted"]) {
   console.log(`  ${r.padEnd(10)} → ${refusalMessage(r)}`);

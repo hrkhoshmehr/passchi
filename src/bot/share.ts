@@ -67,9 +67,10 @@ function classmateCost(seatCoins: number, capReached: boolean): string {
   if (capReached) return "💰 برای تو مجانیه؛ هزینه‌ش قبلاً جمع شده.";
   const gift = config.FREE_TRIAL_COINS;
   if (gift > 0 && seatCoins <= gift) {
-    return `💰 ${fmtCoins(seatCoins)}ست؛ هر کی تازه بیاد ${fmtCoins(gift)} هدیه می‌گیره، پس برات مجانی درمیاد.`;
+    // نیم‌فاصله پیش از «ست»؛ بی آن «سکهست» چسبیده خوانده می‌شود.
+    return `💰 ${fmtCoins(seatCoins)}‌ست؛ هر کی تازه بیاد ${fmtCoins(gift)} هدیه می‌گیره، پس برات مجانی درمیاد.`;
   }
-  return `💰 ${fmtCoins(seatCoins)}ست. هر سکه یعنی یه دقیقه صوت.`;
+  return `💰 ${fmtCoins(seatCoins)}‌ست. هر سکه یعنی یه دقیقه صوت.`;
 }
 
 /**

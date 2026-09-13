@@ -53,7 +53,7 @@ import {
   mintGift, refusalMessage,
 } from "./gift.js";
 import {
-  RATE_LINE, SHARE_TARGET, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtBalance, fmtCoins,
+  RATE_LINE, SHARE_TARGET, balanceCoins, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtBalance, fmtCoins,
   fmtCost, fmtToman,
 } from "../billing/coins.js";
 import {
@@ -269,6 +269,17 @@ async function accountScreen(ctx: Context): Promise<void> {
   const u = touchUser(ctx);
   if (!u) return;
   const done = listSessions(u.tg_id, 500).filter((s) => s.status === "done").length;
+  const transferable = transferableSec(u.tg_id);
+  /**
+   * دکمه‌های حساب: شارژ، سکه دادن، پشتیبانی.
+   *
+   * «سکه بده» فقط وقتی هست که واقعاً سکهٔ خریداری‌شده‌ای برای دادن باشد —
+   * همان قاعدهٔ متنِ `accountMessage`. پشتیبانی اینجاست چون صفحهٔ حساب
+   * همان جایی است که آدم با «سکه‌ام کجا رفت؟» می‌رسد.
+   */
+  const kb = new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup");
+  if (balanceCoins(transferable) > 0) kb.row().text(S.GIVE_BTN, "give");
+  kb.row().text(BTN.support, "support");
   await reply(
     ctx,
     S.accountMessage({
@@ -276,11 +287,23 @@ async function accountScreen(ctx: Context): Promise<void> {
       usedSec: u.total_used_sec,
       refundedSec: totalShareRefunds(u.tg_id),
       sessionCount: done,
-      transferableSec: transferableSec(u.tg_id),
+      transferableSec: transferable,
     }),
-    { reply_markup: withBack(new InlineKeyboard().text("🪙 شارژ حساب", "topup")) },
+    { reply_markup: withBack(kb) },
   );
 }
+
+async function supportScreen(ctx: Context): Promise<void> {
+  const platform = platformOf(ctx);
+  await reply(ctx, supportMessage(platform), {
+    reply_markup: withBack(supportKeyboard(platform) ?? new InlineKeyboard()),
+  });
+}
+
+handlers.callbackQuery("support", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await supportScreen(ctx);
+});
 
 async function topupScreen(ctx: Context): Promise<void> {
   touchUser(ctx);
@@ -877,7 +900,17 @@ handlers.command("send", async (ctx) => {
     return;
   }
 
-  // ── جهت دوم: مستقیم، وقتی شناسه در دست است ────────────────────────────────
+  /**
+   * ── جهت دوم: مستقیم با شناسه — **فقط ادمین** ──────────────────────────────
+   *
+   * شناسهٔ داخلی را هیچ دانشجویی ندارد و هیچ صفحه‌ای نشانش نمی‌دهد؛ این جهت
+   * برای او فقط یک راهِ اشتباه‌تایپ‌کردن بود. ادمین شناسه را از `/gift` و
+   * لاگ دارد و همچنان می‌تواند. دو عدد از دانشجو یعنی راهنما، نه انتقال.
+   */
+  if (target !== null && !isAdmin(ctx)) {
+    await reply(ctx, S.SEND_USAGE);
+    return;
+  }
   if (target !== null) {
     const out = sendDirect(me, target, coins);
     if (!out.ok) {
@@ -903,6 +936,46 @@ handlers.command("send", async (ctx) => {
     await reply(ctx, S.sendTooMuchMessage(minted.availableCoins));
     return;
   }
+  await reply(ctx, S.transferLinkMessage(minted.transfer.coins, minted.link));
+});
+
+/**
+ * «🎁 سکه بده به هم‌کلاسی» از صفحهٔ حساب — همان کارِ `/send`، بدون تایپ.
+ *
+ * تا امروز تنها راه تایپِ `/send 20` بود، که دانشجوی سال‌اولی نه می‌شناسد نه
+ * روی صفحه‌کلیدِ فارسی راحت می‌زند. مقدارها دکمه‌اند و فقط آن‌هایی می‌آیند که
+ * واقعاً قابل دادن‌اند؛ اگر کمتر از کوچک‌ترینشان مانده، همان عدد یک دکمه
+ * می‌شود — وگرنه صفحه‌ای بی‌دکمه می‌ماند.
+ */
+handlers.callbackQuery("give", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  touchUser(ctx);
+  const available = balanceCoins(transferableSec(uid(ctx)));
+  if (available <= 0) {
+    await reply(ctx, S.sendTooMuchMessage(0), { reply_markup: withBack(new InlineKeyboard()) });
+    return;
+  }
+  const amounts = S.GIVE_AMOUNTS.filter((n) => n <= available);
+  const kb = new InlineKeyboard();
+  for (const n of amounts.length ? amounts : [available]) {
+    kb.text(`${toFaDigits(n)} سکه`, `give:${n}`);
+  }
+  await reply(ctx, S.givePrompt(available), { reply_markup: withBack(kb) });
+});
+
+handlers.callbackQuery(/^give:(\d+)$/, async (ctx) => {
+  const coins = Number(ctx.match![1]);
+  touchUser(ctx);
+  await ctx.answerCallbackQuery();
+  if (!Number.isFinite(coins) || coins <= 0) return;
+  // همان مسیرِ `/send`: سقفِ «فقط سکهٔ خریداری‌شده» در `mintTransfer` است، نه
+  // در دکمه — دکمه‌ای که از پیامِ قدیمی زده شود ممکن است دیگر پوشش نداشته باشد.
+  const minted = await mintTransfer(ctx.api, { fromId: uid(ctx), coins });
+  if ("error" in minted) {
+    await reply(ctx, S.sendTooMuchMessage(minted.availableCoins));
+    return;
+  }
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   await reply(ctx, S.transferLinkMessage(minted.transfer.coins, minted.link));
 });
 
@@ -1274,7 +1347,7 @@ handlers.on("message:text", async (ctx) => {
           : "فعلاً نسخهٔ تحت وب فعال نیست. همین‌جا صوتت را بفرست 🎧",
       ));
     }
-    return void (await reply(ctx, supportMessage(), { reply_markup: withBack(supportKeyboard(platformOf(ctx)) ?? new InlineKeyboard()) }));
+    return void (await supportScreen(ctx));
   }
 
   const state = convo.get(id);
@@ -2431,8 +2504,8 @@ handlers.callbackQuery(/^txt:([a-f0-9]+)$/, async (ctx) => {
     await ctx.reply("رونوشت این جلسه موجود نیست.");
     return;
   }
-  await sendDoc(ctx, transcriptBytes(s.transcript_txt), "رونوشت کامل.txt", {
-    caption: "📄 رونوشت کامل با مهر زمانی",
+  await sendDoc(ctx, transcriptBytes(s.transcript_txt), S.FILE_NAME.transcriptTxt, {
+    caption: S.CAPTION.transcript,
   });
 });
 
@@ -2467,8 +2540,8 @@ handlers.callbackQuery(/^pdf:([a-f0-9]+)$/, async (ctx) => {
     await ctx.reply("جزوهٔ این جلسه موجود نیست.");
     return;
   }
-  if (!(await sendDoc(ctx, s.pdf_path, "جزوه.pdf", { caption: "📕 جزوهٔ این جلسه" }))) {
-    await ctx.reply("فرستادن جزوه ممکن نشد. دوباره امتحان کن یا به پشتیبانی بگو.");
+  if (!(await sendDoc(ctx, s.pdf_path, "جزوه.pdf", { caption: S.CAPTION.notes }))) {
+    await ctx.reply(`فایل جزوه نرفت 😕 یه بار دیگه بزن؛ اگه باز نشد از «${BTN.support}» بگو.`);
   }
 });
 
@@ -2967,7 +3040,7 @@ handlers.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {
 
 handlers.callbackQuery(/^jno:([a-f0-9]+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText("باشد، منصرف شدی. هر وقت خواستی دوباره روی لینک بزن.");
+  await ctx.editMessageText("باشه. هر وقت خواستی دوباره رو لینک بزن.").catch(() => {});
 });
 
 handlers.command("shared", async (ctx) => {

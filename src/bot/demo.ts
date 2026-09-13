@@ -121,7 +121,8 @@ export function outroMessage(supportUsername: string): string {
       "کلاس آنلاین هم که باشه، ویدیوشو بده.",
   ];
   if (supportUsername) {
-    out.push("", `❓ سوالی داشتی، به @${supportUsername} پیام بده.`);
+    // آیدی خطِ خودش را دارد: `@` لاتین وسطِ خطِ فارسی روی گوشی جابه‌جا می‌نشیند.
+    out.push("", "❓ سؤالی داشتی، پیام بده:", `@${supportUsername}`);
   }
   return out.join("\n");
 }
