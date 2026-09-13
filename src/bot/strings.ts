@@ -1483,6 +1483,7 @@ export const GROUP_REFUSAL: Record<GroupRefusal, string> = {
   already: "جات محفوظه 👍 پر که شد، جزوه همین‌جا برات میاد.",
   full: "ظرفیت این خرید گروهی پر شد.",
   gift_cap: "سهمیهٔ سکهٔ هدیه برای خرید گروهی این هفته تموم شده؛ فقط با سکهٔ خریداری‌شده میشه وارد شد.",
+  busy: "پردازش این فایل از قبل شروع شده؛ دیگه نمیشه براش خرید گروهی باز کرد.",
 };
 
 export const PENDING_WEB_UPLOAD_AFTER_TOPUP =

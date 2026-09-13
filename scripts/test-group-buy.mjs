@@ -336,6 +336,27 @@ const M5 = user(0, 50);
   const buttons = (x) => (x.extra?.reply_markup?.inline_keyboard ?? []).flat();
   check("دکمهٔ «دوباره» فقط برای مالک", spy.filter((x) => buttons(x).length).every((x) => x.userId === O));
   check("هم‌کلاسی هم خبر گرفت", spy.some((x) => x.userId === A));
+  // پولش برگشته؛ اگر عضو بماند و مالک تنها دوباره بزند، جزوه را مجانی می‌خواند.
+  check("عضویتِ هم‌کلاسیِ برگشت‌خورده برداشته شد", !isMemberRow(sid, A));
+}
+
+// ─── ۱۱) گروه روی کاری که راه افتاده یا تمام شده باز نمی‌شود ────────────────
+{
+  const O = user(0, 100);
+  const sid = session(O);
+  reserve(O, 5400, sid);
+  updateSession(sid, { status: "stt" });
+  const r = openGroup({ sessionId: sid, ownerId: O, costSec: 5400, people: 3, origin: "bot" });
+  check("رزروِ تنهای بی‌تسویه ← busy", !r.ok && r.reason === "busy", JSON.stringify(r));
+  check("…و هیچ گروهی ساخته نشد", GB.groupBuy(sid) === null && getSession(sid).status === "stt");
+
+  const O2 = user(0, 100);
+  const sid2 = session(O2);
+  updateSession(sid2, { status: "done" });
+  const r2 = openGroup({ sessionId: sid2, ownerId: O2, costSec: 5400, people: 3, origin: "bot" });
+  check("جلسهٔ تمام‌شده ← busy", !r2.ok && r2.reason === "busy");
+  check("…و سکه‌ای رزرو نشد", currentBalance(O2) === coinsToSec(100));
+  check("متنِ busy هست", typeof S.GROUP_REFUSAL.busy === "string" && S.GROUP_REFUSAL.busy.length > 0);
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

@@ -41,6 +41,7 @@ import { db, getSession } from "../db/index.js";
 import { logger } from "../util/logger.js";
 import { GROUP_BUY_HOURS, GROUP_SIZES, coinsToSec, costCoins, groupSeat } from "./coins.js";
 import { atomic, transferableSec } from "./ledger.js";
+import { isBusy } from "../queue.js";
 
 // عددها در `coins.ts` نشسته‌اند تا متن‌ها و پیش‌نمایش بی پایگاه‌داده بخوانندشان.
 export { GROUP_BUY_HOURS, GROUP_SIZES, groupSeat };
@@ -72,7 +73,7 @@ export interface SeatRow {
 }
 
 export type RefusalReason =
-  | "not_found" | "bad_size" | "exists" | "closed" | "owner" | "already" | "full" | "gift_cap";
+  | "not_found" | "bad_size" | "exists" | "closed" | "owner" | "already" | "full" | "gift_cap" | "busy";
 
 /** ردِ یک کارِ گروهی — پیامِ فارسی‌اش در `strings.ts`، کلیدش اینجا. */
 export class GroupBuyRefused extends Error {
@@ -212,6 +213,25 @@ export function createGroupBuy(o: {
   atomic((m) => {
     const s = getSession(o.sessionId);
     if (!s || s.tg_id !== o.ownerId) throw new GroupBuyRefused("not_found");
+    /**
+     * **جلسه‌ای که کارش راه افتاده یا تمام شده، گروه نمی‌گیرد.**
+     *
+     * دست‌کدهای ربات و مینی‌اپ وضعیت را پیش از یک `await` (دانلود، probe)
+     * می‌سنجند؛ اگر مالک همان فاصله «شروع کن» را هم زده باشد، کارِ تنها راه
+     * افتاده و این گروه جلسه را `awaiting_group` می‌کرد — و آن‌وقت
+     * `danglingReservations` رزروِ تنهای مالک را نمی‌دید و ری‌استارت سکه‌اش را
+     * می‌بلعید. پس سنجش همین‌جا، داخلِ تراکنش: در صف یا در جریان، تمام‌شده،
+     * یا رزروِ تنهای بی‌تسویه.
+     */
+    const openSolo = db
+      .prepare(
+        `SELECT COALESCE(-SUM(delta_sec), 0) AS n FROM credit_ledger
+          WHERE session_id = ? AND tg_id = ? AND reason IN ('reserve', 'refund', 'commit')`,
+      )
+      .get(o.sessionId, o.ownerId) as unknown as { n: number };
+    if (s.status === "done" || isBusy(o.sessionId) || (openSolo.n > 0 && s.status !== "awaiting_group")) {
+      throw new GroupBuyRefused("busy");
+    }
     const old = groupBuy(o.sessionId);
     if (old && (old.status === "open" || old.status === "started")) throw new GroupBuyRefused("exists");
     if (old) db.prepare(`DELETE FROM group_buys WHERE session_id = ?`).run(o.sessionId);
@@ -443,9 +463,20 @@ export function refundGroupBuy(sessionId: string, note: string): ClosedGroup | n
  * درست می‌شود تا سهم‌هایش از بودجهٔ هدیهٔ هفته بیرون بروند.
  */
 export function markGroupBuyFailed(sessionId: string): void {
-  db.prepare(
-    `UPDATE group_buys SET status = 'failed', closed_at = datetime('now') WHERE session_id = ? AND status = 'started'`,
-  ).run(sessionId);
+  const r = db
+    .prepare(
+      `UPDATE group_buys SET status = 'failed', closed_at = datetime('now') WHERE session_id = ? AND status = 'started'`,
+    )
+    .run(sessionId);
+  /**
+   * عضویتِ هم‌کلاسی‌ها هم برداشته می‌شود — همان کاری که `closeWithRefund` می‌کند.
+   *
+   * بدون این، سکهٔ اعضا برمی‌گشت ولی عضو می‌ماندند: مالک «دوباره تلاش کن» را
+   * می‌زد، کار تنها و به خرجِ خودش تمام می‌شد، و اعضا جزوه را مجانی می‌خواندند.
+   */
+  if (Number(r.changes) === 1) {
+    db.prepare(`DELETE FROM session_members WHERE session_id = ? AND role = 'member'`).run(sessionId);
+  }
 }
 
 /** مالک خودش گروه را بست — مثلاً `/forget`. */
