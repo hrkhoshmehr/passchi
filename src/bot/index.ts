@@ -533,24 +533,11 @@ async function sendPrompt(ctx: Context): Promise<void> {
   const forwardLine = Number.isFinite(limit)
     ? `معمولاً تا حدود ${toFaDigits(Math.floor(limit / 1024 / 1024))} مگ.`
     : "هر حجمی.";
-  await ctx.reply(
-    [
-      "🎧 <b>صوت کلاستو برسون</b>",
-      "",
-      `• <b>تو همین پیام‌رسان داریش؟</b> فورواردش کن همین‌جا — ${forwardLine}`,
-      "• <b>تو گوشیته؟</b> دکمهٔ پایین — تا ۵۰۰ مگ، و اگه وسطش قطع شه از همون‌جا ادامه می‌ده.",
-      "• <b>لینک؟</b> فقط لینک مستقیم فایل. صفحهٔ ضبط جلسه و یوتیوب نمیشه.",
-      "",
-      "ویدیو هم قبوله؛ فقط صداشو برمی‌دارم و بابت تصویر سکه نمی‌گیرم.",
-      "",
-      // موجودی و نرخ **پیش از** آپلود گفته می‌شود، وگرنه کاربر صوت ۹۰
-      // دقیقه‌ای را می‌فرستد و آن‌سرِ کار «سکه‌هات کم میاد» می‌گیرد.
-      `💰 موجودیت: <b>${fmtBalance(balanceSec)}</b> — ${RATE_LINE}.`,
-      "",
-      "<i>گوشی رو بذار رو میز نه تو کیف، و هرچی به استاد نزدیک‌تر بهتر.</i>",
-    ].join("\n"),
-    { parse_mode: "HTML", reply_markup: withBack(kb) },
-  );
+  // متن در strings است تا پیش‌نمایش هم همان را ببیند؛ جملهٔ اجازه هم آنجاست.
+  await ctx.reply(S.sendPromptMessage(forwardLine, balanceSec), {
+    parse_mode: "HTML",
+    reply_markup: withBack(kb),
+  });
 }
 
 // ─── دستورها ────────────────────────────────────────────────────────────────
@@ -579,7 +566,14 @@ handlers.command("start", async (ctx) => {
       await reply(ctx, refusalMessage(out.reason));
       return;
     }
-    await reply(ctx, claimedMessage(out.coins, out.balanceSec));
+    // لینکِ هدیه از خوش‌آمد و تورِ نمونه رد می‌شود؛ پس نمونه همین‌جا پیشنهاد
+    // می‌شود، پیش از آنکه گیرنده بی‌آنکه خروجی را دیده باشد صوت بفرستد.
+    await reply(ctx, claimedMessage(out.coins, out.balanceSec), {
+      reply_markup: new InlineKeyboard()
+        .text(S.START_BTN.sample, WELCOME_CB)
+        .row()
+        .text(S.START_BTN.send, "startnow"),
+    });
     await notifyGiftClaimed(ctx, code, id, out.coins);
     return;
   }
@@ -616,16 +610,18 @@ handlers.command("start", async (ctx) => {
     const sessionId = payload.slice(2);
     const s = getSession(sessionId);
     if (!s || s.status !== "done" || !s.share_enabled) {
-      await reply(ctx, "این لینک معتبر نیست یا صاحبش اشتراک‌گذاری را خاموش کرده.");
+      await reply(ctx, "این لینک دیگه کار نمی‌کنه؛ یا جلسه آماده نیست، یا صاحبش شریکی رو خاموش کرده.", {
+        reply_markup: mainKeyboard,
+      });
       return;
     }
     if (s.tg_id === uid(ctx)) {
-      await reply(ctx, `این جلسهٔ خودت است. از «${BTN.history}» بازش کن.`);
+      await reply(ctx, `این جلسهٔ خودته؛ از «${BTN.history}» بازش کن.`, { reply_markup: mainKeyboard });
       return;
     }
     const preview = joinPreview(s, u?.credit_sec ?? 0);
     if (!preview) {
-      await reply(ctx, "این جلسه در دسترس نیست.");
+      await reply(ctx, "این جلسه الان در دسترس نیست.", { reply_markup: mainKeyboard });
       return;
     }
     await ctx.reply(preview.text, { parse_mode: "HTML", reply_markup: preview.keyboard });
@@ -645,16 +641,20 @@ handlers.command("start", async (ctx) => {
    * بود و کسی که آماده بود، مجبور بود از تور رد شود تا به کار برسد.
    *
    * ترتیب عمدی است: «نمونه» اول می‌آید چون بیشترِ کاربران تازه هنوز چیزی
-   * ندیده‌اند و اثباتِ کار، قوی‌ترین دلیل ماندن است.
+   * ندیده‌اند و اثباتِ کار، قوی‌ترین دلیل ماندن است. (این توضیح مدتی اینجا
+   * بود در حالی که دکمهٔ نمونه اصلاً روی صفحه‌کلید نبود — «صوت می‌فرستم» اول
+   * بود و «چطور کار می‌کنه» دوم، و نمونه فقط پشتِ دومی پیدا می‌شد.)
    */
   await ctx.reply("سلام 👋", { reply_markup: mainKeyboard });
   await ctx.reply(WELCOME, {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
     reply_markup: new InlineKeyboard()
-      .text("🎧 صوت می‌فرستم", "startnow")
+      .text(S.START_BTN.sample, WELCOME_CB)
       .row()
-      .text("❓ چطور کار می‌کنه", "howto"),
+      .text(S.START_BTN.send, "startnow")
+      .row()
+      .text(BTN.how, "howto"),
   });
 });
 
@@ -667,7 +667,7 @@ handlers.command("start", async (ctx) => {
  */
 async function howtoScreen(ctx: Context): Promise<void> {
   await reply(ctx, HOW_IT_WORKS, {
-    reply_markup: withBack(new InlineKeyboard().text("👀 نمونهٔ یه کلاس واقعی", WELCOME_CB)),
+    reply_markup: withBack(new InlineKeyboard().text(S.START_BTN.sample, WELCOME_CB)),
   });
 }
 
@@ -748,9 +748,18 @@ handlers.callbackQuery(DEMO_CB.recap, async (ctx) => {
     ? null
     : await ctx
     .replyWithAudio(fileId, {
+      /**
+       * وعدهٔ «رو زمان بزنی پخش میشه» فقط روی تلگرام.
+       *
+       * زمان‌های زدنی قابلیتِ تلگرام است و فقط در پیامی که ریپلایِ همین صوت
+       * است — که گام‌های بعدیِ تور هستند. کاربر بله همان جمله را می‌خواند،
+       * می‌زد و هیچ اتفاقی نمی‌افتاد؛ برای او فقط گفته می‌شود آن عددها چه‌اند.
+       */
       caption:
         `🎧 <b>صوت همین جلسه</b> — ${escapeHtml(SAMPLE_COURSE)}\n` +
-        "<i>نگهش دار؛ پایین رو زمان‌ها که بزنی، از همون‌جا پخش می‌شه.</i>",
+        (platform === "telegram"
+          ? "<i>نگهش دار؛ پایین رو زمان‌ها که بزنی، از همون‌جا پخش می‌شه.</i>"
+          : "<i>زمان‌هایی که پایین می‌بینی، دقیقه‌های همین صوته.</i>"),
       parse_mode: "HTML",
     })
     .catch((e: unknown) => {
@@ -792,16 +801,17 @@ handlers.callbackQuery(new RegExp(String.raw`^${DEMO_CB.extracted}(?::\d+)?$`), 
     ...demoReplyTo(ctx),
     reply_markup: stepKeyboard(
       DEMO_CB.timeline + (audioId ? `:${audioId}` : ""),
-      "بعدی: بخش‌بندی کلاس ←",
+      "بعدی: کلاس دقیقه‌به‌دقیقه ←",
     ),
   });
 });
 
 handlers.callbackQuery(new RegExp(String.raw`^${DEMO_CB.timeline}(?::\d+)?$`), async (ctx) => {
   await advance(ctx);
-  // زمان‌ها فقط وقتی لینک می‌شوند که پیام واقعاً ریپلایِ صوت باشد.
+  // زمان‌ها فقط وقتی لینک می‌شوند که پیام واقعاً ریپلایِ صوت باشد — و فقط روی
+  // تلگرام؛ بله قابلیتش را ندارد و نباید وعده‌اش را بخواند.
   const audioId = demoAudioIdOf(ctx);
-  await reply(ctx, S.timelineMessage(SAMPLE_REPORT, audioId !== null), {
+  await reply(ctx, S.timelineMessage(SAMPLE_REPORT, audioId !== null && platformOf(ctx) === "telegram"), {
     ...demoReplyTo(ctx),
     reply_markup: stepKeyboard(DEMO_CB.outro, "بعدی: جزوهٔ این جلسه ←"),
   });
@@ -812,15 +822,15 @@ handlers.callbackQuery(DEMO_CB.outro, async (ctx) => {
 
   // جزوه و رونوشتِ همان جلسهٔ نمونه — دو تکهٔ آخرِ خروجی واقعی.
   await sendDoc(ctx, SAMPLE_PDF_PATH, "نمونه-جزوه.pdf", {
-    caption: "📕 <b>جزوهٔ همین جلسه</b>\n<i>فقط محتوای درس؛ نکته‌های امتحانی داخل متن رنگی‌اند.</i>",
+    caption: "📕 <b>فایل جزوهٔ همین جلسه</b>\n<i>فقط محتوای درس؛ نکته‌های امتحانی داخل متن رنگی‌اند.</i>",
     parse_mode: "HTML",
   });
-  await sendDoc(ctx, SAMPLE_TRANSCRIPT_PATH, "نمونه-رونوشت.txt", {
-    caption: "📄 رونوشت کامل با مهر زمانی",
+  await sendDoc(ctx, SAMPLE_TRANSCRIPT_PATH, "نمونه-متن کامل کلاس.txt", {
+    caption: "📄 متن کامل همین کلاس",
   });
 
   await reply(ctx, outroMessage(config.SUPPORT_USERNAME), {
-    reply_markup: withBack(new InlineKeyboard().text("🎧 صوت می‌فرستم", "startnow")),
+    reply_markup: withBack(new InlineKeyboard().text(S.START_BTN.send, "startnow")),
   });
   demoAudioMsg.delete(uid(ctx));
 });

@@ -109,9 +109,9 @@ function transcriptSource(
   s: SessionRow,
 ): { path: string; filename: string } | { bytes: Buffer; filename: string } | null {
   if (s.transcript_pdf && fs.existsSync(s.transcript_pdf)) {
-    return { path: s.transcript_pdf, filename: "رونوشت کامل.pdf" };
+    return { path: s.transcript_pdf, filename: S.FILE_NAME.transcriptPdf };
   }
-  if (s.transcript_txt) return { bytes: transcriptBytes(s.transcript_txt), filename: "رونوشت کامل.txt" };
+  if (s.transcript_txt) return { bytes: transcriptBytes(s.transcript_txt), filename: S.FILE_NAME.transcriptTxt };
   return null;
 }
 
@@ -241,7 +241,7 @@ export async function sendMorePart(to: SendTarget, s: SessionRow, part: MorePart
     part === "transcript"
       ? transcriptSource(s)
       : s.transcript_srt && fs.existsSync(s.transcript_srt)
-        ? ({ path: s.transcript_srt, filename: "رونوشت زمان‌دار.srt" } as const)
+        ? ({ path: s.transcript_srt, filename: S.FILE_NAME.srt } as const)
         : null;
   if (!source) return false;
 

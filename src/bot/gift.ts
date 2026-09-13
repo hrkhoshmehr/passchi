@@ -18,8 +18,9 @@ import type { Api } from "grammy";
 import { logger } from "../util/logger.js";
 import { toFaDigits } from "../util/time.js";
 import {
-  RATE_LINE, balanceCoins, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtCoins,
+  balanceCoins, coinsAsMinutesIfUseful, coinsToSec, costCoins, fmtCoins,
 } from "../billing/coins.js";
+import { COIN_MEANING } from "./strings.js";
 import { grant } from "../billing/ledger.js";
 import { claimGift, createGift, getGift, giftClaimedBy, giftUses, type GiftRow } from "../db/index.js";
 import { isBale } from "./identity.js";
@@ -171,11 +172,11 @@ export function claimedMessage(coins: number, balanceSec: number): string {
   const groups = [
     [`🎁 <b>${fmtCoins(coins)}</b> به حسابت اضافه شد!`],
     [
-      // «۲۰ سکه یعنی ۲۰ دقیقه» عدد را دو بار می‌گوید. جملهٔ نرخ به‌تنهایی همان
-      // را می‌رساند، و برای گیرنده‌ای که تازه با واژهٔ «سکه» روبه‌رو شده کافی
-      // است. معادل ساعتی فقط وقتی می‌آید که خودش خبر تازه باشد.
-      asTime ? `یعنی ${asTime}. <i>${RATE_LINE}.</i>` : `<i>${RATE_LINE}.</i>`,
-      ...(balance !== coins ? [`موجودی‌ات: <b>${fmtCoins(balance)}</b>`] : []),
+      // «۲۰ سکه یعنی ۲۰ دقیقه» عدد را دو بار می‌گوید. جملهٔ معنیِ سکه به‌تنهایی
+      // همان را می‌رساند، و برای گیرنده‌ای که تازه با واژهٔ «سکه» روبه‌رو شده
+      // کافی است. معادل ساعتی فقط وقتی می‌آید که خودش خبر تازه باشد.
+      asTime ? `یعنی ${asTime}. <i>${COIN_MEANING}.</i>` : `<i>${COIN_MEANING}.</i>`,
+      ...(balance !== coins ? [`موجودیت: <b>${fmtCoins(balance)}</b>`] : []),
     ],
     // انتظار را همین‌جا تنظیم می‌کند: یک کلاس کامل ۹۰ دقیقه‌ای به اندازهٔ
     // `FULL_CLASS_COINS` سکه می‌خواهد، پس هدیهٔ کوچک برای *کل* یک کلاس کافی
@@ -184,13 +185,25 @@ export function claimedMessage(coins: number, balanceSec: number): string {
     //
     // مبنا **موجودی** است نه خودِ هدیه: کسی که از قبل سکه داشته، آن‌ها را هم
     // می‌تواند خرج کند و گفتنِ عددِ هدیه به او کمتر از واقعیت نشان می‌دهد.
+    //
+    // ⚠️ جملهٔ قبلی می‌گفت «یا ۲۰ دقیقه از یه کلاس رو» — وعده‌ای که محصول
+    // نمی‌تواند بدهد: فایل یا کامل تحلیل می‌شود یا اصلاً شروع نمی‌شود، و
+    // بخشی از یک فایل را جدا نمی‌کند. حالا فقط آنچه واقعاً ممکن است: صوتی تا
+    // همین چند دقیقه، یا جزوه‌ای که هم‌کلاسی شریک شده و سهمش چند سکه است.
     ...(balance < FULL_CLASS_COINS
       ? [[
-          `<i>یه کلاس کامل ۹۰ دقیقه‌ای ${fmtCoins(FULL_CLASS_COINS)} می‌خواد. با این موجودی ` +
-            `می‌تونی یه جلسهٔ کوتاه‌تر رو کامل تحلیل کنی، یا ${toFaDigits(balance)} دقیقه از یه کلاس رو.</i>`,
+          `با ${fmtCoins(balance)} می‌تونی صوتی تا ${toFaDigits(balance)} دقیقه بفرستی. ` +
+            `یه کلاس کامل ۹۰ دقیقه‌ای ${fmtCoins(FULL_CLASS_COINS)} می‌خواد.`,
+          "با همین سکه‌ها جزوه‌ای رو هم که هم‌کلاسیت شریک شده می‌تونی بگیری.",
         ]]
       : []),
-    ["صوت کلاستو بفرست تا خلاصه، نکات امتحانی و جزوه‌اش رو برات دربیارم 🎧"],
+    /**
+     * نمونه پیش از آپلود.
+     *
+     * لینکِ هدیه از خوش‌آمد و تورِ نمونه رد می‌شود؛ پس گیرنده هیچ‌وقت ندیده
+     * خروجی چه شکلی است. دکمهٔ نمونه زیرِ همین پیام می‌نشیند (`index.ts`).
+     */
+    ["اول نمونهٔ یه کلاس واقعی رو ببین، یا همین حالا صوت کلاستو بفرست 👇"],
   ];
   return groups.map((x) => x.join("\n")).join("\n\n");
 }
