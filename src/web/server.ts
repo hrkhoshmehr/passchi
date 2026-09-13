@@ -39,9 +39,8 @@ import { probe } from "../audio/ffmpeg.js";
 import { getProgress, setProgress } from "./progress.js";
 import { startJob } from "../jobs/service.js";
 import { InsufficientCredit } from "../billing/ledger.js";
-import { groupBuyEnabled, openGroup, sendGroupInvite } from "../bot/group-buy.js";
 import { deliveryChannel } from "../bot/notify.js";
-import { FREE_FILE_REFUSAL, GROUP_REFUSAL } from "../bot/strings.js";
+import { FREE_FILE_REFUSAL } from "../bot/strings.js";
 import { unreservedSql } from "../db/index.js";
 import { balanceCoins, costCoins, fmtCoins, PACKAGES, COINS_PER_MINUTE, SHARE_TARGET } from "../billing/coins.js";
 import { setShareEnabled, setShareTarget } from "../billing/sharing.js";
@@ -378,8 +377,6 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
         // صفحه «۱۰۰ سکه» تبلیغ می‌کرد در حالی که مقدار واقعی ۲۰ شده بود —
         // یعنی کاربر با وعده‌ای می‌آمد که ربات زیرش نمی‌زد.
         trialCoins: config.FREE_TRIAL_COINS,
-        // صفحهٔ تأیید دکمهٔ «با هم‌کلاسیا بخریم» را فقط وقتی می‌سازد که سرور بپذیردش.
-        groupBuy: config.GROUP_BUY,
         // آدرس‌ها از خودِ `getMe` می‌آیند نه از HTML سفت‌شده یا متغیر محیطی:
         // هر دو با عوض‌شدن توکن ربات بی‌صدا کهنه می‌شوند و کاربر را به چت
         // اشتباه می‌برند.
@@ -568,14 +565,6 @@ async function handleApi(req: http.IncomingMessage, res: Res, url: URL): Promise
      */
     const body = await readJson<{ share?: boolean; people?: number; free?: boolean }>(req).catch(() => ({}));
     return confirmSession(res, uid, sessionMatch[1]!, body);
-  }
-
-  // خرید گروهی از صفحهٔ تأییدِ مینی‌اپ — همان `openGroup` که ربات صدا می‌زند.
-  if (sessionMatch && req.method === "POST" && sessionMatch[2] === "/group") {
-    const uid = requireUser(req, res);
-    if (uid === null) return;
-    const body = await readJson<{ people?: number }>(req).catch(() => ({}) as { people?: number });
-    return openGroupFromWeb(res, uid, sessionMatch[1]!, Number(body.people));
   }
 
   if (sessionMatch && req.method === "GET") {
@@ -1212,59 +1201,6 @@ async function finishUpload(
     courseId: o.courseId,
   });
   json(res, r.status, r.body);
-}
-
-/**
- * خرید گروهی برای آپلودِ تأییدنشدهٔ مینی‌اپ.
- *
- * دعوت در **ربات** فرستاده می‌شود، نه در صفحه: همان‌جاست که دانشجو پیام را
- * به گروه کلاس فوروارد می‌کند و نتیجه هم همان‌جا می‌آید. کاربری که هیچ
- * رباتی ندارد پیش از ساختنِ گروه رد می‌شود؛ گروهی که دعوتش به هیچ‌جا نرسد
- * فقط سهمِ او را دو روز قفل می‌کرد.
- */
-async function openGroupFromWeb(res: Res, userId: number, sessionId: string, people: number): Promise<void> {
-  if (!groupBuyEnabled()) return json(res, 404, { error: "خرید گروهی الان فعال نیست." });
-  const s = getSession(sessionId);
-  if (!s || s.tg_id !== userId) return json(res, 404, { error: "این جلسه پیدا نشد." });
-  const unconfirmed =
-    s.status === "queued" &&
-    Boolean(db.prepare(`SELECT 1 FROM sessions s WHERE s.id = ? AND ${unreservedSql("s")}`).get(sessionId));
-  if (!unconfirmed) return json(res, 409, { error: "این جلسه از قبل شروع شده." });
-  if (!s.original_file || !fs.existsSync(s.original_file)) {
-    return json(res, 400, { error: "فایل این جلسه موجود نیست." });
-  }
-  if (!deliveryChannel(userId)) {
-    return json(res, 400, { error: "برای خرید گروهی اول ربات رو باز کن؛ پیام دعوت اونجا میاد." });
-  }
-
-  let sec = 0;
-  try {
-    sec = Math.round((await probe(s.original_file)).durationMs / 1000);
-  } catch {
-    return json(res, 400, { error: "مدت این فایل خوانده نشد." });
-  }
-
-  const out = openGroup({ sessionId, ownerId: userId, costSec: sec, people, origin: "web" });
-  if (!out.ok) {
-    if (out.reason === "short") {
-      return json(res, 402, {
-        error: "سهم خودت رو هم نداری.",
-        needCoins: costCoins(out.seatSec),
-        haveCoins: balanceCoins(out.balanceSec),
-      });
-    }
-    return json(res, out.reason === "bad_size" ? 400 : 409, { error: GROUP_REFUSAL[out.reason] });
-  }
-  const sent = await sendGroupInvite(sessionId).catch((e: unknown) => {
-    logger.warn({ sessionId, err: String(e) }, "group buy invite to bot failed");
-    return false;
-  });
-  return json(res, 200, {
-    seats: out.progress.seats,
-    seatCoins: out.progress.seatCoins,
-    expiresAt: out.progress.expiresAt,
-    sent,
-  });
 }
 
 /**

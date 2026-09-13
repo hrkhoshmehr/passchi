@@ -134,7 +134,7 @@ function markNudge(userId: number, stage: number, delivered: boolean): void {
  * خرید گروهی روشن است همان را می‌گوید، وگرنه شریک‌شدن پس از تحویل را —
  * هر دو با برچسبِ همان دکمه‌ای که کاربر واقعاً خواهد دید.
  */
-export function nudgeMessage(stage: 1 | 2, creditSec: number, groupBuy: boolean): string {
+export function nudgeMessage(stage: 1 | 2, creditSec: number): string {
   if (stage === 1) {
     const coins = balanceCoins(creditSec);
     const gift =
@@ -147,24 +147,15 @@ export function nudgeMessage(stage: 1 | 2, creditSec: number, groupBuy: boolean)
       `صوت کلاس بعدیتو با گوشی ضبط کن و همین‌جا بفرست؛ چند دقیقه بعد جزوه‌ش دستته.`
     );
   }
-  /**
-   * دکمهٔ خرید گروهی **فقط روی صفحهٔ سکهٔ کم** است. کسی که سکه‌اش یک کلاسِ
-   * نود دقیقه‌ای را می‌پوشاند صفحهٔ تأیید را می‌بیند و آنجا فقط دکمهٔ
-   * شریک‌شدن هست — نام‌بردنِ دکمه‌ای که هرگز نمی‌بیند یعنی وعدهٔ توخالی.
-   */
-  const coversClass = creditSec >= 90 * 60;
-  const how = groupBuy && !coversClass
-    ? `وقتی صوتو فرستادی و سکه‌ت کم اومد، «${GROUP_BTN_LABEL}» رو بزن تا هزینه بین بچه‌های کلاس برابر تقسیم بشه.`
-    : `وقتی صوتو فرستادی، «${CONFIRM_BTN.share}» رو بزن؛ هر کی جزوه رو بگیره سهمش میاد تو حساب تو.`;
+  // شریک‌شدن پس از تحویل: هر کی با لینکِ جلسه بیاد سهمش رو می‌ده و به حساب تو برمی‌گرده.
+  void creditSec;
+  const how = `وقتی صوتو فرستادی، «${CONFIRM_BTN.share}» رو بزن؛ هر کی جزوه رو بگیره سهمش میاد تو حساب تو.`;
   return (
     `یه کلاس کامل معمولاً نود دقیقه‌ست، و لازم نیست کل هزینه‌شو تنها بدی 📚\n\n` +
     `${how}\n\n` +
     `اگه هنوز مطمئن نیستی، اول خروجیِ یه کلاس واقعی رو ببین.`
   );
 }
-
-/** همان برچسبِ دکمهٔ «خرید گروهی» در صفحهٔ سکهٔ کم. */
-export const GROUP_BTN_LABEL = "👥 با هم‌کلاسیا بخریم";
 
 export function nudgeKeyboard(): Record<string, unknown> {
   return {
@@ -193,7 +184,7 @@ export async function runNudges(
     if (!claimNudge(d.userId, d.stage, now)) continue;
     let ok = false;
     try {
-      ok = await notify(d.userId, nudgeMessage(d.stage, d.creditSec, config.GROUP_BUY), nudgeKeyboard());
+      ok = await notify(d.userId, nudgeMessage(d.stage, d.creditSec), nudgeKeyboard());
     } catch (e) {
       logger.warn({ userId: d.userId, stage: d.stage, err: String(e) }, "nudge failed");
     }

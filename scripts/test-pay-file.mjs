@@ -103,12 +103,11 @@ updateSession(SID, { status: "awaiting_credit", original_ms: 90 * 60 * 1000, ori
 
 // ─── ۱) صفحهٔ سکهٔ کم ────────────────────────────────────────────────────────
 {
-  const withGroup = lowBalanceKeyboard(SID).inline_keyboard;
-  check("با خرید گروهی: «پرداخت همین فایل» ردیفِ اول", withGroup[0][0].callback_data === `pf:${SID}`);
-  config.GROUP_BUY = false;
-  const noGroup = lowBalanceKeyboard(SID).inline_keyboard.flat();
-  config.GROUP_BUY = true;
-  check("بی خرید گروهی هم هست، کنار شارژ و ادامه", ["pf:" + SID, "topup", `go:${SID}`].every((d) => noGroup.some((b) => b.callback_data === d)), noGroup.map((b) => b.callback_data).join(" "));
+  const low = lowBalanceKeyboard(SID).inline_keyboard;
+  check("«پرداخت همین فایل» ردیفِ اول", low[0][0].callback_data === `pf:${SID}`);
+  const flat = low.flat();
+  check("کنارش شارژ و ادامه", ["pf:" + SID, "topup", `go:${SID}`].every((d) => flat.some((b) => b.callback_data === d)), flat.map((b) => b.callback_data).join(" "));
+  check("خرید گروهی دیگر روی صفحهٔ سکهٔ کم نیست", !flat.some((b) => b.callback_data.startsWith("gb")));
   const t = fileTopup(70);
   check("متنِ سکهٔ کم مبلغِ دقیقِ همین فایل را می‌گوید", S.lowBalanceMessage(5400, coinsToSec(20), undefined, true).includes(fmtToman(t.price)), fmtToman(t.price));
   check("متنِ سهمِ جزوهٔ هم‌کلاسی «همین فایل» ندارد", !S.lowBalanceMessage(600, 0).includes("همین فایل"));
@@ -141,7 +140,7 @@ check("سفارش approved ماند", getTopup(row.id).status === "approved");
   cs = await press(`pf:${SID}`, OWNER_PID);
   const alert = cs.find((c) => c.method === "answerCallbackQuery");
   check("بی‌کسری: سفارشی ساخته نمی‌شود", zibal.length === before);
-  check("… و می‌گوید «ادامه بده» را بزن", alert?.payload.show_alert === true && alert.payload.text.includes(S.GROUP_BTN.resume), alert?.payload.text);
+  check("… و می‌گوید «ادامه بده» را بزن", alert?.payload.show_alert === true && alert.payload.text.includes(S.RESUME_BTN), alert?.payload.text);
 
   const strangerPid = 55_002;
   resolveIdentity({ platform: "telegram", platformUserId: String(strangerPid), name: "غریبه" });

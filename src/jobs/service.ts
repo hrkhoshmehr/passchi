@@ -20,7 +20,6 @@ import { runPipeline, type Stage } from "../pipeline.js";
 import { enqueue } from "../queue.js";
 import { commit, danglingReservations, orphanedQueued, refund, reserve, InsufficientCredit } from "../billing/ledger.js";
 import { registerOwner } from "../billing/sharing.js";
-import { markGroupBuyFailed, refundGroupBuy, settleGroupBuy } from "../billing/group-buy.js";
 import {
   getCourse, getSession, markFreeRunUsed, updateSession,
   type SessionMode,
@@ -42,15 +41,6 @@ export interface JobSpec {
   onProgress?: (s: Stage) => void;
   onDone?: (out: PipelineOutput) => Promise<void> | void;
   onError?: (message: string) => Promise<void> | void;
-  /**
-   * خرید گروهی: سکهٔ همهٔ نفرات پیش‌تر رزرو شده و اینجا دوباره رزرو نمی‌شود.
-   *
-   * همان خط لوله و همان ترتیب، فقط پایان‌ها گروهی‌اند: موفقیت همه را تسویه
-   * می‌کند (`settleGroupBuy`) و شکست همه را برمی‌گرداند (`refundGroupBuy`).
-   * نسخهٔ جدایی از این تابع نوشته نشد، چون همان خطری را دارد که این فایل
-   * برای بستنش ساخته شد: روزی یکی از دو نسخه در مسیر شکست بازپرداخت نکند.
-   */
-  groupBuy?: boolean;
 }
 
 /**
@@ -64,10 +54,9 @@ export interface JobSpec {
  */
 export function startJob(job: JobSpec): void {
   const free = job.mode === "free_trial";
-  const pooled = Boolean(job.groupBuy) && !free;
   const reservedSec = free ? 0 : job.declaredDurationSec > 0 ? job.declaredDurationSec : 60;
 
-  if (!free && !pooled) reserve(job.userId, reservedSec, job.sessionId);
+  if (!free) reserve(job.userId, reservedSec, job.sessionId);
 
   enqueue(String(job.userId), async (signal) => {
     try {
@@ -86,12 +75,6 @@ export function startJob(job: JobSpec): void {
 
       if (free) {
         markFreeRunUsed(job.userId);
-      } else if (pooled) {
-        // هم‌کلاسی‌ها سهمِ ثابتشان را دادند؛ مالک باقیِ مدتِ واقعی را. مبنای
-        // شریک‌شدنِ بعدی هم همان است که مالک واقعاً داد.
-        const actualSec = Math.round(out.originalDurationMs / 1000);
-        const ownerSec = settleGroupBuy(job.sessionId, actualSec);
-        registerOwner(job.sessionId, job.userId, ownerSec);
       } else {
         // تسویه: فقط تفاوت مدت واقعی و مدت رزروشده جابه‌جا می‌شود
         const actualSec = Math.round(out.originalDurationMs / 1000);
@@ -104,8 +87,7 @@ export function startJob(job: JobSpec): void {
       const message = e instanceof Error ? e.message : String(e);
       logger.error({ sessionId: job.sessionId, err: message }, "pipeline failed");
       updateSession(job.sessionId, { status: "error", error: message.slice(0, 500) });
-      if (pooled) refundGroupBuy(job.sessionId, "کار ناموفق بود");
-      else if (!free) {
+      if (!free) {
         // بی‌کلام: همان بخشی که به رونویسی رفت کم می‌شود — چرایی در `jobFailedMessage`.
         const heardSec =
           e instanceof JobFailure && e.kind === "no_speech"
@@ -176,8 +158,6 @@ export function recoverInterrupted(notify: Notify = notifyUser): number {
      * بلعیده می‌شود، چون سکه برگشته و درست‌ترین کار انجام شده.
      */
     const s = getSession(d.sessionId);
-    // خرید گروهی: هر نفر رزروِ خودش را جدا برگرداند؛ اینجا فقط گروه بسته می‌شود.
-    markGroupBuyFailed(d.sessionId);
     // «دوباره تلاش کن» فقط مالِ صاحبِ جلسه است؛ هم‌کلاسیِ یک خرید گروهی آن
     // دکمه را بزند، دست‌کدش «مال تو نیست» می‌گوید.
     const canRetry = Boolean(s?.tg_id === d.tgId && s.original_file && fs.existsSync(s.original_file));

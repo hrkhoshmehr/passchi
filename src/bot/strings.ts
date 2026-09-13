@@ -10,7 +10,6 @@ import {
 import { BTN, sharePitch } from "./menu.js";
 import type { JobFailureKind } from "../util/job-failure.js";
 import type { SessionStatus } from "../db/index.js";
-import type { RefusalReason as GroupRefusal } from "../billing/group-buy.js";
 
 export const chunk = chunkMessage;
 
@@ -1249,7 +1248,7 @@ export function invitationTail(i: {
  * انتقال سکه در چت‌ها مانده‌اند.
  */
 export const TRANSFER_GONE =
-  "انتقال سکه بین حساب‌ها دیگه نیست. برای اینکه هزینهٔ کلاس رو با بچه‌ها تقسیم کنید، موقع فرستادن صوت «👥 با هم‌کلاسیا بخریم» رو بزن.";
+  "انتقال سکه بین حساب‌ها دیگه نیست. برای اینکه هزینهٔ کلاس رو با بچه‌ها تقسیم کنید، لینکِ جلسه رو براشون بفرست؛ هر کی بیاد فقط سهم خودش رو می‌ده.";
 
 /** زیرِ پیامِ کمبود سکه روی مسیرِ پیوستن — تا شارژکردن یعنی گم‌کردنِ جزوه نباشد. */
 export const JOIN_RETURN_HINT = "شارژ که کردی، همین‌جا یه دکمه می‌گیری که همون جزوه رو برداری.";
@@ -1258,268 +1257,16 @@ export const JOIN_RETURN_HINT = "شارژ که کردی، همین‌جا یه �
 export const PENDING_JOIN_AFTER_TOPUP = "📓 جزوه‌ای که می‌خواستی بگیری هنوز منتظرته 👇";
 export const PENDING_JOIN_BTN = "📓 همون جزوه رو بگیر";
 
+/** دکمهٔ «ادامه» زیرِ صفحهٔ سکهٔ کم — پس از شارژ همان فایل را ادامه می‌دهد. */
+export const RESUME_BTN = "▶️ ادامه بده";
+
+/**
+ * جوابِ لینک‌های قدیمیِ خرید گروهی (`p_`) — آن قابلیت برداشته شد؛ شریک‌شدن
+ * حالا پس از تحویل و با لینکِ جلسه است.
+ */
+export const GROUP_LINK_GONE =
+  "این لینکِ خرید گروهی دیگه کار نمی‌کنه. اگه هم‌کلاسیت جزوه رو گرفته، لینکِ جلسه رو ازش بخواه؛ هر کی بیاد فقط سهم خودش رو می‌ده.";
+
 /** بعد از شارژ: فایلی از صفحهٔ آپلود هنوز منتظرِ تأیید است. */
-// ─── خرید گروهی ─────────────────────────────────────────────────────────────
-//
-// هزینهٔ یک کلاس، پیش از پردازش، برابر میان چند نفر. سازوکار در
-// `billing/group-buy.ts`؛ اینجا فقط آنچه دانشجو می‌خواند.
-
-/** دکمه‌ها — دو دکمهٔ اول **هم‌وزن** در یک ردیف‌اند: هیچ‌کدام پیش‌فرض نیست. */
-export const GROUP_BTN = {
-  self: "🪙 خودم شارژ می‌کنم",
-  group: "👥 با هم‌کلاسیا بخریم",
-  payRest: "بقیه‌اش رو خودم می‌دم، شروع کن",
-  join: "✅ هستم",
-  later: "فعلاً نه",
-  resend: "🔗 دوباره پیام گروه کلاس",
-  get: "📓 بفرستش",
-  cancel: "✖️ بی‌خیال",
-  resume: "▶️ ادامه بده",
-} as const;
-
-/**
- * تنها جملهٔ دلگرمی زیرِ دو گزینه.
- *
- * بی آن، «خودم شارژ می‌کنم» مثل از دست دادنِ راهِ ارزان‌تر خوانده می‌شود و
- * دانشجو میان دو دکمه گیر می‌کند. هر دو راه واقعاً باز می‌مانند: شریک‌شدنِ
- * پس از تحویل بعد از پرداختِ تنها هم هست.
- */
-export const GROUP_REASSURE =
-  "نگران نباش؛ اگه خودت بخری هم بعدش می‌تونی با بچه‌ها شریکش شی و سهمشون برمی‌گرده.";
-
-/**
- * پیامِ سکهٔ کم وقتی خرید گروهی روشن است — **عددِ گروه همان‌جا**.
- *
- * پیش از این پیام فقط «کم داری» و دو دکمه بود؛ دانشجو برای دیدنِ اینکه راهِ
- * گروهی چقدر برایش درمی‌آید باید دکمه می‌زد و اندازه انتخاب می‌کرد، و گاهی
- * تازه آن‌وقت می‌شنید سهمِ خودش را هم ندارد. حالا پیامِ اول می‌گوید «با ۵ نفر،
- * نفری ۱۸ سکه» — عددی که مالک واقعاً از پسش برمی‌آید (`suggestedGroupSize`).
- */
-export function lowBalanceGroupMessage(
-  neededSec: number,
-  balanceSec: number,
-  suggest: { people: number; seatCoins: number } | null = null,
-  giftCoins = 0,
-): string {
-  const short = Math.max(0, costCoins(neededSec) - balanceCoins(balanceSec));
-  const pkg = coveringPackage(short);
-  const lines = [
-    "سکه‌هات کم میاد 😅",
-    "",
-    `این فایل <b>${fmtCost(neededSec)}</b> می‌خواد و <b>${fmtBalance(balanceSec)}</b> داری.`,
-    "",
-    payFileLine(short),
-    "",
-  ];
-  if (suggest) {
-    const withGift = giftCoins > 0 && suggest.seatCoins <= giftCoins;
-    lines.push(
-      `👥 <b>با بچه‌های کلاس بخرید:</b> اگه ${toFaDigits(suggest.people)} نفر بشید، نفری <b>${fmtCoins(suggest.seatCoins)}</b> میشه` +
-        (withGift ? "؛ با همون سکهٔ هدیه‌ای که هر کی تازه بیاد می‌گیره." : "."),
-      "",
-    );
-  }
-  lines.push(
-    pkg
-      ? `🪙 <b>یا خودت شارژ کن:</b> کوچیک‌ترین بسته‌ای که کافیه ${fmtCoins(pkg.coins)}، ${fmtToman(pkg.price)}.`
-      : "🪙 <b>یا خودت شارژ کن.</b>",
-    "",
-    `<i>${GROUP_REASSURE}</i>`,
-  );
-  return lines.join("\n");
-}
-
-/** مالک سهمِ خودش را حتی برای بزرگ‌ترین گروه هم ندارد. */
-export function groupNoSizeMessage(seatCoins: number, balanceSec: number): string {
-  return (
-    `برای خرید گروهی باید سهم خودت رو داشته باشی: کمترینش <b>${fmtCoins(seatCoins)}</b> میشه ولی <b>${fmtBalance(balanceSec)}</b> داری.\n\n` +
-    `با «${GROUP_BTN.self}» شارژ کن؛ بعدش همین‌جا دوباره پیشنهادش رو می‌گیری.`
-  );
-}
-
-/** بعد از شارژ: فایلش هنوز منتظر است، برای کل فایل کم دارد ولی سهمِ گروهی را دارد. */
-export const PENDING_GROUP_OPEN_AFTER_TOPUP =
-  "<b>فایلی که فرستاده بودی هنوز اینجاست.</b> برای کل فایل هنوز کمه، ولی حالا می‌تونی با بچه‌های کلاس بخریش 👇";
-
-/**
- * «چند نفر می‌شید، با خودت؟»
- *
- * «با خودت» عمداً در پرسش است: سهم بر همهٔ نفرات تقسیم می‌شود، مالک هم، و
- * بی آن عدد را یکی کمتر می‌گفتند و سهم‌ها گران‌تر درمی‌آمد. سهمِ هر اندازه
- * روی خودِ دکمه است (`groupSizeLabel`).
- */
-export function groupSizePrompt(costSec: number, hours: number, smallerHidden = false): string {
-  return [
-    "👥 <b>چند نفر می‌شید، با خودت؟</b>",
-    "",
-    `این کلاس <b>${fmtCost(costSec)}</b> هزینه داره و بین همه‌تون برابر تقسیم میشه.`,
-    ...(smallerHidden ? ["<i>گروه‌های کوچیک‌تر نیومدن، چون سهم خودت توشون از موجودیت بیشتر میشه.</i>"] : []),
-    `<i>تا همه نیومدن سکه‌ای خرج نمیشه؛ اگه تا ${toFaDigits(hours)} ساعت پر نشد، سهم همه کامل برمی‌گرده.</i>`,
-  ].join("\n");
-}
-
-/**
- * برچسبِ هر اندازه: «۵ نفر · نفری ۱۸ سکه».
- *
- * اندازه‌ای که مالک سهمش را ندارد اصلاً دکمه نمی‌شود (`groupSizesFor`)؛ از بقیه،
- * آن‌که با هدیهٔ تازه‌وارد جور درمی‌آید برچسبش را می‌گیرد.
- */
-export function groupSizeLabel(people: number, seatCoins: number, giftCoins: number): string {
-  const base = `${toFaDigits(people)} نفر · نفری ${fmtCoins(seatCoins)}`;
-  return giftCoins > 0 && seatCoins <= giftCoins ? `${base} · با سکهٔ هدیه میشه` : base;
-}
-
-/** «۳ از ۵ نفر شدید.» — همه‌جا یک شکل. */
-export function groupProgressLine(filled: number, seats: number): string {
-  return `${toFaDigits(filled)} از ${toFaDigits(seats)} نفر شدید.`;
-}
-
-/** تأییدِ بازشدنِ گروه برای مالک، پیش از پیامِ دعوت. */
-export function groupOpenedMessage(seats: number, seatCoins: number): string {
-  return [
-    `👥 <b>خرید گروهی باز شد</b>: ${toFaDigits(seats)} نفر، نفری ${fmtCoins(seatCoins)}.`,
-    "سهم خودت کنار گذاشته شد. پیام بعدی رو بفرست تو گروه کلاس 👇",
-  ].join("\n");
-}
-
-/**
- * پیامی که مالک در گروه کلاس فوروارد می‌کند.
- *
- * **جز آنچه فرستنده خودش فرستاده چیزی نمی‌گوید.** جلسه هنوز گزارشی ندارد و
- * نام درس هم حدسِ ماست نه انتخابِ او؛ پس فقط مدتِ صوت، آنچه هر نفر می‌گیرد،
- * سهم، و هدیهٔ تازه‌وارد — که فقط وقتی گفته می‌شود که واقعاً سهم را بپوشاند.
- *
- * لینک خطِ خودش را دارد: نشانیِ لاتین وسط خط فارسی روی گوشی جابه‌جا چیده
- * می‌شود.
- */
-export function groupInviteMessage(i: {
-  durationMs: number;
-  seats: number;
-  seatCoins: number;
-  giftCoins: number;
-  link: string;
-}): string {
-  const coversGift = i.giftCoins > 0 && i.seatCoins <= i.giftCoins;
-  return [
-    "👥 <b>بیاین جزوهٔ این کلاس رو با هم بخریم</b>",
-    "",
-    `یکی از بچه‌ها صوت یه کلاس رو داره (${toFaDigits(fmtDuration(i.durationMs))}). ` +
-      `اگه ${toFaDigits(i.seats)} نفر بشیم، هر کی هست اینا رو می‌گیره:`,
-    "• خلاصهٔ کلاس",
-    "• نکته‌های امتحانی با عین حرف استاد و دقیقه‌ش",
-    "• فایل جزوه",
-    "",
-    `💰 سهم هر نفر: <b>${fmtCoins(i.seatCoins)}</b>. ${COIN_MEANING}.`,
-    ...(coversGift ? [`هر کی تازه بیاد ${fmtCoins(i.giftCoins)} هدیه می‌گیره؛ پس شاید برات مجانی دربیاد.`] : []),
-    "<i>تا همه نیومدن سکه‌ای خرج نمیشه.</i>",
-    "",
-    i.link,
-  ].join("\n");
-}
-
-/** زیرِ دعوت، فقط برای مالک. */
-export function groupInviteTail(filled: number, seats: number): string {
-  return [
-    "☝️ این پیام رو بفرست تو گروه کلاس.",
-    "",
-    groupProgressLine(filled, seats),
-    `<i>نخواستی منتظر بمونی؟ «${GROUP_BTN.payRest}» رو بزن.</i>`,
-  ].join("\n");
-}
-
-/** خبرِ هر ورود به مالک — همان چیزی که او را به پخش‌کردنِ لینک ترغیب می‌کند. */
-export function groupProgressMessage(filled: number, seats: number): string {
-  return [
-    `👥 یکی دیگه اومد! ${groupProgressLine(filled, seats)}`,
-    `<i>هر وقت خواستی «${GROUP_BTN.payRest}» رو بزن تا شروع کنم.</i>`,
-  ].join("\n");
-}
-
-/**
- * پیش‌نمایشی که هم‌کلاسی پس از زدنِ لینک می‌بیند.
- *
- * «هزینه» و «موجودیت» کنار هم‌اند، همان شکلِ پیش‌نمایشِ جزوهٔ شریکی: کسی که
- * از گروه آمده نمی‌داند اصلاً سکه‌ای دارد یا نه.
- */
-export function groupPreviewMessage(i: {
-  durationMs: number;
-  seats: number;
-  filled: number;
-  seatCoins: number;
-  balanceSec: number;
-}): string {
-  return [
-    "👥 <b>خرید گروهی جزوهٔ یه کلاس</b>",
-    `<i>صوت ${toFaDigits(fmtDuration(i.durationMs))}</i>`,
-    "",
-    "<b>چی گیرت میاد</b>",
-    "• خلاصهٔ کلاس",
-    "• نکته‌های امتحانی با عین حرف استاد",
-    "• فایل جزوه",
-    "",
-    `هزینه: <b>${fmtCoins(i.seatCoins)}</b> · موجودیت: <b>${fmtBalance(i.balanceSec)}</b>`,
-    `<i>${COIN_MEANING}.</i>`,
-    groupProgressLine(i.filled, i.seats),
-    "<i>تا همه نیومدن سکه‌ای خرج نمیشه؛ اگه پر نشد، کامل برمی‌گرده.</i>",
-  ].join("\n");
-}
-
-/** پس از «هستم». */
-export function groupJoinedMessage(seatCoins: number, filled: number, seats: number): string {
-  return [
-    `✅ هستی! <b>${fmtCoins(seatCoins)}</b> کنار گذاشته شد. ${groupProgressLine(filled, seats)}`,
-    "<i>پر که شد، جزوه همین‌جا برات میاد.</i>",
-  ].join("\n");
-}
-
-export const GROUP_STARTED_OWNER = "🎉 همه اومدن! کار شروع شد؛ نتیجه همین‌جا میاد.";
-export const GROUP_STARTED_MEMBER = "🎉 گروه پر شد و کار شروع شد؛ جزوه که آماده شد همین‌جا برات میاد.";
-
-/** به هر هم‌کلاسی، وقتی نتیجه آماده شد — فایل‌ها پشتِ دکمه تا چتش یک‌باره پر نشود. */
-export function groupReadyMessage(title: string | null): string {
-  return title
-    ? `📓 جزوهٔ «${escapeHtml(title)}» آماده‌ست 👇`
-    : "📓 جزوهٔ کلاسی که گروهی خریدید آماده‌ست 👇";
-}
-
-/** خبرِ انقضا — یک جمله، برای هر نفر. */
-export function groupExpiredMessage(role: "owner" | "member", origin: "bot" | "web", hours: number): string {
-  if (role === "member") return "خرید گروهی‌ای که واردش شده بودی پر نشد و سکه‌هات کامل برگشت.";
-  return origin === "web"
-    ? `${toFaDigits(hours)} ساعت گذشت و گروه پر نشد؛ سکه‌های همه کامل برگشت و فایلت هنوز تو صفحهٔ آپلود منتظرته.`
-    : `${toFaDigits(hours)} ساعت گذشت و گروه پر نشد؛ سکه‌های همه کامل برگشت و فایلت هنوز اینجاست که خودت شروعش کنی.`;
-}
-
-export const GROUP_FAILED_OWNER = "کار این کلاس به مشکل خورد و سکه‌های همه کامل برگشت.";
-export const GROUP_FAILED_MEMBER = "کار کلاسی که گروهی خریدید به مشکل خورد و سکه‌هات کامل برگشت.";
-export const GROUP_CANCELLED_MEMBER = "خرید گروهی‌ای که واردش شده بودی لغو شد و سکه‌هات کامل برگشت.";
-
-/** مالک حتی یک سهم ندارد. */
-export function groupOwnerShortMessage(seatCoins: number, balanceSec: number): string {
-  return (
-    `سهم خودت <b>${fmtCoins(seatCoins)}</b> میشه ولی <b>${fmtBalance(balanceSec)}</b> داری؛ ` +
-    `اول با «${GROUP_BTN.self}» شارژ کن.`
-  );
-}
-
-/** مالک روی جلسه‌ای که گروهش باز است «شروع کن» زده. */
-export const GROUP_OPEN_PAY_ALONE = `برای این فایل خرید گروهی بازه. نخواستی منتظر بمونی؟ «${GROUP_BTN.payRest}» رو بزن.`;
-
-/** بعد از شارژ: کاربر برای ورود به یک خرید گروهی آمده بود. */
-export const PENDING_GROUP_AFTER_TOPUP = "👥 خرید گروهی‌ای که می‌خواستی واردش شی هنوز بازه 👇";
-
-/** ردها — کلیدشان همان `RefusalReason` در `billing/group-buy.ts`. */
-export const GROUP_REFUSAL: Record<GroupRefusal, string> = {
-  not_found: "این خرید گروهی پیدا نشد.",
-  bad_size: "این تعداد رو نمی‌شناسم؛ یکی از دکمه‌ها رو بزن.",
-  exists: "برای این فایل خرید گروهی از قبل بازه.",
-  closed: "این خرید گروهی دیگه باز نیست.",
-  owner: "این خرید گروهی خودته؛ پر که شد نتیجه همین‌جا میاد.",
-  already: "جات محفوظه 👍 پر که شد، جزوه همین‌جا برات میاد.",
-  full: "ظرفیت این خرید گروهی پر شد.",
-  gift_cap: "سهمیهٔ سکهٔ هدیه برای خرید گروهی این هفته تموم شده؛ فقط با سکهٔ خریداری‌شده میشه وارد شد.",
-  busy: "پردازش این فایل از قبل شروع شده؛ دیگه نمیشه براش خرید گروهی باز کرد.",
-};
-
 export const PENDING_WEB_UPLOAD_AFTER_TOPUP =
   "📎 فایلی که از صفحهٔ آپلود فرستاده بودی هنوز منتظرته. «📤 ارسال صوت» رو بزن و «📤 آپلود فایل» رو باز کن؛ همون‌جا ادامه‌ش رو پیشنهاد می‌ده.";

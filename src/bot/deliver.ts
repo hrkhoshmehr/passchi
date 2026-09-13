@@ -28,7 +28,7 @@ import type { Platform } from "../db/identity.js";
 import { deliveryChannel } from "./notify.js";
 import { invitationMessage, shareToggleKeyboard } from "./share.js";
 import * as S from "./strings.js";
-import { groupBuyOwnerPaidSec } from "../billing/group-buy.js";
+import { shareBasisSec } from "../billing/sharing.js";
 
 /**
  * سقف ارسال فایل از ربات: **پنجاه مگابایت**.
@@ -427,8 +427,8 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
   const u = getUser(userId);
   const shareOn = Boolean(s.share_enabled);
   const tail = u
-    ? // مالکِ خرید گروهی فقط سهمِ خودش را داده؛ «این جلسه ۹۰ سکه شد» به او دروغ است.
-      S.settlementMessage(groupBuyOwnerPaidSec(s.id) ?? Math.round(s.original_ms / 1000), u.credit_sec, shareOn, {
+    ? // مالکِ خرید گروهیِ قدیمی فقط سهمِ خودش را داده؛ `shareBasisSec` همان را می‌دهد.
+      S.settlementMessage(shareBasisSec(s), u.credit_sec, shareOn, {
         people: s.share_target,
         hasArchive: moreKeyboard(s) !== null,
       })

@@ -1549,10 +1549,7 @@ function askConfirm(out, filename, keep = false) {
       `${faGroup(short)} سکه کم داری. فایلت همین‌جا می‌مونه — از «🪙 حساب» شارژ کن و برگرد همین صفحه.`,
     );
   }
-  show($("confirm-group-box"), false);
-  show($("confirm-group-done"), false);
   show($("confirm-go"), true);
-  void paintLowChoices(out.enough || Boolean(free));
   go("confirm");
 }
 
@@ -1585,102 +1582,6 @@ $("confirm-free").addEventListener("click", async () => {
   pendingSession = null;
   handedOff(id);
 });
-
-// ─── خرید گروهی روی صفحهٔ تأیید ──────────────────────────────────────────────
-//
-// همان دو راهِ ربات، زیرِ «n سکه کم داری». ساختنِ گروه کارِ سرور است
-// (`POST /api/sessions/:id/group` که همان `openGroup` ربات را صدا می‌زند)؛
-// اینجا فقط انتخابِ اندازه و خبرِ اینکه دعوت در ربات است.
-
-/** پیکربندیِ خرید گروهی، یک بار خوانده می‌شود. `null` یعنی هنوز نخوانده‌ایم. */
-let groupCfg = null;
-
-async function groupConfig() {
-  if (groupCfg) return groupCfg;
-  try {
-    const { groupBuy = false, trialCoins = 0 } = await api.call("/api/config");
-    groupCfg = { on: Boolean(groupBuy), gift: Number(trialCoins) || 0 };
-  } catch {
-    // نخواندیم؟ دکمه‌ای که سرور شاید رد کند ساخته نمی‌شود؛ دفعهٔ بعد دوباره می‌پرسیم.
-    return { on: false, gift: 0 };
-  }
-  return groupCfg;
-}
-
-async function paintLowChoices(enough) {
-  const cfg = enough ? { on: false } : await groupConfig();
-  show($("confirm-low"), Boolean(cfg.on) && !enough);
-}
-
-/** همان اندازه‌ها و همان فرمولِ `groupSeat` در `billing/coins.ts`: سقفِ سکه تقسیم بر نفر. */
-const GROUP_SIZES = [3, 5, 10, 20];
-
-$("confirm-self").addEventListener("click", () => {
-  go("acct");
-  loadAccount();
-});
-
-$("confirm-group").addEventListener("click", async () => {
-  const cfg = await groupConfig();
-  const box = $("confirm-group-sizes");
-  box.innerHTML = "";
-  // فقط اندازه‌هایی که سهمِ خودِ دانشجو از موجودیش درمی‌آید — همان `groupSizesFor` ربات.
-  // پیش از این «۳ نفر · نفری ۳۰» هم می‌آمد و دانشجوی بیست‌سکه‌ای بعد از زدنش به دیوار می‌خورد.
-  const seatOf = (n) => Math.max(1, Math.ceil((Number(confirmCost) || 0) / n));
-  const sizes = GROUP_SIZES.filter((n) => seatOf(n) <= confirmHave);
-  if (sizes.length === 0) {
-    const p = document.createElement("p");
-    p.className = "dim";
-    p.textContent =
-      `برای خرید گروهی باید سهم خودت رو داشته باشی: کمترینش ${faGroup(seatOf(GROUP_SIZES[GROUP_SIZES.length - 1]))} سکه میشه ولی ${faGroup(confirmHave)} سکه داری. اول از «🪙 حساب» شارژ کن؛ فایلت همین‌جا می‌مونه.`;
-    box.appendChild(p);
-  }
-  for (const n of sizes) {
-    const seat = seatOf(n);
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "btn btn-ghost btn-block";
-    b.textContent =
-      `${fa(n)} نفر · نفری ${faGroup(seat)} سکه` + (cfg.gift > 0 && seat <= cfg.gift ? " · با سکهٔ هدیه میشه" : "");
-    b.addEventListener("click", () => openGroupBuy(n, b));
-    box.appendChild(b);
-  }
-  show($("confirm-low"), false);
-  show($("confirm-group-box"), true);
-});
-
-$("confirm-group-cancel").addEventListener("click", () => {
-  show($("confirm-group-box"), false);
-  show($("confirm-low"), true);
-});
-
-async function openGroupBuy(people, btn) {
-  if (!pendingSession) return;
-  btn.disabled = true;
-  fail($("confirm-err"), "");
-  try {
-    await api.call(`/api/sessions/${pendingSession}/group`, { method: "POST", body: { people } });
-  } catch (err) {
-    btn.disabled = false;
-    if (err.status === 402) {
-      const d = err.data || {};
-      fail(
-        $("confirm-err"),
-        `سهم خودت ${faGroup(d.needCoins ?? 0)} سکه میشه ولی ${faGroup(d.haveCoins ?? 0)} سکه داری؛ اول از «🪙 حساب» شارژ کن.`,
-      );
-    } else {
-      fail($("confirm-err"), friendlyError(err, "general"));
-    }
-    return;
-  }
-  // جلسه دیگر «منتظرِ تأیید» نیست؛ کارتِ «ادامه بدیم؟» هم نباید پیشنهادش کند.
-  pendingSession = null;
-  show($("confirm-group-box"), false);
-  show($("confirm-go"), false);
-  show($("confirm-group-done"), true);
-  fail($("confirm-err"), "");
-  loadMe().catch(() => {});
-}
 
 $("confirm-cancel").addEventListener("click", () => {
   // «بی‌خیال» یعنی همین فایل دوباره پیشنهاد نشود.

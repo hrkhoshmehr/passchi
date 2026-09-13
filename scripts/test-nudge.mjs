@@ -120,15 +120,9 @@ db.prepare(`INSERT INTO group_buy_seats (session_id, tg_id, role, reserved_sec) 
 check("صندلی گروهی ← یادآوری نمی‌گیرد", N.dueNudges(NOON).some((d) => d.userId === SEAT), false);
 
 // ─── متن‌ها ──────────────────────────────────────────────────────────────────
-check("مرحلهٔ دوم با خرید گروهی و سکهٔ کم", N.nudgeMessage(2, 0, true).includes(N.GROUP_BTN_LABEL), true);
-check("سکهٔ کافی ← دکمهٔ گروهی را نام نمی‌برد", N.nudgeMessage(2, 120 * 60, true).includes(N.GROUP_BTN_LABEL), false);
-check("سکهٔ کافی ← دکمهٔ شریک‌شدن", N.nudgeMessage(2, 120 * 60, true).includes(strings0.CONFIRM_BTN.share), true);
-check("مرحلهٔ دوم بی خرید گروهی", N.nudgeMessage(2, 0, false).includes("شریک"), true);
-
-// برچسبِ خرید گروهی باید همانی باشد که کاربر روی دکمه می‌بیند
-const strings = await import("../src/bot/strings.ts");
-const labels = JSON.stringify(strings);
-check("برچسبِ خرید گروهی در strings.ts هست", labels.includes(N.GROUP_BTN_LABEL), true);
+// خرید گروهیِ پیش از پرداخت برداشته شد؛ مرحلهٔ دوم همیشه شریک‌شدن پس از تحویل را می‌گوید.
+check("مرحلهٔ دوم دکمهٔ شریک‌شدن را نام می‌برد", N.nudgeMessage(2, 120 * 60).includes(strings0.CONFIRM_BTN.share), true);
+check("مرحلهٔ دوم از خرید گروهی حرف نمی‌زند", N.nudgeMessage(2, 0).includes("بخریم"), false);
 
 console.log(failures === 0 ? "\nهمه سبز ✅" : `\n${failures} شکست ❌`);
 process.exit(failures === 0 ? 0 : 1);

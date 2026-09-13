@@ -39,7 +39,6 @@ import { db } from "../db/index.js";
 import { logger } from "../util/logger.js";
 import { SHARE_TARGET, SHARE_TARGET_MIN, coinsToSec, costCoins, shareBack } from "./coins.js";
 import { InsufficientCredit, move } from "./ledger.js";
-import { groupBuyOwnerPaidSec } from "./group-buy.js";
 
 export interface Member {
   session_id: string;
@@ -126,8 +125,12 @@ export function setShareTarget(sessionId: string, people: number): void {
  * هم‌کلاسی‌های دیرآمده تا نصفِ **کل** هزینه به او برمی‌گرداندند — بیش از
  * آنچه پرداخته، یعنی سود. همان سقفِ پنجاه درصد می‌ماند، روی سهمِ خودش.
  */
-function shareBasisSec(s: { id: string; original_ms: number }): number {
-  return groupBuyOwnerPaidSec(s.id) ?? Math.round(s.original_ms / 1000);
+export function shareBasisSec(s: { id: string; original_ms: number }): number {
+  // خرید گروهیِ پیش از پرداخت برداشته شد؛ جلسه‌های قدیمیِ آن هنوز در جدول‌اند.
+  const g = db
+    .prepare(`SELECT owner_paid_sec FROM group_buys WHERE session_id = ? AND status = 'done'`)
+    .get(s.id) as unknown as { owner_paid_sec: number | null } | undefined;
+  return g?.owner_paid_sec ?? Math.round(s.original_ms / 1000);
 }
 
 interface SessionCost {
