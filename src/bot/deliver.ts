@@ -376,7 +376,10 @@ export async function deliverToBot(userId: number, s: SessionRow): Promise<boole
   const shareOn = Boolean(s.share_enabled);
   const closing = closingKeyboard(s, shareOn);
   const closingText = u
-    ? S.settlementMessage(Math.round(s.original_ms / 1000), u.credit_sec, shareOn)
+    ? S.settlementMessage(Math.round(s.original_ms / 1000), u.credit_sec, shareOn, {
+        people: s.share_target,
+        hasArchive: moreKeyboard(s) !== null,
+      })
     : S.MORE_PROMPT;
   if (u || moreKeyboard(s)) {
     await ch.api

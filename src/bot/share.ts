@@ -6,7 +6,7 @@ import { logger } from "../util/logger.js";
 import { escapeHtml, transcriptBytes } from "../util/text.js";
 import { audioExt } from "../audio/container.js";
 import { fmtDuration, toFaDigits } from "../util/time.js";
-import { fmtCost } from "../billing/coins.js";
+import { costCoins, fmtBalance, fmtCoins, fmtCost, shareBack } from "../billing/coins.js";
 import { getCourse, getSession, sessionReport, updateSession, type SessionRow } from "../db/index.js";
 import { InsufficientCredit } from "../billing/ledger.js";
 import {
@@ -49,26 +49,53 @@ export async function shareLink(api: Api, sessionId: string): Promise<string> {
   return `${host}/${usernames[platform]}?start=j_${sessionId}`;
 }
 
+/**
+ * هزینهٔ یک هم‌کلاسی، به زبانِ کسی که ربات را نمی‌شناسد.
+ *
+ * برای تازه‌وارد «۵ سکه» به‌تنهایی هیچ نمی‌گوید و به نظر پول می‌آید. ولی
+ * واقعیت این است که هر حسابِ تازه `FREE_TRIAL_COINS` سکه هدیه می‌گیرد؛ اگر
+ * سهم از آن کمتر است، عملاً چیزی از جیبش نمی‌رود — و این دقیقاً همان جمله‌ای
+ * است که او را به زدنِ لینک راضی می‌کند.
+ *
+ * فقط وقتی گفته می‌شود که **واقعاً** درست است: سهمی بزرگ‌تر از هدیه، یا
+ * سروری که هدیه را خاموش کرده، جمله‌ای ساده به سکه می‌گیرد نه وعده.
+ */
+function classmateCost(seatCoins: number, capReached: boolean): string {
+  if (capReached) return "💰 برای تو مجانیه؛ هزینه‌ش قبلاً جمع شده.";
+  const gift = config.FREE_TRIAL_COINS;
+  if (gift > 0 && seatCoins <= gift) {
+    return `💰 ${fmtCoins(seatCoins)}ست؛ هر کی تازه بیاد ${fmtCoins(gift)} هدیه می‌گیره، پس برات مجانی درمیاد.`;
+  }
+  return `💰 ${fmtCoins(seatCoins)}ست. هر سکه یعنی یه دقیقه صوت.`;
+}
+
+/**
+ * «n نفر تا حالا گرفتنش» — و **نه وقتی صفر است**.
+ *
+ * «۰ نفر برداشتن» روی کارتِ دعوت یعنی «هیچ‌کس اعتماد نکرده»؛ همان عددی که
+ * قرار بود اعتبار بدهد، اولین خواننده را فراری می‌داد.
+ */
+function takenLine(memberCount: number): string {
+  return memberCount > 0 ? `👥 ${toFaDigits(memberCount)} نفر تا حالا گرفتنش` : "";
+}
+
 /** پیام دعوتی که فرستنده در گروه درس فوروارد می‌کند. */
 export async function invitationMessage(api: Api, s: SessionRow): Promise<string> {
   const link = await shareLink(api, s.id);
   const st = shareStatus(s.id);
   const course = s.course_id ? getCourse(s.course_id) : null;
-  const seat = st ? st.seatSec : Math.round(s.original_ms / 1000);
-  const taken = toFaDigits(st?.memberCount ?? 0);
+  const seatCoins = costCoins(st ? st.seatSec : Math.round(s.original_ms / 1000));
 
   return [
     `📓 <b>${escapeHtml(s.title ?? "جلسهٔ کلاس")}</b>`,
     course ? `<i>${escapeHtml(course.name)}</i>` : "",
     "",
-    `خلاصهٔ کلاس، نکات امتحانی با عین حرف استاد${s.pdf_path ? "، و جزوهٔ کامل PDF" : ""}.`,
+    `خلاصهٔ کلاس، نکته‌های امتحانی با عین حرف استاد${s.pdf_path ? "، و فایل جزوه" : ""}.`,
     "",
-    st?.capReached
-      ? `👥 ${taken} نفر برداشتن · <b>رایگان</b> — هزینه‌اش قبلاً حساب شده`
-      : `👥 ${taken} نفر برداشتن · سهم تو: <b>${fmtCost(seat)}</b>`,
+    classmateCost(seatCoins, Boolean(st?.capReached)),
+    takenLine(st?.memberCount ?? 0),
     "",
-    "<i>سهم هرکس ثابته. وقتی نصف هزینه برگشت، بقیه رایگان می‌گیرنش.</i>",
-    "",
+    // لینک خطِ خودش را دارد: نشانیِ لاتین وسط خط فارسی روی گوشی جابه‌جا چیده می‌شود.
     link,
   ]
     .filter((l) => l !== "")
@@ -77,10 +104,13 @@ export async function invitationMessage(api: Api, s: SessionRow): Promise<string
 
 export function shareToggleKeyboard(sessionId: string, enabled: boolean): InlineKeyboard {
   return new InlineKeyboard().text(
-    enabled ? "🔗 لینک دعوت" : "👥 تقسیم با هم‌کلاسیا",
+    enabled ? S.SHARE_BTN.link : S.SHARE_BTN.off,
     enabled ? `slink:${sessionId}` : `son:${sessionId}`,
   );
 }
+
+/** دکمهٔ «بی‌خیال» زیر پرسشِ تعداد — فقط پیام را برمی‌دارد، هیچ حالتی را عوض نمی‌کند. */
+export const SHARE_CANCEL_CB = "shx";
 
 /**
  * انتخابِ تعدادِ کلاس — سهمِ ثابتِ هر نفر از همین درمی‌آید.
@@ -97,30 +127,56 @@ export function shareToggleKeyboard(sessionId: string, enabled: boolean): Inline
 export function shareTargetKeyboard(
   sessionId: string,
   prefix: "sont" | "sontp" = "sont",
+  costSec?: number,
 ): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("۵ نفر", `${prefix}:${sessionId}:5`)
-    .text("۱۰ نفر", `${prefix}:${sessionId}:10`)
-    .row()
-    .text("۲۰ نفر", `${prefix}:${sessionId}:20`)
-    .text("۳۰ نفر", `${prefix}:${sessionId}:30`);
+  /**
+   * سهمِ هر نفر **روی خودِ دکمه**: «۵ نفر · نفری ۹ سکه».
+   *
+   * عددِ نفر به‌تنهایی جوابِ سؤالی بود که کاربر نداشت. سؤالِ واقعی «هم‌کلاسیم
+   * چقدر می‌ده؟» است و باید کنارِ همان انتخابی باشد که عوضش می‌کند. همان
+   * `shareBack` که `joinSession` با آن کم می‌کند، پس دکمه و کسرِ واقعی از هم
+   * جدا نمی‌افتند.
+   */
+  const label = (n: number) =>
+    costSec === undefined
+      ? `${toFaDigits(n)} نفر`
+      : `${toFaDigits(n)} نفر · نفری ${fmtCoins(shareBack(costSec, n).seat)}`;
+  const kb = new InlineKeyboard();
+  S.SHARE_COUNTS.forEach((n, i) => {
+    if (i && i % 2 === 0) kb.row();
+    kb.text(label(n), `${prefix}:${sessionId}:${n}`);
+  });
+  // راهِ بیرون‌آمدن بدون انتخاب — وگرنه تنها کارِ ممکن زدنِ یکی از چهار عدد بود.
+  return kb.row().text("✖️ بی‌خیال", `${SHARE_CANCEL_CB}:${sessionId}`);
 }
 
-/** پیش‌نمایشی که تازه‌وارد پیش از پرداخت می‌بیند. */
-export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyboard } | null {
+/**
+ * پیش‌نمایشی که تازه‌وارد پیش از پرداخت می‌بیند.
+ *
+ * `balanceSec` لازم است چون جملهٔ «هزینه: ۵ سکه» بی موجودی نصفِ جواب است: کسی
+ * که از لینکِ گروه آمده نمی‌داند اصلاً سکه‌ای دارد یا نه، و بدون عددِ کنارش
+ * یا از دکمه می‌ترسد یا روی دیوارِ «سکه‌هات کم میاد» می‌خورد.
+ */
+export function joinPreview(
+  s: SessionRow,
+  balanceSec: number,
+): { text: string; keyboard: InlineKeyboard } | null {
   const st = shareStatus(s.id);
   if (!st) return null;
   const r = sessionReport(s);
   const course = s.course_id ? getCourse(s.course_id) : null;
+  const meta = [course?.name ? escapeHtml(course.name) : null, s.original_ms ? fmtDuration(s.original_ms) : null]
+    .filter(Boolean)
+    .join(" · ");
 
   const text = [
     `📓 <b>${escapeHtml(s.title ?? "جلسهٔ کلاس")}</b>`,
-    course ? `<i>${escapeHtml(course.name)} · ${fmtDuration(s.original_ms)}</i>` : "",
+    meta ? `<i>${meta}</i>` : "",
     "",
     r?.headline ? escapeHtml(r.headline) : "",
     "",
     "<b>چی گیرت میاد</b>",
-    "• خلاصهٔ کلاس در یک نگاه",
+    "• خلاصهٔ کلاس",
     /**
      * فهرست خالی را **تبلیغ نکن**.
      *
@@ -131,22 +187,20 @@ export function joinPreview(s: SessionRow): { text: string; keyboard: InlineKeyb
     (r?.key_points.length ?? 0) > 0
       ? `• ${toFaDigits(r!.key_points.length)} نکتهٔ کلیدی با عین حرف استاد`
       : "• نکته‌های کلاس با عین حرف استاد",
-    s.pdf_path ? "• جزوهٔ کامل PDF" : "",
-    "• صوت و رونوشت کامل",
+    s.pdf_path ? "• فایل جزوه" : "",
+    "• صوت کلاس، متن کامل کلاس و کلاس دقیقه‌به‌دقیقه",
     "",
-    st.capReached
-      ? `👥 ${toFaDigits(st.memberCount)} نفر برداشتن · سهم تو <b>رایگان</b> — هزینه‌اش قبلاً حساب شده`
-      : `👥 ${toFaDigits(st.memberCount)} نفر برداشتن · سهم تو <b>${fmtCost(st.seatSec)}</b>`,
+    `هزینه: <b>${st.capReached ? "مجانی" : fmtCost(st.seatSec)}</b> · موجودیت: <b>${fmtBalance(balanceSec)}</b>`,
+    // اولین جایی که تازه‌وارد واژهٔ «سکه» را می‌بیند؛ لینکِ دعوت از خوش‌آمد رد می‌شود.
+    "<i>هر سکه یعنی یه دقیقه صوت.</i>",
+    takenLine(st.memberCount),
   ]
     .filter((l) => l !== "")
     .join("\n");
 
   return {
     text,
-    keyboard: new InlineKeyboard()
-      .text(st.capReached ? "✅ رایگان برش می‌دارم" : "✅ برش می‌دارم", `jdo:${s.id}`)
-      .row()
-      .text("فعلاً نه", `jno:${s.id}`),
+    keyboard: new InlineKeyboard().text("✅ بگیرش", `jdo:${s.id}`).row().text("فعلاً نه", `jno:${s.id}`),
   };
 }
 

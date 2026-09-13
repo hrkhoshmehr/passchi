@@ -4,7 +4,8 @@ import { chunkMessage, escapeHtml } from "../util/text.js";
 import { fmtClockLink, fmtDuration, toFaDigits } from "../util/time.js";
 import {
   balanceCoins, coinsAsMinutesIfUseful, costCoins,
-  fmtBalance, fmtCoins, fmtCoinsWithToman, fmtCost, RATE_LINE, shareBack, SHARE_TARGET_MIN,
+  fmtBalance, fmtCoins, fmtCost, fmtToman, PACKAGES, RATE_LINE, shareBack, SHARE_TARGET_MIN,
+  type CoinPackage,
 } from "../billing/coins.js";
 import { BTN } from "./menu.js";
 import type { JobFailureKind } from "../util/job-failure.js";
@@ -676,7 +677,96 @@ export function accountMessage(i: AccountInput): string {
   return groups.map((g) => g.join("\n")).join("\n\n");
 }
 
-/** پیام «سکه کم است» — همه‌جا یک شکل، و همیشه با راه خروج. */
+// ─── هزینه، سکهٔ کم، و شریک‌شدن با بچه‌های کلاس ─────────────────────────────
+
+/**
+ * برچسب دکمه‌های صفحهٔ تأیید — یک‌جا، چون سه مسیرِ ورودی همین صفحه را
+ * می‌سازند و پیش از این هرکدام متن خودش را داشت.
+ *
+ * `share` همان جملهٔ واژه‌نامهٔ مشترک است («با بچه‌های کلاس شریک می‌شم») و
+ * سایت و مینی‌اپ هم همین را می‌گویند؛ دو اسم برای یک کار یعنی دانشجو فکر کند
+ * دو کارِ متفاوت است.
+ */
+export const CONFIRM_BTN = {
+  go: "✅ شروع کن",
+  cancel: "✖️ بی‌خیال",
+  topup: "🪙 شارژ حساب",
+  /** تصمیمِ شریک‌شدن، **پیش از** خرج‌شدن سکه */
+  share: "👥 با بچه‌های کلاس شریک می‌شم",
+} as const;
+
+/** دکمهٔ شریک‌شدن پس از تحویل — خاموش: پیشنهاد؛ روشن: لینکِ آماده. */
+export const SHARE_BTN = {
+  off: CONFIRM_BTN.share,
+  link: "🔗 لینک جزوه برای گروه کلاس",
+} as const;
+
+/**
+ * گزینه‌های «چند نفر» — یک‌جا، چون هم صفحه‌کلید از آن ساخته می‌شود و هم
+ * بازهٔ «بین ۲ تا ۹ سکه» در پیام‌هایی که هنوز تعدادی انتخاب نشده.
+ */
+export const SHARE_COUNTS = [5, 10, 20, 30] as const;
+
+/** وقتی شریک‌شدن از قبل روشن است، دکمه باید حالت را بگوید نه اینکه دوباره بپرسد. */
+export function shareOnButton(target: number): string {
+  return `👥 شریکی روشنه · ${toFaDigits(Math.max(SHARE_TARGET_MIN, target))} نفر — عوض کن`;
+}
+
+/**
+ * سهمِ هر نفر به سکه — عدد یا بازه.
+ *
+ * واژه‌نامه می‌گوید «سهم» هیچ‌وقت تنها نیاید: «یه سهم کوچیک» بی‌عدد دقیقاً
+ * همان جایی است که دانشجو فکر می‌کند هم‌کلاسی‌اش مجانی می‌گیرد. وقتی تعداد
+ * هنوز انتخاب نشده، بازهٔ همهٔ گزینه‌های صفحه‌کلید گفته می‌شود — دروغ نیست و
+ * مقیاس را هم می‌رساند.
+ */
+export function seatText(costSec: number, people: number | null): string {
+  if (people !== null) return fmtCoins(shareBack(costSec, people).seat);
+  const seats = SHARE_COUNTS.map((n) => shareBack(costSec, n).seat);
+  const lo = Math.min(...seats);
+  const hi = Math.max(...seats);
+  return lo === hi ? fmtCoins(lo) : `بین ${toFaDigits(lo)} تا ${fmtCoins(hi)}`;
+}
+
+/**
+ * سازوکارِ شریک‌شدن، در **یک** جمله — همان جملهٔ واژه‌نامهٔ مشترک.
+ *
+ * نسخه‌های قبلی («سهم هر هم‌کلاسی ثابته و سکه‌ش برمی‌گرده به تو… بعدش برای
+ * بقیه رایگانه») جوری خوانده می‌شدند که انگار هم‌کلاسی‌ها مجانی می‌گیرند و
+ * هیچ‌جا نمی‌گفتند *آن‌ها* پول می‌دهند. این جمله ترتیبِ واقعی را می‌گوید: او
+ * می‌دهد، به تو می‌رسد، تا سقف، بعد مجانی.
+ */
+export function shareMechanic(seat: string, capCoins?: number): string {
+  const cap = capCoins !== undefined ? ` (${fmtCoins(capCoins)})` : "";
+  return (
+    `هر کی با لینک جزوه رو بگیره یه سهم کوچیک، ${seat}، می‌ده که میاد تو حساب تو، ` +
+    `تا نصف هزینه${cap}. بعدش برای بقیه مجانیه.`
+  );
+}
+
+/**
+ * کوچک‌ترین بسته‌ای که کسری را می‌پوشاند — از `PACKAGES` و **در لحظه**.
+ *
+ * ## چرا تخمینِ تومانی رفت
+ *
+ * `coinsAsToman` با نرخِ ارزان‌ترین سکه (بستهٔ ترمی) حساب می‌کرد، پس صفحهٔ
+ * تأیید می‌گفت «حدود ۹۰ هزار تومان» در حالی که کوچک‌ترین چیزی که دانشجو
+ * واقعاً می‌تواند بخرد گران‌تر است. عددی که کمتر از واقعیت نشان داده شود،
+ * درست در صفحهٔ پرداخت به «گرون‌تر از چیزی که گفتی» تبدیل می‌شود.
+ *
+ * پس دو کار جدا شد: صفحهٔ تأیید فقط سکه می‌گوید (دانشجو سکه‌ای را خرج می‌کند
+ * که **دارد**)، و صفحهٔ سکهٔ کم قیمتِ واقعیِ یک بستهٔ مشخص را.
+ *
+ * `PACKAGES` هر بار خوانده می‌شود نه در بارگذاری، تا قیمتِ تازه بی‌تغییر اینجا
+ * بنشیند. عنوانِ بسته عمداً نمی‌آید — نام‌ها جای دیگری عوض می‌شوند؛ سکه و
+ * قیمت خودشان گویا هستند. اگر هیچ بسته‌ای کافی نباشد `null` برمی‌گردد و
+ * صدازننده هیچ قیمتی نمی‌گوید، نه قیمتی که کسری را نمی‌پوشاند.
+ */
+export function coveringPackage(shortCoins: number): CoinPackage | null {
+  const fits = PACKAGES.filter((p) => p.coins >= shortCoins).sort((a, b) => a.price - b.price);
+  return fits[0] ?? null;
+}
+
 /**
  * تأیید پیش از خرج‌کردن سکه.
  *
@@ -691,35 +781,36 @@ export function accountMessage(i: AccountInput): string {
  * پرسیده باشد — و کاربر عدد را اولین بار در صورت‌حساب ببیند.
  *
  * موجودیِ پس از کسر هم نوشته می‌شود، چون سؤال بعدیِ همه همان است.
+ *
+ * **فقط سکه، بدون تومان** — چرایی در `coveringPackage`.
+ *
+ * وقتی شریک‌شدن روشن است، صریح گفته می‌شود که **کل** هزینه همین حالا می‌رود:
+ * دانشجویی که «شریک می‌شم» را زده ممکن است فکر کند سهم خودش را می‌دهد.
  */
-/**
- * برچسب دکمه‌های صفحهٔ تأیید — یک‌جا، چون سه مسیرِ ورودی همین صفحه را
- * می‌سازند و پیش از این هرکدام متن خودش را داشت.
- */
-export const CONFIRM_BTN = {
-  go: "✅ شروع کن",
-  cancel: "✖️ بی‌خیال",
-  topup: "🪙 شارژ حساب",
-  /** تصمیمِ تقسیم، **پیش از** خرج‌شدن سکه */
-  share: "👥 با هم‌کلاسیا تقسیم می‌کنم",
-} as const;
-
-/** وقتی تقسیم از قبل روشن است، دکمه باید حالت را بگوید نه اینکه دوباره بپرسد. */
-export function shareOnButton(target: number): string {
-  return `👥 تقسیم روشنه · ${toFaDigits(Math.max(SHARE_TARGET_MIN, target))} نفر — تغییر`;
-}
-
-export function confirmCostMessage(neededSec: number, balanceSec: number): string {
+export function confirmCostMessage(
+  neededSec: number,
+  balanceSec: number,
+  share: { people: number } | null = null,
+): string {
+  const cost = costCoins(neededSec);
   const after = Math.max(0, balanceSec - neededSec);
-  return [
+  const out = [
     "فایلت رسید ✅",
     "",
     `مدت: <b>${toFaDigits(fmtDuration(neededSec * 1000))}</b>`,
-    `هزینه: <b>${fmtCoinsWithToman(costCoins(neededSec))}</b>`,
-    `موجودی الان: <b>${fmtBalance(balanceSec)}</b> · بعدش: <b>${fmtBalance(after)}</b>`,
-    "",
-    "<i>شروع کنم؟</i>",
-  ].join("\n");
+    `هزینه: <b>${fmtCoins(cost)}</b>`,
+    `موجودیت: <b>${fmtBalance(balanceSec)}</b> · بعدش: <b>${fmtBalance(after)}</b>`,
+  ];
+  if (share) {
+    const { cap } = shareBack(neededSec, share.people);
+    out.push(
+      "",
+      `👥 با بچه‌های کلاس شریک می‌شی. کل ${fmtCoins(cost)} با «${CONFIRM_BTN.go}» از حساب تو کم میشه.`,
+      shareMechanic(seatText(neededSec, share.people), cap),
+    );
+  }
+  out.push("", "<i>شروع کنم؟</i>");
+  return out.join("\n");
 }
 
 /**
@@ -729,30 +820,36 @@ export function confirmCostMessage(neededSec: number, balanceSec: number): strin
  * و عددی که او دنبالش است «چقدر کم دارم» است، نه آن دو تا. روی مسیرِ پیوستن
  * از گروه درس این بدتر بود: کسی که تازه رسیده و ربات را نمی‌شناسد باید هم
  * حساب می‌کرد هم دنبال بخش حساب می‌گشت.
+ *
+ * و بعد **قیمتِ واقعیِ کوچک‌ترین بسته‌ای که کافی است** — نه تخمینی که از
+ * واقعیت کمتر است. چرایی در `coveringPackage`. همهٔ صدازننده‌ها دکمهٔ
+ * «شارژ حساب» را زیر همین پیام می‌گذارند، پس متن به همان دکمه اشاره می‌کند.
  */
 export function lowBalanceMessage(neededSec: number, balanceSec: number): string {
   const short = Math.max(0, costCoins(neededSec) - balanceCoins(balanceSec));
+  const pkg = coveringPackage(short);
   return [
     "سکه‌هات کم میاد 😅",
     "",
-    `این کار <b>${fmtCoinsWithToman(costCoins(neededSec))}</b> می‌خواد ولی ` +
-      `<b>${fmtBalance(balanceSec)}</b> داری.`,
-    `<b>${fmtCoins(short)}</b> کم داری.`,
+    `این کار <b>${fmtCost(neededSec)}</b> می‌خواد و <b>${fmtBalance(balanceSec)}</b> داری؛ ` +
+      `<b>${fmtCoins(short)}</b> کم داری.`,
     "",
-    `از «${BTN.account}» شارژ کن.`,
+    ...(pkg
+      ? [
+          `کوچیک‌ترین بسته‌ای که کافیه: <b>${fmtCoins(pkg.coins)}</b>، <b>${fmtToman(pkg.price)}</b>.`,
+          `با دکمهٔ «${CONFIRM_BTN.topup}» بخرش.`,
+        ]
+      : [`با دکمهٔ «${CONFIRM_BTN.topup}» شارژ کن.`]),
   ].join("\n");
 }
 
 /**
  * پیشنهاد پس از اجرای رایگان.
  *
- * کاربر همین الان دیده که چقدر دقیق می‌شنویم — و آن سؤال جواب گرفته. سؤال
- * بعدی‌اش «حالا از این متن چی درمیاد؟» است، که تور نمونه پس از `/start`
- * جوابش را داده. پس اینجا فهرست را **کوتاه** یادآوری می‌کنیم و می‌رویم سر
- * قیمت؛ تکرار کاملِ فهرست فقط پیام را طولانی می‌کند.
- *
- * قیمت با معادل تومانی می‌آید: «۶۳۰ سکه» به‌تنهایی یعنی یک کلیک دیگر تا
- * صفحهٔ شارژ برای فهمیدن عدد واقعی، و همان کلیک جایی است که آدم‌ها می‌روند.
+ * ⚠️ امروز هیچ مسیری صدایش نمی‌زند (اجرای رایگان دیگر ساخته نمی‌شود)؛ فقط
+ * پیش‌نمایش و آزمونِ متنِ ساده از آن استفاده می‌کنند. همان دو قاعدهٔ بقیهٔ
+ * صفحه‌ها را دارد تا اگر روزی برگشت، وعدهٔ غلط با خودش نیاورد: قیمت فقط به
+ * سکه، و سازوکارِ شریک‌شدن با جملهٔ واژه‌نامه.
  */
 export function upsellMessage(costSec: number): string {
   const { cap } = shareBack(costSec);
@@ -762,80 +859,111 @@ export function upsellMessage(costSec: number): string {
     "حالا با سکه، از همین متن اینا رو درمی‌آرم — همونایی که اول کار نمونه‌شو دیدی:",
     "",
     "📋 خلاصهٔ کلاس · 📌 حضور و غیاب، کوییز، تکلیف",
-    "🎯 نکته‌های امتحانی با عین جملهٔ استاد · 🕘 بخش‌بندی کلاس",
-    "📕 جزوهٔ کامل PDF",
+    "🎯 نکته‌های امتحانی با عین جملهٔ استاد · 🕘 کلاس دقیقه‌به‌دقیقه",
+    "📕 فایل جزوه",
     "",
-    `تحلیل کامل همین جلسه: <b>${fmtCoinsWithToman(costCoins(costSec))}</b>`,
+    `تحلیل کامل همین جلسه: <b>${fmtCost(costSec)}</b>. هر سکه یعنی یه دقیقه صوت.`,
     "",
-    `💰 <b>ولی لازم نیست همه‌شو خودت بدی.</b> جزوه رو برای بچه‌های کلاس بفرست — ` +
-      `هر کی برش داره سکه‌ش برمی‌گرده به حساب تو، تا نصفِ هزینه (<b>${fmtCoins(cap)}</b>) جبران شه. ` +
-      `بعدش برای بقیه رایگانه.`,
+    `💰 <b>لازم نیست همه‌شو خودت بدی.</b> ${shareMechanic(seatText(costSec, null), cap)}`,
   ].join("\n");
 }
 
 /**
- * پیام پایانی هر جلسهٔ کامل: چقدر رفت، چقدر مانده، و چطور برمی‌گردد.
+ * پیام پایانی هر جلسهٔ کامل: چقدر رفت، چقدر مانده، شریک‌شدن، و دکمه‌های پایین.
  *
- * `shareOn` یعنی کاربر **پیش از پرداخت** تقسیم را روشن کرده. آن‌وقت دعوت‌کردن
- * دیگر پیشنهاد نیست، کاری است که همین حالا انجام شده — و دوباره پیشنهاد
+ * دو نسخه دارد و هر دو **با جملهٔ واژه‌نامه**. نسخهٔ قبلی می‌گفت «بعدش برای
+ * بقیه رایگانه» و هیچ‌جا نمی‌گفت هم‌کلاسی‌ها پول می‌دهند — دانشجو فکر می‌کرد
+ * جزوه را مجانی به گروه می‌دهد و همین جلوی فرستادنش را نمی‌گرفت، ولی
+ * هم‌کلاسی‌ای که بعد سکه از او کم می‌شد غافلگیر می‌شد.
+ *
+ * `shareOn` یعنی کاربر **پیش از پرداخت** شریک‌شدن را روشن کرده. آن‌وقت
+ * دعوت‌کردن دیگر پیشنهاد نیست، کاری است که انجام شده — و دوباره پیشنهاد
  * دادنش کاربر را وامی‌دارد فکر کند انتخابش ثبت نشده.
+ *
+ * خطِ آخر دکمه‌های بایگانی را **توضیح می‌دهد**: زیرِ این پیام «متن کامل کلاس»
+ * و «کلاس دقیقه‌به‌دقیقه» نشسته‌اند و بی‌این خط معلوم نبود چرا آنجایند. فقط
+ * وقتی می‌آید که دست‌کم یکی‌شان واقعاً باشد.
  */
-export function settlementMessage(costSec: number, balanceSec: number, shareOn = false): string {
-  const { cap } = shareBack(costSec);
+export function settlementMessage(
+  costSec: number,
+  balanceSec: number,
+  shareOn = false,
+  opts: { people?: number | null; hasArchive?: boolean } = {},
+): string {
+  const { cap } = shareBack(costSec, opts.people ?? undefined);
   const head = `تمومه ✅ این جلسه <b>${fmtCost(costSec)}</b> شد و <b>${fmtBalance(balanceSec)}</b> برات مونده.`;
-  if (shareOn) {
-    return [
-      head,
-      "",
-      `تقسیم با هم‌کلاسیا روشنه — لینک دعوت همین پایینه 👇 ` +
-        `هر کی برش داره سکه‌ش برمی‌گرده به حساب تو، تا نصفِ هزینه (<b>${fmtCoins(cap)}</b>).`,
-    ].join("\n");
-  }
-  return [
-    head,
-    "",
-    `جزوه رو با هم‌کلاسیا تقسیم کن: هر کی برش داره سکه‌ش برمی‌گرده به حساب تو، ` +
-      `تا نصفِ هزینه (<b>${fmtCoins(cap)}</b>) جبران شه. بعدش برای بقیه رایگانه 👇`,
-  ].join("\n");
+  const share = shareOn
+    ? `👥 شریکی با بچه‌های کلاس روشنه و لینکش رو پیام بعدی می‌فرستم. ` +
+      shareMechanic(seatText(costSec, opts.people ?? null), cap)
+    : `👥 جزوه رو با بچه‌های کلاس شریک شو: ${shareMechanic(seatText(costSec, null))}`;
+  const archive =
+    opts.hasArchive === false ? [] : ["", "📎 متن کامل کلاس و کلاس دقیقه‌به‌دقیقه رو از دکمه‌های پایین بگیر."];
+  return [head, "", share, ...archive].join("\n");
 }
 
 /**
- * پرسشِ «چند نفر؟» — هم پیش از پرداخت، هم پیش از ساختنِ لینکِ دعوت.
+ * پرسشِ «چند نفر؟» — هم پیش از پرداخت، هم پیش از ساختنِ لینک.
  *
- * سهمِ ثابتِ هر نفر از همین انتخاب درمی‌آید، پس عمداً ساده و کوتاه است. عددِ
- * سهمِ کمترین گزینه نوشته می‌شود، چون سؤالِ واقعیِ کاربر «هم‌کلاسیم چقدر
- * می‌ده؟» است نه «چند نفریم؟».
+ * جملهٔ پرسش از واژه‌نامه است و عمداً می‌پرسد «چند نفر از بچه‌ها **می‌گیرن**»،
+ * نه «چند نفرید»: دومی این سؤال را باز می‌گذاشت که خودِ فرستنده هم شمرده
+ * می‌شود یا نه، و هر دو جواب عددِ غلط می‌داد.
+ *
+ * سهمِ هر گزینه روی **خودِ دکمه** نوشته شده (`shareTargetKeyboard`)، چون
+ * سؤالِ واقعیِ کاربر «هم‌کلاسیم چقدر می‌ده؟» است و جوابش باید کنار انتخاب
+ * باشد، نه در یک جملهٔ کلی بالای آن.
  */
 export function shareTargetPrompt(costSec: number): string {
-  const { seat } = shareBack(costSec, SHARE_TARGET_MIN);
+  const { cap } = shareBack(costSec);
   return [
-    "چند نفرید؟",
+    "فکر می‌کنی چند نفر از بچه‌ها جزوه رو می‌گیرن؟",
     "",
-    `<i>سهم هر نفر از همین‌جا معلوم می‌شه و ثابت می‌مونه — کلاسِ ${toFaDigits(SHARE_TARGET_MIN)} نفره ` +
-      `یعنی نفری ${fmtCoins(seat)}، کلاسِ بزرگ‌تر یعنی کمتر.</i>`,
+    `<i>هر کی بگیره همون چند سکه‌ای رو که روی دکمه نوشته می‌ده، که میاد تو حساب تو، ` +
+      `تا نصف هزینه (${fmtCoins(cap)}). بعدش برای بقیه مجانیه.</i>`,
   ].join("\n");
 }
 
 /**
- * تأییدِ روشن‌شدنِ تقسیم **پیش از پرداخت**.
+ * تأییدِ روشن‌شدنِ شریک‌شدن **پیش از پرداخت**.
  *
- * تا امروز این تصمیم فقط *بعد* از تحویل پرسیده می‌شد — یعنی درست وقتی کاربر
- * چیزی را که می‌خواست گرفته بود و دلیلی برای زدنِ دکمه نداشت. حالا همان سؤال
- * سرِ صفحهٔ تأییدِ هزینه هم هست، جایی که کاربر دارد به پول فکر می‌کند و
- * «نصفش برمی‌گرده» بیشترین معنا را دارد.
+ * نسخهٔ قبلی فقط سهم و سقف را می‌گفت و دانشجو می‌توانست بخواند «پس الان کمتر
+ * می‌دم». حالا به ترتیبِ واقعیِ اتفاق‌ها گفته می‌شود: کلِ هزینه با «شروع کن»
+ * از تو کم می‌شود، هم‌کلاسی‌ها بعداً سهمشان را می‌دهند، و آن سهم به تو
+ * برمی‌گردد تا نصف هزینه.
  *
- * پیام عمداً می‌گوید هنوز چیزی کم نشده: انتخابِ تعداد، «شروع کن» نیست.
+ * و عمداً می‌گوید هنوز چیزی کم نشده: انتخابِ تعداد، «شروع کن» نیست.
  */
 export function sharePreEnabledMessage(costSec: number, people: number): string {
-  const { seat, cap } = shareBack(costSec, people);
+  const { cap } = shareBack(costSec, people);
   return [
-    "👥 <b>تقسیم با هم‌کلاسیا روشن شد.</b>",
+    `👥 <b>باشه، با بچه‌های کلاس شریک می‌شی</b> (${toFaDigits(Math.max(SHARE_TARGET_MIN, Math.round(people)))} نفر).`,
     "",
-    `کلاسِ ${toFaDigits(Math.max(SHARE_TARGET_MIN, Math.round(people)))} نفره · ` +
-      `سهم هر نفر <b>${fmtCoins(seat)}</b> · تا <b>${fmtCoins(cap)}</b> به تو برمی‌گرده.`,
+    `وقتی «${CONFIRM_BTN.go}» رو بزنی، کل ${fmtCost(costSec)} از حساب تو کم میشه.`,
+    shareMechanic(seatText(costSec, people), cap),
     "",
-    "<i>لینک دعوت رو همون لحظه‌ای که جزوه آماده شد برات می‌فرستم. " +
-      "هنوز چیزی کم نشده — برای شروع، «شروع کن» رو بزن.</i>",
+    "<i>لینک رو همون وقتی که جزوه آماده شد همین‌جا می‌فرستم. هنوز چیزی کم نشده.</i>",
+  ].join("\n");
+}
+
+/**
+ * خطِ زیرِ پیامِ دعوت که فقط فرستنده می‌بیند.
+ *
+ * همان جملهٔ واژه‌نامه، به‌اضافهٔ آنچه تا حالا برگشته — ولی فقط وقتی چیزی
+ * برگشته باشد: «تا الان ۰ سکه» خبر نیست، فقط دلسردکننده است.
+ */
+export function invitationTail(i: {
+  costSec: number;
+  seatCoins: number;
+  refundedCoins: number;
+  capReached: boolean;
+}): string {
+  if (i.capReached) {
+    return "☝️ این پیام رو بفرست تو گروه کلاس.\n\nنصف هزینه برگشته؛ از این به بعد برای بقیه مجانیه.";
+  }
+  return [
+    "☝️ این پیام رو بفرست تو گروه کلاس.",
+    "",
+    shareMechanic(fmtCoins(i.seatCoins), shareBack(i.costSec).cap),
+    ...(i.refundedCoins > 0 ? [`تا حالا <b>${fmtCoins(i.refundedCoins)}</b> برگشته.`] : []),
   ].join("\n");
 }
 

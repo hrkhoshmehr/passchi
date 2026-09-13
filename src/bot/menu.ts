@@ -14,7 +14,7 @@ import { InlineKeyboard, Keyboard } from "grammy";
 import { config } from "../config.js";
 import type { Platform } from "../db/identity.js";
 import {
-  PACKAGES, RATE_LINE, classesFor, coinsAsMinutes, fmtCoins, fmtToman, type CoinPackage,
+  PACKAGES, RATE_LINE, classesFor, coinsAsMinutes, fmtCoins, fmtToman, shareBack, type CoinPackage,
 } from "../billing/coins.js";
 import { toFaDigits } from "../util/time.js";
 
@@ -166,7 +166,7 @@ export const HOW_IT_WORKS = `<b>❓ چطور کار می‌کنه</b>
 هر سکه یه دقیقه صوت. یه کلاس ۹۰ دقیقه‌ای یعنی ۹۰ سکه.
 
 <b>چطور ارزون‌تر می‌شه</b>
-جزوه رو برای بچه‌های کلاس بفرست؛ سهم هر هم‌کلاسی ثابته و سکه‌ش برمی‌گرده به تو، تا نصفِ هزینه — بعدش برای بقیه رایگانه. از اون طرف هم اگه هم‌کلاسیت جلسه‌ای رو به اشتراک گذاشته، تو فقط یه سهم کوچیک می‌دی یا هیچی.
+جزوه رو با بچه‌های کلاس شریک شو: هر کی با لینک جزوه رو بگیره یه سهم کوچیک، سر یه کلاس ۹۰ دقیقه‌ای بین ${toFaDigits(shareBack(5400, 30).seat)} تا ${toFaDigits(shareBack(5400, 5).seat)} سکه، می‌ده که میاد تو حساب تو، تا نصف هزینه. بعدش برای بقیه مجانیه. از اون طرف هم اگه هم‌کلاسیت لینک جزوه رو گذاشته، تو همون چند سکه رو می‌دی یا هیچی.
 
 <b>یه قاعده</b>
 هر نکته‌ای که به‌عنوان حرف استاد نقل می‌کنم، عیناً تو صوت گفته شده. پیداش نکنم، حذفش می‌کنم نه اینکه حدس بزنم.`;

@@ -29,7 +29,7 @@ import {
   accessibleSessions, isMember, registerOwner, setShareEnabled, setShareTarget, shareStatus,
 } from "../billing/sharing.js";
 import {
-  handleJoin, invitationMessage, joinPreview, shareTargetKeyboard, shareToggleKeyboard,
+  SHARE_CANCEL_CB, handleJoin, invitationMessage, joinPreview, shareTargetKeyboard, shareToggleKeyboard,
 } from "./share.js";
 import {
   BTN, HOW_IT_WORKS, WELCOME, WELCOME_CB, mainKeyboard, menuActionOf, packagesKeyboard,
@@ -605,7 +605,7 @@ handlers.command("start", async (ctx) => {
       await reply(ctx, `این جلسهٔ خودت است. از «${BTN.history}» بازش کن.`);
       return;
     }
-    const preview = joinPreview(s);
+    const preview = joinPreview(s, u?.credit_sec ?? 0);
     if (!preview) {
       await reply(ctx, "این جلسه در دسترس نیست.");
       return;
@@ -1768,18 +1768,24 @@ function confirmKeyboard(sessionId: string): InlineKeyboard {
 }
 
 /**
- * همان صفحه، وقتی سکه کم است: شارژ، و راهِ ادامه پس از شارژ.
+ * همان صفحه، وقتی سکه کم است: شارژ، و راهِ ادامه پس از شارژ — و **فقط همین**.
  *
- * تقسیم اینجا هم پیشنهاد می‌شود — کسی که سکه کم دارد بیشترین انگیزه را
- * دارد که نصفش برگردد.
+ * دکمهٔ «با بچه‌های کلاس شریک می‌شم» اینجا بود، با این استدلال که کسی که سکه
+ * کم دارد بیشترین انگیزه را دارد. ولی زیرِ «۷۰ سکه کم داری» آن دکمه مثل راهِ
+ * دور زدنِ کسری خوانده می‌شد: «شریک می‌شم، پس کمتر می‌دم». در حالی که کلِ
+ * هزینه همچنان پیش از شروع از حسابِ خودش می‌رود و سهمِ هم‌کلاسی‌ها *بعد* از
+ * تحویل برمی‌گردد. دکمه‌ای که انتظارِ غلط می‌سازد بدتر از نبودنش است؛ پس از
+ * شارژ، همان پیشنهاد روی صفحهٔ تأیید هست.
+ *
+ * صادر شده تا آزمون همین را قفل کند.
  */
-function lowBalanceKeyboard(sessionId: string, resumeData = `go:${sessionId}`): InlineKeyboard {
-  return new InlineKeyboard()
-    .text(S.CONFIRM_BTN.topup, "topup")
-    .row()
-    .text("▶️ ادامه بده", resumeData)
-    .row()
-    .text(S.CONFIRM_BTN.share, `spre:${sessionId}`);
+export function lowBalanceKeyboard(sessionId: string, resumeData = `go:${sessionId}`): InlineKeyboard {
+  return new InlineKeyboard().text(S.CONFIRM_BTN.topup, "topup").row().text("▶️ ادامه بده", resumeData);
+}
+
+/** وضعیتِ شریک‌شدنِ یک جلسه، به شکلی که صفحهٔ تأیید می‌خواهد. */
+function shareOf(s: SessionRow | null): { people: number } | null {
+  return s?.share_enabled ? { people: s.share_target ?? SHARE_TARGET } : null;
 }
 
 /** درسی که خودمان حدس می‌زنیم — بدون پرسیدن از کاربر. */
@@ -2266,9 +2272,10 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
         if (costCoins(realSec) > costCoins(durationSec) + 1) {
           if (u.credit_sec < realSec) {
             updateSession(sessionId, { status: "awaiting_credit" });
+            // «فرستنده» خودِ دانشجوست؛ عددِ اشتباه را سکو گفته بود نه او.
             await reply(
               ctx,
-              `مدت واقعی این فایل <b>${toFaDigits(fmtDuration(realSec * 1000))}</b> بود، نه چیزی که فرستنده اعلام کرده بود.\n\n` +
+              `این فایل در واقع <b>${toFaDigits(fmtDuration(realSec * 1000))}</b> بود، بیشتر از چیزی که اول نشون داده شد.\n\n` +
                 S.lowBalanceMessage(realSec, u.credit_sec),
               { reply_markup: lowBalanceKeyboard(sessionId) },
             );
@@ -2277,8 +2284,8 @@ async function resumeSession(ctx: Context, sessionId: string): Promise<void> {
           updateSession(sessionId, { status: "awaiting_confirm" });
           await reply(
             ctx,
-            `مدت واقعی بیشتر از چیزی بود که سکو اعلام کرده بود.\n\n` +
-              S.confirmCostMessage(realSec, u.credit_sec),
+            `این فایل بلندتر از چیزی بود که اول نشون داده شد، پس هزینه‌ش هم بیشتره.\n\n` +
+              S.confirmCostMessage(realSec, u.credit_sec, shareOf(getSession(sessionId))),
             { reply_markup: confirmKeyboard(sessionId) },
           );
           return;
@@ -2773,7 +2780,13 @@ export async function sendResults(
   const shareOn = Boolean(getSession(sessionId)?.share_enabled);
   // یک پیامِ پایانی، نه دو تا — چرایش در `closingKeyboard`.
   if (s && (u || moreKeyboard(s))) {
-    await ctx.reply(u ? S.settlementMessage(cost, u.credit_sec, shareOn) : S.MORE_PROMPT, {
+    const closingText = u
+      ? S.settlementMessage(cost, u.credit_sec, shareOn, {
+          people: s.share_target,
+          hasArchive: moreKeyboard(s) !== null,
+        })
+      : S.MORE_PROMPT;
+    await ctx.reply(closingText, {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
       reply_markup: closingKeyboard(s, shareOn),
@@ -2799,9 +2812,27 @@ handlers.callbackQuery(/^spre:([a-f0-9]+)$/, async (ctx) => {
     return;
   }
   await ctx.answerCallbackQuery();
-  await ctx.reply(S.shareTargetPrompt(Math.round(s.original_ms / 1000)), {
+  const costSec = Math.round(s.original_ms / 1000);
+  await ctx.reply(S.shareTargetPrompt(costSec), {
     parse_mode: "HTML",
-    reply_markup: shareTargetKeyboard(sessionId, "sontp"),
+    reply_markup: shareTargetKeyboard(sessionId, "sontp", costSec),
+  });
+});
+
+/**
+ * «بی‌خیال» زیر پرسشِ تعداد — فقط پیام را برمی‌دارد.
+ *
+ * هیچ حالتی عوض نمی‌شود: اگر شریک‌شدن از قبل روشن بود و کاربر فقط آمده بود
+ * تعداد را عوض کند، «بی‌خیال» نباید خاموشش کند. مالکیت هم لازم نیست سنجیده
+ * شود، چون تنها اثرش روی پیامی در چتِ خودِ همان کاربر است.
+ *
+ * اگر پاک‌کردن نشد (پیامِ قدیمی، یا سکویی که رد می‌کند) دکمه‌ها برداشته
+ * می‌شوند تا دست‌کم دوباره زده نشوند.
+ */
+handlers.callbackQuery(new RegExp(String.raw`^${SHARE_CANCEL_CB}:([a-f0-9]+)$`), async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.deleteMessage().catch(async () => {
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
   });
 });
 
@@ -2838,9 +2869,10 @@ handlers.callbackQuery(/^son:([a-f0-9]+)$/, async (ctx) => {
     return;
   }
   await ctx.answerCallbackQuery();
-  await ctx.reply(S.shareTargetPrompt(Math.round(s.original_ms / 1000)), {
+  const costSec = Math.round(s.original_ms / 1000);
+  await ctx.reply(S.shareTargetPrompt(costSec), {
     parse_mode: "HTML",
-    reply_markup: shareTargetKeyboard(sessionId),
+    reply_markup: shareTargetKeyboard(sessionId, "sont", costSec),
   });
 });
 
@@ -2877,11 +2909,15 @@ async function sendInvitation(ctx: Context, sessionId: string): Promise<void> {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
   });
-  const tail = st?.capReached
-    ? "نصفِ هزینه برگشته و از این به بعد هم‌کلاسی‌ها رایگان برش می‌دارن."
-    : `هر کی از این لینک بیاد <b>${fmtCost(st?.seatSec ?? 0)}</b> می‌ده و همون به حسابت برمی‌گرده، ` +
-      `تا نصفِ هزینه. تا الان <b>${fmtCost(st?.ownerRefundedSec ?? 0)}</b> پس گرفته‌ای.`;
-  await ctx.reply(`☝️ این پیام را در گروه درس فوروارد کن.\n\n${tail}`, { parse_mode: "HTML" });
+  await ctx.reply(
+    S.invitationTail({
+      costSec: Math.round(s.original_ms / 1000),
+      seatCoins: costCoins(st?.seatSec ?? 0),
+      refundedCoins: costCoins(st?.ownerRefundedSec ?? 0),
+      capReached: Boolean(st?.capReached),
+    }),
+    { parse_mode: "HTML" },
+  );
 }
 
 handlers.callbackQuery(/^jdo:([a-f0-9]+)$/, async (ctx) => {

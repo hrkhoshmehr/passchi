@@ -232,13 +232,15 @@ check("دکمه‌های ربات فقط روی دسکتاپ پنهان می‌�
   // که می‌خواست گرفته و دلیلی برای زدن دکمه ندارد. حالا سرِ صفحهٔ تأیید هم
   // هست، جایی که دارد به هزینه نگاه می‌کند.
   check("صفحهٔ تأیید گزینهٔ تقسیم دارد", /`spre:\$\{sessionId\}`/.test(confirmKb));
-  check("صفحهٔ سکهٔ کم هم گزینهٔ تقسیم دارد", /`spre:\$\{sessionId\}`/.test(
+  // زیرِ «کم داری» این دکمه مثل راهِ دور زدنِ کسری خوانده می‌شد، در حالی که کلِ
+  // هزینه همچنان از حسابِ خودِ کاربر می‌رود. آزمونِ رفتاری در test-member-access.
+  check("صفحهٔ سکهٔ کم دکمهٔ شریک‌شدن ندارد", !/spre:/.test(
     bot.slice(bot.indexOf("function lowBalanceKeyboard("), bot.indexOf("/** درسی که خودمان")),
   ));
   check("دست‌کدِ تقسیمِ پیش از پرداخت هست", /callbackQuery\(\/\^spre:/.test(bot));
   check("انتخابِ تعدادِ پیش از پرداخت هست", /callbackQuery\(\/\^sontp:/.test(bot));
   check("انتخابِ پیش از پرداخت اشتراک را روشن می‌کند", /sontp:[\s\S]{0,600}setShareEnabled\(sessionId, true\)/.test(bot));
-  check("متن دکمه در strings است، نه در دست‌کد", /CONFIRM_BTN/.test(strings) && !/"👥 با هم‌کلاسیا تقسیم می‌کنم"/.test(bot));
+  check("متن دکمه در strings است، نه در دست‌کد", /CONFIRM_BTN/.test(strings) && !/"👥 با بچه‌های کلاس شریک می‌شم"/.test(bot));
   check("دکمهٔ پس از تحویل سرِ جایش مانده", /callbackQuery\(\/\^son:/.test(bot));
   // و اگر از قبل روشن شده، لینک دعوت خودش می‌آید — نه اینکه دوباره پرسیده شود
   check("لینک دعوت پس از تحویل خودکار می‌آید", /if \(shareOn\) await sendInvitation\(/.test(bot));
