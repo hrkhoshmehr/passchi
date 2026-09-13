@@ -482,6 +482,38 @@ input[inputmode="numeric"], input[type="tel"] { direction: ltr; text-align: cent
       <div class="err hidden" id="confirm-err" style="margin-top:14px"></div>
 
       <!--
+        ─── سکهٔ کم: دو راهِ هم‌وزن (خرید گروهی) ─────────────────────────────
+
+        فقط وقتی ساخته می‌شود که سرور `groupBuy` را روشن گفته باشد. هر دو دکمه
+        یک اندازه‌اند، کنار هم: هیچ‌کدام پیش‌فرض نیست. متن‌ها همان ربات‌اند.
+      -->
+      <div id="confirm-low" class="hidden" style="margin-top:12px;text-align:right">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost" type="button" id="confirm-self" style="flex:1 1 140px">🪙 خودم شارژ می‌کنم</button>
+          <button class="btn btn-ghost" type="button" id="confirm-group" style="flex:1 1 140px">👥 با هم‌کلاسیا بخریم</button>
+        </div>
+        <p class="dim" style="margin-top:8px;font-size:12.5px">
+          نگران نباش؛ اگه خودت بخری هم بعدش می‌تونی با بچه‌ها شریکش شی و سهمشون برمی‌گرده.
+        </p>
+      </div>
+      <div id="confirm-group-box" class="hidden" style="margin-top:12px;text-align:right">
+        <p style="font-size:14px;font-weight:600">چند نفر می‌شید، با خودت؟</p>
+        <div id="confirm-group-sizes" class="stack" style="margin-top:8px"></div>
+        <p class="dim" style="margin-top:6px;font-size:12.5px">
+          تا همه نیومدن سکه‌ای خرج نمیشه؛ اگه تا ۴۸ ساعت پر نشد، سهم همه کامل برمی‌گرده.
+        </p>
+        <button class="btn btn-ghost btn-block" type="button" id="confirm-group-cancel" style="margin-top:8px">
+          بی‌خیال
+        </button>
+      </div>
+      <div id="confirm-group-done" class="hidden" style="margin-top:14px">
+        <p style="font-size:15px;font-weight:700">👥 خرید گروهی باز شد</p>
+        <p class="muted" style="font-size:14px;margin-top:6px">
+          پیام دعوت رو توی چت ربات برات فرستادم؛ بفرستش تو گروه کلاس. هر کی بیاد همون‌جا خبرت می‌کنم.
+        </p>
+      </div>
+
+      <!--
         جای نتیجه **بالای** دکمه است، نه زیرش با خطِ کم‌رنگ: کاربر تا دکمه را
         زد باید بداند منتظرِ این صفحه نماند.
       -->

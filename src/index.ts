@@ -18,7 +18,15 @@ for (const dir of [config.dataDir, config.audioDir, config.workDir, config.outDi
   fs.mkdirSync(dir, { recursive: true });
 }
 
-const cleanupTimer = setInterval(() => void cleanupOldAudio(), 6 * 60 * 60_000);
+/**
+ * جاروی صوت — و انقضای خرید گروهی، سوارِ همین تایمر.
+ *
+ * پیش‌تر هر شش ساعت بود؛ برای صوت کافی بود ولی گروهی که مهلتِ ۴۸ ساعته‌اش
+ * گذشته نباید تا شش ساعت دیگر سکهٔ همه را قفل نگه دارد. هر ساعت یک SELECT
+ * ارزان است. ورود به گروهِ منقضی همان لحظه رد می‌شود، پس این فقط زمانِ
+ * برگشتِ سکه است.
+ */
+const cleanupTimer = setInterval(() => void cleanupOldAudio(), 60 * 60_000);
 
 const web = startWebServer();
 
